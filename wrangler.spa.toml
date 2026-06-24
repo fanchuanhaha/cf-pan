@@ -1,0 +1,32 @@
+# 彩虹外链网盘 Cloudflare Workers + Static Assets 一体化部署配置
+name = "pan-worker"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[dev]
+port = 8787
+local_protocol = "http"
+
+[vars]
+ENCRYPTION_SECRET = "default-encryption-key-change-me"
+ADMIN_TOKEN_EXPIRY_DAYS = "7"
+SITE_TITLE = "彩虹外链网盘"
+SITE_URL = ""
+
+# R2 存储桶绑定
+[[r2_buckets]]
+binding = "FILE_R2"
+bucket_name = "pan-files"
+
+# D1 数据库绑定 - 替换为实际的 database_id
+[[d1_databases]]
+binding = "DB"
+database_name = "pan-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Static Assets 配置 - 托管前端静态资源
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
+run_worker_first = ["/ajax.php", "/api.php", "/down.php", "/view.php", "/admin/ajax.php", "/admin/*"]

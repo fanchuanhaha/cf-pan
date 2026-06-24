@@ -1,0 +1,22 @@
+{
+  "name": "pan-worker",
+  "version": "1.0.0",
+  "description": "彩虹外链网盘 - Cloudflare Workers 版",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --config wrangler.spa.toml"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.726.1",
+    "@aws-sdk/s3-request-presigner": "^3.726.1",
+    "hono": "^4.10.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251128.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.50.0"
+  }
+}
