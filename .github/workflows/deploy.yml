@@ -36,30 +36,37 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          echo "创建 D1 数据库（如已存在会自动跳过）..."
-          CREATE_OUTPUT=$(npx wrangler d1 create pan-db 2>&1) || true
-          echo "$CREATE_OUTPUT"
+          echo "检查并创建 D1 数据库..."
+          DATABASE_LIST=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+          EXISTING_DB=$(echo "$DATABASE_LIST" | jq -r '.[] | select(.name=="pan-db") | .uuid')
 
-          # 尝试从 create 输出提取 ID
-          DATABASE_ID=$(echo "$CREATE_OUTPUT" | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+          if [ -n "$EXISTING_DB" ]; then
+            echo "✅ 找到现有 D1 数据库: $EXISTING_DB"
+            DATABASE_ID=$EXISTING_DB
+          else
+            echo "创建新的 D1 数据库..."
+            CREATE_OUTPUT=$(npx wrangler d1 create pan-db 2>&1)
 
-          # 如果提取不到（可能已存在），从 list 中找
-          if [ -z "$DATABASE_ID" ]; then
-            echo "数据库可能已存在，从列表中查找..."
-            LIST_OUTPUT=$(npx wrangler d1 list 2>&1) || true
-            echo "$LIST_OUTPUT"
-            DATABASE_ID=$(echo "$LIST_OUTPUT" | grep -A2 '"name": "pan-db"' | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+            if echo "$CREATE_OUTPUT" | grep -q "Successfully created DB"; then
+              DATABASE_ID=$(echo "$CREATE_OUTPUT" | grep -oP "database_id = \"\K[^\"]+")
+              if [ -z "$DATABASE_ID" ]; then
+                DATABASE_ID=$(echo "$CREATE_OUTPUT" | grep -oP "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+              fi
+              echo "✅ 数据库创建成功: $DATABASE_ID"
+            else
+              LIST_OUTPUT=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+              DATABASE_ID=$(echo "$LIST_OUTPUT" | jq -r '.[] | select(.name=="pan-db") | .uuid')
+
+              if [ -z "$DATABASE_ID" ]; then
+                echo "❌ 无法创建或找到 D1 数据库"
+                exit 1
+              fi
+            fi
           fi
 
-          if [ -z "$DATABASE_ID" ]; then
-            echo "❌ 无法获取 D1 数据库 ID，请检查 API Token 权限"
-            exit 1
-          fi
-
-          echo "✅ D1 数据库 ID: $DATABASE_ID"
-
-          echo "更新 wrangler.spa.toml 中的 database_id..."
+          echo "更新 wrangler.spa.toml 中的数据库 ID..."
           sed -i -E "s/(database_id = \")[^\"]+(\"\s*$)/\1$DATABASE_ID\2/" wrangler.spa.toml
+
           if grep -q "$DATABASE_ID" wrangler.spa.toml; then
             echo "✅ wrangler.spa.toml 更新成功"
           else
@@ -84,13 +91,4 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           echo "🚀 部署到 Cloudflare Workers..."
-          DEPLOY_OUTPUT=$(npx wrangler deploy --config wrangler.spa.toml 2>&1)
-          echo "$DEPLOY_OUTPUT"
-
-          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[^\s]+\.workers\.dev' | head -1)
-          if [ -n "$DEPLOY_URL" ]; then
-            SAFE_URL=$(echo "$DEPLOY_URL" | sed 's/\.workers\.dev$/.***dev/')
-            echo "✅ 部署成功: $SAFE_URL"
-          else
-            echo "✅ 部署完成"
-          fi
+          npx wrangler deploy --config wrangler.spa.toml 2>&1 | sed -E 's/https:\/\/[a-zA-Z0-9.-]*\.(workers|pages)\.dev/https:\/\/[REDACTED].\1.dev/g'
