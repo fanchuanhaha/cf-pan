@@ -17,7 +17,6 @@ jobs:
         with:
           node-version: "20"
 
-      # 安装后端依赖（参考 CloudPaste: ci 失败时 fallback 到 install）
       - name: Install dependencies
         run: |
           echo "安装后端依赖..."
@@ -31,14 +30,14 @@ jobs:
       - name: Disable wrangler telemetry
         run: npx wrangler telemetry disable
 
-      # 创建或验证 D1 数据库
+      # ==================== D1 数据库：自动创建 + 更新 wrangler.spa.toml ====================
       - name: Create or verify D1 Database
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           echo "检查并创建 D1 数据库..."
-          DATABASE_LIST=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+          DATABASE_LIST=$(npx wrangler d1 list --remote --json 2>/dev/null || echo "[]")
           EXISTING_DB=$(echo "$DATABASE_LIST" | jq -r '.[] | select(.name=="pan-db") | .uuid')
 
           if [ -n "$EXISTING_DB" ]; then
@@ -46,58 +45,43 @@ jobs:
             DATABASE_ID=$EXISTING_DB
           else
             echo "创建新的 D1 数据库..."
-            CREATE_OUTPUT=$(npx wrangler d1 create pan-db 2>&1)
+            CREATE_OUTPUT=$(npx wrangler d1 create pan-db --remote 2>&1)
             echo "$CREATE_OUTPUT"
 
-            if echo "$CREATE_OUTPUT" | grep -qi "success"; then
+            if echo "$CREATE_OUTPUT" | grep -q "Successfully created DB"; then
               DATABASE_ID=$(echo "$CREATE_OUTPUT" | grep -oP 'database_id\s*=\s*"\K[^"]+' || echo "$CREATE_OUTPUT" | grep -oP '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
               echo "✅ 数据库创建成功: $DATABASE_ID"
             else
-              LIST_OUTPUT=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+              LIST_OUTPUT=$(npx wrangler d1 list --remote --json 2>/dev/null || echo "[]")
               DATABASE_ID=$(echo "$LIST_OUTPUT" | jq -r '.[] | select(.name=="pan-db") | .uuid')
+
+              if [ -z "$DATABASE_ID" ]; then
+                echo "❌ 无法创建或找到 D1 数据库"
+                exit 1
+              fi
             fi
           fi
 
-          if [ -z "$DATABASE_ID" ]; then
-            echo "❌ 无法创建或找到 D1 数据库"
+          echo "更新 wrangler.spa.toml 中的数据库 ID..."
+          sed -i -E "s/(database_id = \")[^\"]+(\"\s*$)/\1$DATABASE_ID\2/" wrangler.spa.toml
+          if grep -q "$DATABASE_ID" wrangler.spa.toml; then
+            echo "✅ wrangler.spa.toml 更新成功"
+          else
+            echo "❌ wrangler.spa.toml 更新失败"
             exit 1
           fi
 
-          # 更新 wrangler.spa.toml 中的 database_id
-          sed -i -E "s/(database_id = \")[^\"]+(\"\s*$)/\1$DATABASE_ID\2/" wrangler.spa.toml
-          echo "✅ wrangler.spa.toml 更新完成"
-
           echo "database_id=$DATABASE_ID" >> $GITHUB_ENV
 
-      # 初始化 D1 表结构
       - name: Initialize D1 Database schema
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           echo "初始化数据库表结构..."
-          npx wrangler d1 execute pan-db --file=./schema.sql || echo "⚠️ 表可能已存在，继续部署"
+          npx wrangler d1 execute pan-db --remote --file=./schema.sql || echo "⚠️ 表可能已存在，继续部署"
 
-      # 处理 ENCRYPTION_SECRET (参考 CloudPaste)
-      - name: Resolve ENCRYPTION_SECRET for deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          echo "🔐 检查 ENCRYPTION_SECRET..."
-          WORKER_NAME=$(grep -oP 'name\s*=\s*"\K[^"]+' wrangler.spa.toml)
-          echo "Worker name: $WORKER_NAME"
-
-          # 检查 Worker 是否已有 Secret
-          # 如果 GitHub Secrets 有 ENCRYPTION_SECRET，则用它覆盖 wrangler.spa.toml
-          if [ -n "${{ secrets.ENCRYPTION_SECRET }}" ]; then
-            echo "使用 GitHub Secrets 中的 ENCRYPTION_SECRET"
-            sed -i "s/ENCRYPTION_SECRET = \".*\"/ENCRYPTION_SECRET = \"${{ secrets.ENCRYPTION_SECRET }}\"/" wrangler.spa.toml
-          else
-            echo "使用 wrangler.spa.toml 中的默认 ENCRYPTION_SECRET"
-          fi
-
-      # 部署到 Cloudflare
+      # ==================== 部署 ====================
       - name: Deploy to Cloudflare Workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -107,12 +91,10 @@ jobs:
           DEPLOY_OUTPUT=$(npx wrangler deploy --config wrangler.spa.toml 2>&1)
           echo "$DEPLOY_OUTPUT"
 
-          # 提取部署 URL
           DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oP 'https://[^\s]+\.workers\.dev' | head -1)
           if [ -n "$DEPLOY_URL" ]; then
-            # 脱敏显示
             SAFE_URL=$(echo "$DEPLOY_URL" | sed 's/\.workers\.dev$/.***dev/')
             echo "✅ 部署成功: $SAFE_URL"
           else
-            echo "✅ 部署完成 (URL 已脱敏)"
+            echo "✅ 部署完成"
           fi
