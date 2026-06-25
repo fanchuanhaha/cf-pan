@@ -2,7 +2,7 @@ name: Deploy to Cloudflare Workers (SPA 一体化)
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -17,11 +17,16 @@ jobs:
         with:
           node-version: "20"
 
-      # 安装后端依赖
+      # 安装后端依赖（参考 CloudPaste: ci 失败时 fallback 到 install）
       - name: Install dependencies
         run: |
           echo "安装后端依赖..."
-          npm ci
+          if npm ci; then
+            echo "✅ npm ci 成功"
+          else
+            echo "⚠️ npm ci 失败，使用 npm install 生成 lock 文件..."
+            npm install
+          fi
 
       - name: Disable wrangler telemetry
         run: npx wrangler telemetry disable
