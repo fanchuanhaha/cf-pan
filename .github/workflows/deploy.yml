@@ -15,12 +15,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install dependencies
         run: |
           echo "安装依赖..."
-          npm install
+          npm ci
 
       - name: Disable wrangler telemetry
         run: npx wrangler telemetry disable
