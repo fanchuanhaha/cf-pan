@@ -78,8 +78,9 @@ ajax.post('/pre_upload', async (c) => {
   }
 
   // 当前实现：网站中转模式（前端分片上传到 Worker）
+  // Workers 没有本地磁盘，强制 chunks=1 让前端用 uploadPart(file, 1) 一次发送整个文件
   const chunkSize = 8 * 1024 * 1024;
-  const chunks = Math.max(1, Math.ceil(size / chunkSize));
+  const chunks = 1;
 
   return jsonResult(c, {
     code: 0, third: false, hash,
@@ -111,28 +112,27 @@ ajax.post('/upload_part', async (c) => {
 
   if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
 
-  const stor = getStor(c);
-  const ext = getFileExt(file.name);
+  // 真实文件名（分片上传时 file.name 可能为空，优先从 body.name 取）
+  const realName = sanitizeFileName(String(body['name'] || file.name || 'file'));
+  const realSize = parseInt(String(body['size'] || '0')) || file.size;
+  const ext = getFileExt(realName);
   const arrayBuf = await file.arrayBuffer();
 
+  const stor = getStor(c);
   const success = await stor.upload(hash, arrayBuf, getMimeType(ext));
   if (!success) return jsonError(c, '文件上传失败');
 
-  // 入库
-  const name = sanitizeFileName(file.name);
-  const hide = 0;
-  const pwd = null;
-
+  // 入库（去重：如果 hash 已存在直接返回）
   const existing = await getFileByHash(db, hash);
   if (existing) {
     delete csrfTokens[ip];
     return jsonResult(c, {
-      code: 1, msg: '本站已存在该文件', exists: 1, hash, name, size: file.size, type: ext, id: existing.id,
+      code: 1, msg: '本站已存在该文件', exists: 1, hash, name: existing.name, size: existing.size, type: existing.type, id: existing.id,
     });
   }
 
   const id = await insertFile(db, {
-    name, type: ext, size: file.size, hash, ip, hide, pwd, uid: 0,
+    name: realName, type: ext, size: realSize, hash, ip, hide: 0, pwd: null, uid: 0,
   });
 
   // 鉴黄
@@ -156,7 +156,7 @@ ajax.post('/upload_part', async (c) => {
 
   delete csrfTokens[ip];
   return jsonResult(c, {
-    code: 1, msg: '文件上传成功！', exists: 0, hash, name, size: file.size, type: ext, id,
+    code: 1, msg: '文件上传成功！', exists: 0, hash, name: realName, size: realSize, type: ext, id,
   });
 });
 

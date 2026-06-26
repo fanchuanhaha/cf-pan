@@ -71,7 +71,7 @@ function navBar(siteUrl: string): string {
 <a class="navbar-brand" href="${siteUrl}">🌈 彩虹外链网盘</a>
 </div>
 <ul class="nav navbar-nav navbar-right">
-<li><a href="${siteUrl}admin/">管理后台</a></li>
+<li><a href="${siteUrl}admin">管理后台</a></li>
 </ul>
 </div>
 </nav>`;
@@ -379,7 +379,7 @@ document.getElementById('loginForm').onsubmit = async function(e) {
     body: JSON.stringify({username: user, password: pwd})
   }).then(r => r.json());
   if (res.code === 0) {
-    window.location.href = '${siteUrl}admin/';
+    window.location.href = '${siteUrl}admin';
   } else {
     alert(res.msg);
   }

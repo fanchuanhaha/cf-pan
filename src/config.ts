@@ -5,7 +5,7 @@ interface D1Result {
   v: string;
 }
 
-export type StorageType = 'r2' | 's3' | 'github';
+export type StorageType = 'r2' | 's3' | 'github' | 'webdav';
 
 export interface AppConfig {
   title: string;
@@ -50,6 +50,11 @@ export interface AppConfig {
   gh_ref: string;
   gh_folder: string;
   gh_api_base: string;
+  // WebDAV 配置
+  webdav_endpoint: string;
+  webdav_user: string;
+  webdav_pass: string;
+  webdav_folder: string;
   // 安装标识
   installed: number;
 }
@@ -95,6 +100,10 @@ const defaults: AppConfig = {
   gh_ref: '',
   gh_folder: '',
   gh_api_base: 'https://api.github.com',
+  webdav_endpoint: '',
+  webdav_user: '',
+  webdav_pass: '',
+  webdav_folder: 'file',
   installed: 0,
 };
 

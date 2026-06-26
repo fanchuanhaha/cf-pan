@@ -4,6 +4,7 @@ import type { IStorage } from './IStorage';
 import { R2Storage } from './R2Storage';
 import { S3Storage } from './S3Storage';
 import { GitHubApiStorage } from './GitHubApiStorage';
+import { WebDavStorage } from './WebDavStorage';
 import type { AppConfig, StorageType } from '../config';
 
 export type StorageInitResult = {
@@ -49,6 +50,23 @@ export function createStorage(config: AppConfig, env?: { FILE_R2?: R2Bucket }): 
         apiBase: config.gh_api_base || undefined,
       });
 
+    case 'webdav':
+      if (!config.webdav_endpoint || !config.webdav_user || !config.webdav_pass) {
+        console.error('WebDAV config incomplete (need endpoint/user/pass)');
+        return null;
+      }
+      try {
+        return new WebDavStorage({
+          endpoint: config.webdav_endpoint,
+          username: config.webdav_user,
+          password: config.webdav_pass,
+          defaultFolder: config.webdav_folder || 'file',
+        });
+      } catch (e: any) {
+        console.error('WebDAV create error:', e);
+        return null;
+      }
+
     default:
       console.error('Unknown storage type:', config.storage);
       return null;
@@ -65,6 +83,8 @@ export function isStorageConfigured(config: AppConfig, env?: { FILE_R2?: R2Bucke
       return !!(config.s3_endpoint && config.s3_bucket && config.s3_ak && config.s3_sk);
     case 'github':
       return !!(config.gh_owner && config.gh_repo && config.gh_token);
+    case 'webdav':
+      return !!(config.webdav_endpoint && config.webdav_user && config.webdav_pass);
     default:
       return false;
   }

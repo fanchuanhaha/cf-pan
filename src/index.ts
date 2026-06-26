@@ -38,7 +38,7 @@ const requireStorage = async (c: any, next: any) => {
     // 未安装或存储未配置
     const config = c.var.config;
     if (config.installed !== 1) {
-      return c.redirect('/install/');
+      return c.redirect('/install');
     }
     // 已安装但存储不可用（例如 R2 token 失效）
     return c.html(`<!DOCTYPE html>
@@ -65,9 +65,10 @@ pre { background: #f5f5f5; padding: 10px; border-radius: 4px; }
       ${config.storage === 'r2' ? '<li>Cloudflare R2 存储桶是否已创建</li><li>wrangler.toml 中的 R2 绑定是否正确</li><li>API Token 是否包含 R2 权限</li>' : ''}
       ${config.storage === 's3' ? '<li>S3 Endpoint / Bucket / AccessKey 等配置是否正确</li><li>S3 存储桶是否可访问</li>' : ''}
       ${config.storage === 'github' ? '<li>GitHub owner / repo / token 是否正确</li><li>Token 是否具备 repo 权限</li>' : ''}
+      ${config.storage === 'webdav' ? '<li>WebDAV endpoint / user / pass 是否正确</li><li>WebDAV 服务是否可访问</li>' : ''}
     </ul>
   </div>
-  <p>如需重新配置存储，请访问 <a href="/install/">/install/</a> 重新填写。</p>
+  <p>如需重新配置存储，请访问 <a href="/install">/install</a> 重新填写。</p>
 </div>
 </body>
 </html>`, 503);
@@ -99,6 +100,11 @@ app.route('/view.php', viewRoutes);
 
 // 后台 AJAX
 app.route('/admin/ajax', adminAjaxRoutes);
+
+// 管理后台 /admin/ 也走 frontend 路由
+app.get('/admin/', (c) => {
+  return c.redirect('/admin');
+});
 
 // 健康检查（不需要存储）
 app.get('/health', (c) => c.json({ ok: true, time: new Date().toISOString() }));

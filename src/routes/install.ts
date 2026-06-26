@@ -68,6 +68,9 @@ body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height
       <button type="button" class="storage-tab ${selectedType === 'github' ? 'active' : ''}" data-target="form-github">
         <i class="fa fa-github"></i>GitHub API
       </button>
+      <button type="button" class="storage-tab ${selectedType === 'webdav' ? 'active' : ''}" data-target="form-webdav">
+        <i class="fa fa-cloud"></i>WebDAV
+      </button>
     </div>
 
     <form id="installForm" method="POST" action="/install/save">
@@ -159,11 +162,40 @@ body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height
         </div>
       </div>
 
+      <!-- WebDAV 表单 -->
+      <div class="storage-form ${selectedType === 'webdav' ? 'active' : ''}" id="form-webdav">
+        <h4 style="margin-top:20px"><i class="fa fa-cloud"></i> WebDAV 存储配置</h4>
+        <div class="alert alert-info">
+          兼容坚果云 / 群晖 / Nextcloud / ownCloud / 通用 WebDAV 服务。通过 HTTP 协议 (Basic Auth) 操作远程存储。
+        </div>
+        <div class="form-group">
+          <label>WebDAV 服务地址 <span class="required">*</span></label>
+          <input type="text" name="webdav_endpoint" class="form-control" placeholder="https://dav.example.com/remote.php/webdav/">
+          <div class="help-block">必须以 <code>http://</code> 或 <code>https://</code> 开头，路径末尾可有可无 <code>/</code></div>
+        </div>
+        <div class="form-group">
+          <label>用户名 <span class="required">*</span></label>
+          <input type="text" name="webdav_user" class="form-control" placeholder="username">
+        </div>
+        <div class="form-group">
+          <label>密码 / 应用专用密码 <span class="required">*</span></label>
+          <input type="password" name="webdav_pass" class="form-control" placeholder="password">
+          <div class="help-block">坚果云 / 群晖等需使用"应用专用密码"，而非登录密码。密码仅保存在 D1 中。</div>
+        </div>
+        <div class="form-group">
+          <label>存储子目录 (可选)</label>
+          <input type="text" name="webdav_folder" class="form-control" value="file" placeholder="留空则使用 file/">
+          <div class="help-block">文件会保存到此子目录下（路径分隔用 <code>/</code>）</div>
+        </div>
+      </div>
+
       <input type="hidden" name="storage_type" id="storage_type" value="${selectedType}">
 
       <div class="form-group" style="margin-top:30px">
+        <button type="button" id="btnTest" class="btn-install" style="background:#17a2b8;margin-bottom:10px;"><i class="fa fa-plug"></i> 测试连接</button>
         <button type="submit" class="btn-install"><i class="fa fa-check"></i> 完成安装</button>
       </div>
+      <div id="testResult" style="margin-top:15px;display:none;"></div>
     </form>
   </div>
 </div>
@@ -177,17 +209,59 @@ document.querySelectorAll('.storage-tab').forEach(tab => {
     const target = tab.dataset.target;
     document.getElementById(target).classList.add('active');
     document.getElementById('storage_type').value = tab.dataset.target.replace('form-', '');
+    document.getElementById('testResult').style.display = 'none';
   });
+});
+
+document.getElementById('btnTest').addEventListener('click', async () => {
+  var btn = document.getElementById('btnTest');
+  var result = document.getElementById('testResult');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在测试...';
+  result.style.display = 'none';
+  result.className = '';
+  result.innerHTML = '';
+
+  try {
+    var form = document.getElementById('installForm');
+    var fd = new FormData(form);
+    var res = await fetch('/install/test', { method: 'POST', body: fd });
+    var data = await res.json();
+    result.style.display = 'block';
+    if (data.ok) {
+      result.className = 'alert alert-info';
+      result.innerHTML = '<i class="fa fa-check-circle"></i> ' + data.msg;
+    } else {
+      result.className = 'alert alert-danger';
+      result.innerHTML = '<i class="fa fa-exclamation-circle"></i> ' + (data.msg || '测试失败');
+    }
+  } catch (e) {
+    result.style.display = 'block';
+    result.className = 'alert alert-danger';
+    result.innerHTML = '<i class="fa fa-exclamation-circle"></i> 网络错误: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa fa-plug"></i> 测试连接';
+  }
 });
 </script>
 </body>
 </html>`;
 }
 
-/** 安装向导首页 */
+/** 安装向导首页（同时支持 /install 和 /install/） */
 install.get('/', async (c) => {
   const config = getConf(c);
   // 已安装则跳到首页
+  if (config.installed === 1) {
+    return c.redirect('/');
+  }
+  return c.html(installPage());
+});
+
+/** 别名：访问 /install（无尾斜杠）也走同一逻辑 */
+install.get('', async (c) => {
+  const config = getConf(c);
   if (config.installed === 1) {
     return c.redirect('/');
   }
@@ -225,6 +299,13 @@ install.post('/save', async (c) => {
         return c.html(installPage(`GitHub 配置缺少: ${f}`, storageType), 400);
       }
     }
+  } else if (storageType === 'webdav') {
+    const required = ['webdav_endpoint', 'webdav_user', 'webdav_pass'];
+    for (const f of required) {
+      if (!String(body[f] || '').trim()) {
+        return c.html(installPage(`WebDAV 配置缺少: ${f}`, storageType), 400);
+      }
+    }
   } else {
     return c.html(installPage(`未知的存储类型: ${storageType}`, storageType), 400);
   }
@@ -255,6 +336,13 @@ install.post('/save', async (c) => {
         ['gh_ref', String(body['gh_ref'] || '')],
         ['gh_folder', String(body['gh_folder'] || '')],
         ['gh_api_base', String(body['gh_api_base'] || 'https://api.github.com')],
+      );
+    } else if (storageType === 'webdav') {
+      fields.push(
+        ['webdav_endpoint', String(body['webdav_endpoint'])],
+        ['webdav_user', String(body['webdav_user'])],
+        ['webdav_pass', String(body['webdav_pass'])],
+        ['webdav_folder', String(body['webdav_folder'] || 'file')],
       );
     }
 
@@ -288,7 +376,7 @@ h2 { color: #333; }
   <p>管理员账号: <strong>${adminUser}</strong></p>
   <p>请记住您的管理员密码</p>
   <a href="/" class="btn">进入网盘</a>
-  <a href="/admin/" class="btn" style="background:#364a60;margin-left:10px">管理后台</a>
+  <a href="/admin" class="btn" style="background:#364a60;margin-left:10px">管理后台</a>
 </div>
 </body>
 </html>`);
@@ -359,6 +447,41 @@ install.post('/test', async (c) => {
       });
     } catch (e: any) {
       return jsonError(c, 'GitHub 测试失败: ' + (e.message || e));
+    }
+  }
+
+  if (storageType === 'webdav') {
+    const endpoint = String(body['webdav_endpoint'] || '').trim();
+    const username = String(body['webdav_user'] || '').trim();
+    const password = String(body['webdav_pass'] || '');
+    if (!endpoint || !username || !password) {
+      return jsonError(c, '请填写 endpoint/user/pass');
+    }
+    try {
+      // 规范化 URL
+      let ep = endpoint;
+      if (!ep.endsWith('/')) ep += '/';
+      const url = new URL(ep);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return jsonError(c, 'WebDAV 地址必须以 http:// 或 https:// 开头');
+      }
+      const auth = 'Basic ' + btoa(`${username}:${password}`);
+      // 用 PROPFIND 探测根目录
+      const res = await fetch(ep, {
+        method: 'PROPFIND',
+        headers: {
+          'Authorization': auth,
+          'Depth': '0',
+          'User-Agent': 'pan-worker-webdav',
+        },
+      });
+      if (res.ok || res.status === 207) {
+        return jsonResult(c, { ok: true, message: `WebDAV 连接成功！服务器响应 ${res.status}` });
+      }
+      const t = await res.text();
+      return jsonError(c, `WebDAV 服务器返回 ${res.status}: ${t.substring(0, 200)}`);
+    } catch (e: any) {
+      return jsonError(c, 'WebDAV 测试失败: ' + (e.message || e));
     }
   }
 

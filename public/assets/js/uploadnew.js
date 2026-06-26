@@ -239,6 +239,8 @@ new Vue({
                 data.append('file', file);
                 data.append('hash', that.input.hash);
                 data.append('chunk', chunk);
+                data.append('name', that.input.name);
+                data.append('size', that.input.size);
                 data.append('csrf_token', that.input.csrf_token);
                 $.ajax({
                     type : "POST",
