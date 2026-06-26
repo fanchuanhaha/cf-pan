@@ -5,7 +5,7 @@ interface D1Result {
   v: string;
 }
 
-export type StorageType = 'r2' | 's3';
+export type StorageType = 'r2' | 's3' | 'github';
 
 export interface AppConfig {
   title: string;
@@ -43,6 +43,15 @@ export interface AppConfig {
   s3_bucket: string;
   s3_ak: string;
   s3_sk: string;
+  // GitHub API 配置
+  gh_owner: string;
+  gh_repo: string;
+  gh_token: string;
+  gh_ref: string;
+  gh_folder: string;
+  gh_api_base: string;
+  // 安装标识
+  installed: number;
 }
 
 const defaults: AppConfig = {
@@ -80,6 +89,13 @@ const defaults: AppConfig = {
   s3_bucket: '',
   s3_ak: '',
   s3_sk: '',
+  gh_owner: '',
+  gh_repo: '',
+  gh_token: '',
+  gh_ref: '',
+  gh_folder: '',
+  gh_api_base: 'https://api.github.com',
+  installed: 0,
 };
 
 let cached: AppConfig | null = null;

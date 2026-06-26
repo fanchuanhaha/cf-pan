@@ -3,19 +3,20 @@ import type { Context, MiddlewareHandler } from 'hono';
 import type { IStorage } from './storage/IStorage';
 import type { AppConfig } from './config';
 import { loadConfig } from './config';
-import { createStorage } from './storage/factory';
+import { createStorage, isStorageConfigured } from './storage/factory';
 
 export type AppBindings = {
   DB: D1Database;
-  FILE_R2: R2Bucket;
+  FILE_R2?: R2Bucket; // 改为可选
   AI?: unknown;
 };
 
 // 扩展 Hono Context 的变量类型
 export interface AppVariables {
   db: D1Database;
-  stor: IStorage;
+  stor: IStorage | null;
   config: AppConfig;
+  storageOk: boolean;
 }
 
 export type AppEnv = {
@@ -26,18 +27,19 @@ export type AppEnv = {
 /** 绑定类型增强的 Context */
 export type AppContext = Context<AppEnv>;
 
-/** 中间件：加载配置并创建存储实例 */
+/** 中间件：加载配置 + 尝试创建存储实例 */
 export const initApp = (): MiddlewareHandler<AppEnv> => {
   return async (c, next) => {
     const db = c.env.DB;
     const config = await loadConfig(db);
     const stor = createStorage(config, { FILE_R2: c.env.FILE_R2 });
-    if (!stor) {
-      return c.text('Storage initialization failed', 500);
-    }
+    const storageOk = isStorageConfigured(config, { FILE_R2: c.env.FILE_R2 });
+
     c.set('db', db);
     c.set('stor', stor);
     c.set('config', config);
+    c.set('storageOk', storageOk);
+
     await next();
   };
 };
@@ -47,12 +49,25 @@ export function getDB(c: Context<{ Variables: AppVariables }>): D1Database {
   return c.var.db;
 }
 
-/** 快速获取 stor */
-export function getStor(c: Context<{ Variables: AppVariables }>): IStorage {
+/** 快速获取 stor（可能为 null） */
+export function getStor(c: Context<{ Variables: AppVariables }>): IStorage | null {
+  return c.var.stor;
+}
+
+/** 快速获取 stor，如果未就绪则抛错 */
+export function getStorOrThrow(c: Context<{ Variables: AppVariables }>): IStorage {
+  if (!c.var.stor) {
+    throw new Error('Storage not configured');
+  }
   return c.var.stor;
 }
 
 /** 快速获取 config */
 export function getConf(c: Context<{ Variables: AppVariables }>): AppConfig {
   return c.var.config;
+}
+
+/** 检查存储是否就绪 */
+export function isStorageReady(c: Context<{ Variables: AppVariables }>): boolean {
+  return c.var.storageOk && c.var.stor !== null;
 }

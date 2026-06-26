@@ -76,4 +76,19 @@ INSERT INTO pre_config (k, v) VALUES
   ('ip_type', '0'),
   ('blackip', ''),
   ('upload_max_filesize', ''),
-  ('r2_public_url', '');
+  ('r2_public_url', ''),
+  -- S3 存储配置
+  ('s3_endpoint', ''),
+  ('s3_region', ''),
+  ('s3_bucket', ''),
+  ('s3_ak', ''),
+  ('s3_sk', ''),
+  -- GitHub API 存储配置
+  ('gh_owner', ''),
+  ('gh_repo', ''),
+  ('gh_token', ''),
+  ('gh_ref', ''),
+  ('gh_folder', ''),
+  ('gh_api_base', 'https://api.github.com'),
+  -- 安装标识 (0=未安装, 1=已安装)
+  ('installed', '0');
