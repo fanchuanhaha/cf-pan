@@ -1,15 +1,15 @@
 // 彩虹外链网盘 - 后台管理路由 (对应原 admin/ajax.php 系列)
 
 import { Hono } from 'hono';
-import type { AppVariables } from '../middleware';
+import type { AppEnv } from '../middleware';
 import { getDB, getStor, getConf } from '../middleware';
-import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock, now } from '../db';
-import { getConfig, updateConfig, clearConfigCache } from '../config';
+import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock } from '../db';
+import { updateConfig, clearConfigCache } from '../config';
 import { verifyAdminToken } from '../auth/admin';
 import { typeToIcon, isView, getViewType, sizeFormat } from '../utils/mime';
-import { jsonResult, jsonError, getClientIP } from '../utils/response';
+import { jsonResult, jsonError } from '../utils/response';
 
-const adminAjax = new Hono<{ Variables: AppVariables & { env: { FILE_R2: R2Bucket } } }>();
+const adminAjax = new Hono<AppEnv>();
 
 // 鉴权中间件
 adminAjax.use('*', async (c, next) => {

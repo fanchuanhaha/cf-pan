@@ -1,15 +1,14 @@
 // 彩虹外链网盘 - 第三方上传 API (对应原 api.php)
 
 import { Hono } from 'hono';
-import type { AppVariables } from '../middleware';
+import type { AppEnv } from '../middleware';
 import { getDB, getStor, getConf } from '../middleware';
 import { getFileByHash, insertFile } from '../db';
 import { isBlocked, sanitizeFileName } from '../services/upload';
-import { getFileExt, getMimeType, isView as isViewExt } from '../utils/mime';
+import { getFileExt, getMimeType } from '../utils/mime';
 import { jsonResult, jsonError, html, getClientIP } from '../utils/response';
-import { checkImage } from '../services/green';
 
-const api = new Hono<{ Variables: AppVariables & { env: { FILE_R2: R2Bucket; AI?: unknown } } }>();
+const api = new Hono<AppEnv>();
 
 api.post('/', async (c) => {
   const db = getDB(c);

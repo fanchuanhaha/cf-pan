@@ -1,13 +1,12 @@
 // 彩虹外链网盘 - 下载路由 (对应原 down.php)
 
 import { Hono } from 'hono';
-import type { Context } from 'hono';
-import type { AppVariables } from '../middleware';
-import { getDB, getStor, getConf } from '../middleware';
+import type { AppEnv } from '../middleware';
+import { getDB, getStor } from '../middleware';
 import { getFileByHash, touchFile } from '../db';
 import { fileOutput } from '../services/upload';
 
-const download = new Hono<{ Variables: AppVariables & { env: { FILE_R2: R2Bucket } } }>();
+const download = new Hono<AppEnv>();
 
 // 处理 /down.php/:hash.:ext 和 /down.php/:hash.:ext&:pwd
 download.get('/*', async (c) => {
@@ -60,7 +59,7 @@ download.get('/*', async (c) => {
 
   await touchFile(db, row.id);
 
-  return fileOutput(c, stor, hash, row.type, row.size, row.name);
+  return fileOutput(c, stor, hash, row.type, row.size, row.name, true);
 });
 
 export default download;

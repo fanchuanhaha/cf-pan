@@ -79,6 +79,34 @@ jobs:
           echo "初始化数据库表结构..."
           npx wrangler d1 execute pan-db --config wrangler.spa.toml --file=./schema.sql --remote || echo "⚠️ 表可能已存在，继续部署"
 
+      # ==================== 创建 R2 存储桶 ====================
+      - name: Create R2 bucket if not exists
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "检查并创建 R2 存储桶..."
+          
+          echo "1. 先检查 R2 存储是否可用..."
+          if ! npx wrangler r2 bucket list --config wrangler.spa.toml 2>&1; then
+            echo ""
+            echo "❌ R2 存储未启用或无权限！"
+            echo "请先在 Cloudflare Dashboard 启用 R2 存储（免费）:"
+            echo "https://dash.cloudflare.com/?to=/:account/r2"
+            echo ""
+            echo "启用后重新运行工作流即可。"
+            exit 1
+          fi
+          
+          echo "2. 检查 pan-files 存储桶是否已存在..."
+          if npx wrangler r2 bucket list --config wrangler.spa.toml 2>&1 | grep -q "pan-files"; then
+            echo "✅ 存储桶 pan-files 已存在"
+          else
+            echo "3. 创建 R2 存储桶 pan-files..."
+            npx wrangler r2 bucket create pan-files --config wrangler.spa.toml
+            echo "✅ 存储桶创建成功"
+          fi
+
       # ==================== 部署 ====================
       - name: Deploy to Cloudflare Workers
         env:

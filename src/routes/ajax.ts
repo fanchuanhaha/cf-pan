@@ -1,8 +1,7 @@
 // 彩虹外链网盘 - 前端 AJAX 路由 (对应原 ajax.php)
 
 import { Hono } from 'hono';
-import type { Context } from 'hono';
-import type { AppVariables } from '../middleware';
+import type { AppEnv, AppVariables } from '../middleware';
 import { getDB, getStor, getConf } from '../middleware';
 import { getFileByHash, insertFile, deleteFile, getFileById, getTodayUploadCount, now } from '../db';
 import { isBlocked, sanitizeFileName } from '../services/upload';
@@ -12,7 +11,7 @@ import { checkImage } from '../services/green';
 
 let csrfTokens: Record<string, string> = {};
 
-const ajax = new Hono<{ Variables: AppVariables & { env: { FILE_R2: R2Bucket; AI?: unknown } } }>();
+const ajax = new Hono<AppEnv>();
 
 // CSRF Token 获取
 ajax.get('/csrf', (c) => {

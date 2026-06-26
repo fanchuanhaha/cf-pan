@@ -1,21 +1,14 @@
 // 彩虹外链网盘 - 页面渲染路由 (SSR 模板直出，保持原 jQuery+Bootstrap 界面)
 
 import { Hono } from 'hono';
-import type { Context } from 'hono';
-import type { AppVariables } from '../middleware';
-import { getDB, getStor, getConf } from '../middleware';
+import type { AppEnv } from '../middleware';
+import { getDB, getConf } from '../middleware';
 import { getFileByHash } from '../db';
 import { verifyAdminToken } from '../auth/admin';
-import { getViewType, typeToIcon, sizeFormat, getFileExt } from '../utils/mime';
+import { getViewType, sizeFormat, getFileExt } from '../utils/mime';
 import { htmlspecialchars } from '../utils/response';
 
-interface PageEnv {
-  DB: D1Database;
-  FILE_R2: R2Bucket;
-  AI?: unknown;
-}
-
-const frontend = new Hono<{ Variables: AppVariables; Bindings: PageEnv }>();
+const frontend = new Hono<AppEnv>();
 
 // CDN 资源（与原项目 header.php/footer.php 完全一致）
 const CDN = {
@@ -222,8 +215,7 @@ function showMsg(msg, type) {
   el.textContent = msg;
 }
 </script>
-<script src="${siteUrl}assets/js/clipboard.min.js"></script>
-<script src="${siteUrl}assets/js/ckplayer.min.js"></script>
+<script src="${CDN.clipboard}"></script>
 `, siteUrl);
 
   return c.html(html);

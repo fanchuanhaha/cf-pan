@@ -28,5 +28,5 @@ database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # Static Assets 配置 - 托管前端静态资源
 [assets]
 directory = "./public"
-not_found_handling = "single-page-application"
-run_worker_first = ["/ajax.php", "/api.php", "/down.php", "/view.php", "/admin/*"]
+not_found_handling = "404-page"
+run_worker_first = ["/", "/ajax.php", "/api.php", "/down.php", "/view.php", "/file.php", "/admin/*", "/health"]

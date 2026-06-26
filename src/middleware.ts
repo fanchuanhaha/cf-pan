@@ -2,8 +2,14 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import type { IStorage } from './storage/IStorage';
 import type { AppConfig } from './config';
-import { loadConfig, getConfig } from './config';
+import { loadConfig } from './config';
 import { createStorage } from './storage/factory';
+
+export type AppBindings = {
+  DB: D1Database;
+  FILE_R2: R2Bucket;
+  AI?: unknown;
+};
 
 // 扩展 Hono Context 的变量类型
 export interface AppVariables {
@@ -12,21 +18,16 @@ export interface AppVariables {
   config: AppConfig;
 }
 
-/** 绑定类型增强的 Context */
-export type AppContext = Context<{
-  Bindings: {
-    DB: D1Database;
-    FILE_R2: R2Bucket;
-    AI?: unknown;
-  };
+export type AppEnv = {
+  Bindings: AppBindings;
   Variables: AppVariables;
-}>;
+};
+
+/** 绑定类型增强的 Context */
+export type AppContext = Context<AppEnv>;
 
 /** 中间件：加载配置并创建存储实例 */
-export const initApp = (): MiddlewareHandler<{
-  Bindings: { DB: D1Database; FILE_R2: R2Bucket; AI?: unknown };
-  Variables: AppVariables;
-}> => {
+export const initApp = (): MiddlewareHandler<AppEnv> => {
   return async (c, next) => {
     const db = c.env.DB;
     const config = await loadConfig(db);

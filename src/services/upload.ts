@@ -38,15 +38,16 @@ export async function fileOutput(
   hash: string,
   type: string,
   size: number,
-  name: string
+  name: string,
+  forceDownload: boolean = false
 ): Promise<Response> {
   const ext = type.toLowerCase();
-  const extList = [
+  const inlineExtList = [
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico',
     'mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a',
     'mp4', 'webm', 'mov', 'flv', 'avi', 'mkv',
   ];
-  const isInline = extList.includes(ext);
+  const isInline = !forceDownload && inlineExtList.includes(ext);
 
   const contentDisposition = isInline
     ? `inline; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`

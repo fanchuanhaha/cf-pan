@@ -1,12 +1,12 @@
 // 彩虹外链网盘 - 在线预览路由 (对应原 view.php / file_output inline)
 
 import { Hono } from 'hono';
-import type { AppVariables } from '../middleware';
+import type { AppEnv } from '../middleware';
 import { getDB, getStor } from '../middleware';
 import { getFileByHash, touchFile } from '../db';
 import { fileOutput } from '../services/upload';
 
-const view = new Hono<{ Variables: AppVariables & { env: { FILE_R2: R2Bucket } } }>();
+const view = new Hono<AppEnv>();
 
 // /view.php/:hash.:ext 直接流式输出文件 (用于 img/audio/video src)
 view.get('/*', async (c) => {
