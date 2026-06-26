@@ -1,9 +1,9 @@
 // 彩虹外链网盘 - Hono 中间件：注入 db / stor / config
 import type { Context, MiddlewareHandler } from 'hono';
-import type { IStorage } from '../storage/IStorage';
-import type { AppConfig } from '../config';
-import { loadConfig, getConfig } from '../config';
-import { createStorage } from '../storage/factory';
+import type { IStorage } from './storage/IStorage';
+import type { AppConfig } from './config';
+import { loadConfig, getConfig } from './config';
+import { createStorage } from './storage/factory';
 
 // 扩展 Hono Context 的变量类型
 export interface AppVariables {

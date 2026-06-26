@@ -19,13 +19,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo "安装后端依赖..."
-          if npm ci; then
-            echo "✅ npm ci 成功"
-          else
-            echo "⚠️ npm ci 失败，使用 npm install 生成 lock 文件..."
-            npm install
-          fi
+          echo "安装依赖..."
+          npm install
 
       - name: Disable wrangler telemetry
         run: npx wrangler telemetry disable
