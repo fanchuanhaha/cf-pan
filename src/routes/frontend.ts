@@ -1585,9 +1585,8 @@ frontend.get('/admin/restore', async (c) => {
   <div class="alert alert-warning">
     <p><strong>使用说明：</strong></p>
     <ol>
-      <li>第一步：恢复数据库 - 上传原项目的 SQL 备份文件，或提供下载链接</li>
-      <li>第二步：恢复文件 - 上传原项目根目录的 ZIP 压缩包（包含 file/ 目录和 config.php 等），或提供下载链接</li>
-      <li>系统会自动识别并恢复到当前配置的存储后端</li>
+      <li><strong>第一步：恢复数据库</strong> - 上传原项目的 SQL 备份文件，系统自动跳过 MySQL 专有语法</li>
+      <li><strong>第二步：恢复文件</strong> - 输入原站点地址（如 <code>http://dl.802213.xyz/</code>），系统从 <code>pre_file</code> 表读取所有文件，自动到 <code>{原站点}/file/{hash}</code> 批量下载到当前存储</li>
     </ol>
   </div>
 </div>
@@ -1596,120 +1595,210 @@ frontend.get('/admin/restore', async (c) => {
 <div class="panel panel-primary">
 <div class="panel-heading"><h3 class="panel-title">第一步：恢复数据库 (SQL 文件)</h3></div>
 <div class="panel-body">
-  <ul class="nav nav-tabs" role="tablist">
-    <li role="presentation" class="active"><a href="#sql-upload" data-toggle="tab">上传文件</a></li>
-    <li role="presentation"><a href="#sql-url" data-toggle="tab">从链接下载</a></li>
-  </ul>
-  <div class="tab-content" style="padding-top:20px">
-    <div role="tabpanel" class="tab-pane active" id="sql-upload">
-      <form id="sqlFormUpload" enctype="multipart/form-data">
-        <div class="form-group">
-          <label>选择 SQL 备份文件</label>
-          <input type="file" name="sql_file" class="form-control" accept=".sql" required/>
-        </div>
-        <button type="button" class="btn btn-primary" onclick="restoreSql('upload')"><i class="fa fa-upload"></i> 上传并恢复</button>
-      </form>
+  <form id="sqlFormUpload" enctype="multipart/form-data">
+    <div class="form-group">
+      <label>选择 SQL 备份文件</label>
+      <input type="file" name="sql_file" class="form-control" accept=".sql" required/>
+      <p class="help-block">支持 MySQL 导出的 .sql 文件（自动跳过 SET / CREATE TABLE 等 D1 不支持的语句）</p>
     </div>
-    <div role="tabpanel" class="tab-pane" id="sql-url">
-      <form id="sqlFormUrl">
-        <div class="form-group">
-          <label>SQL 文件下载链接</label>
-          <input type="url" name="sql_url" class="form-control" placeholder="https://example.com/backup.sql" required/>
-        </div>
-        <button type="button" class="btn btn-primary" onclick="restoreSql('url')"><i class="fa fa-download"></i> 下载并恢复</button>
-      </form>
-    </div>
-  </div>
+    <button type="button" class="btn btn-primary" onclick="restoreSql()"><i class="fa fa-upload"></i> 上传并恢复</button>
+  </form>
   <div id="sqlProgress" style="margin-top:15px;display:none;"></div>
 </div>
 </div>
 
 <div class="panel panel-success">
-<div class="panel-heading"><h3 class="panel-title">第二步：恢复文件 (ZIP 压缩包)</h3></div>
+<div class="panel-heading"><h3 class="panel-title">第二步：从原站点下载文件到当前存储</h3></div>
 <div class="panel-body">
-  <ul class="nav nav-tabs" role="tablist">
-    <li role="presentation" class="active"><a href="#zip-upload" data-toggle="tab">上传文件</a></li>
-    <li role="presentation"><a href="#zip-url" data-toggle="tab">从链接下载</a></li>
-  </ul>
-  <div class="tab-content" style="padding-top:20px">
-    <div role="tabpanel" class="tab-pane active" id="zip-upload">
-      <form id="zipFormUpload" enctype="multipart/form-data">
-        <div class="form-group">
-          <label>选择 ZIP 压缩包（包含原项目根目录的 file/ 目录）</label>
-          <input type="file" name="zip_file" class="form-control" accept=".zip" required/>
-        </div>
-        <button type="button" class="btn btn-success" onclick="restoreFiles('upload')"><i class="fa fa-upload"></i> 上传并恢复</button>
-      </form>
+  <form id="sourceForm">
+    <div class="form-group">
+      <label>原站点 URL</label>
+      <input type="text" name="source_url" id="sourceUrl" class="form-control" placeholder="http://dl.802213.xyz/" value="http://" required/>
+      <p class="help-block">例如 <code>http://dl.802213.xyz/</code>，系统会从 <code>{原站点}/file/{hash}</code> 下载所有文件到存储</p>
     </div>
-    <div role="tabpanel" class="tab-pane" id="zip-url">
-      <form id="zipFormUrl">
-        <div class="form-group">
-          <label>ZIP 压缩包下载链接</label>
-          <input type="url" name="zip_url" class="form-control" placeholder="https://example.com/backup.zip" required/>
-        </div>
-        <button type="button" class="btn btn-success" onclick="restoreFiles('url')"><i class="fa fa-download"></i> 下载并恢复</button>
-      </form>
-    </div>
-  </div>
-  <div id="zipProgress" style="margin-top:15px;display:none;"></div>
+    <button type="button" class="btn btn-success" onclick="restoreFromSource()"><i class="fa fa-cloud-download"></i> 开始批量下载</button>
+    <button type="button" class="btn btn-danger" onclick="cancelCurrentTask()" id="cancelBtn" style="display:none;"><i class="fa fa-stop"></i> 取消下载</button>
+  </form>
+  <div id="sourceProgress" style="margin-top:15px;display:none;"></div>
 </div>
 </div>
 
 <script>
-function restoreSql(mode){
-  var form = mode === 'upload' ? document.getElementById('sqlFormUpload') : document.getElementById('sqlFormUrl');
+var currentTaskId = null;
+var pollTimer = null;
+
+function restoreSql(){
+  var form = document.getElementById('sqlFormUpload');
   var fd = new FormData(form);
   var progress = document.getElementById('sqlProgress');
   progress.style.display = 'block';
-  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在恢复数据库...</div>';
-  
-  fetch('/admin/api/restore/sql', { method: 'POST', body: fd })
-    .then(r => r.json())
-    .then(res => {
+  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在上传 SQL...</div>';
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/admin/api/restore/sql', true);
+  xhr.upload.onprogress = function(e){
+    if(e.lengthComputable){
+      var pct = (e.loaded / e.total * 100).toFixed(1);
+      progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 上传中 ' + pct + '% (' + (e.loaded / 1024 / 1024).toFixed(2) + ' / ' + (e.total / 1024 / 1024).toFixed(2) + ' MB)</div>';
+    }
+  };
+  xhr.onload = function(){
+    try {
+      var res = JSON.parse(xhr.responseText);
       if(res.code === 0){
-        var msg = '<strong>数据库恢复完成</strong><br/>成功: ' + res.data.success + ', 失败: ' + res.data.failed;
+        var msg = '<strong>数据库恢复完成</strong><br/>成功: ' + (res.data.success || 0) + ', 失败: ' + (res.data.failed || 0);
         if(res.data.errors && res.data.errors.length > 0){
-          msg += '<br/>错误: <pre style="max-height:200px;overflow:auto">' + res.data.errors.join('\\n').substring(0, 1000) + '</pre>';
+          msg += '<br/>错误: <pre style="max-height:200px;overflow:auto">' + res.data.errors.join('\\n').substring(0, 1500) + '</pre>';
         }
         progress.innerHTML = '<div class="alert alert-success">' + msg + '</div>';
       } else {
-        progress.innerHTML = '<div class="alert alert-danger">' + res.msg + '</div>';
+        progress.innerHTML = '<div class="alert alert-danger">错误: ' + (res.msg || '未知错误') + '</div>';
       }
-    })
-    .catch(e => {
-      progress.innerHTML = '<div class="alert alert-danger">网络错误: ' + e.message + '</div>';
-    });
+    } catch(e) {
+      progress.innerHTML = '<div class="alert alert-danger">解析响应失败: ' + e.message + '<br/>响应: <pre>' + xhr.responseText.substring(0, 500) + '</pre></div>';
+    }
+  };
+  xhr.onerror = function(){
+    progress.innerHTML = '<div class="alert alert-danger">网络错误: 请检查文件大小（最大 90MB）</div>';
+  };
+  xhr.ontimeout = function(){
+    progress.innerHTML = '<div class="alert alert-danger">请求超时</div>';
+  };
+  xhr.timeout = 300000;
+  xhr.send(fd);
 }
 
-function restoreFiles(mode){
-  var form = mode === 'upload' ? document.getElementById('zipFormUpload') : document.getElementById('zipFormUrl');
-  var fd = new FormData(form);
-  var progress = document.getElementById('zipProgress');
+function restoreFromSource(){
+  var url = document.getElementById('sourceUrl').value.trim();
+  if(!url || url === 'http://' || url === 'https://'){
+    layer.alert('请输入原站点 URL', {icon: 2});
+    return;
+  }
+
+  var progress = document.getElementById('sourceProgress');
   progress.style.display = 'block';
-  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在下载/解压/恢复文件，请稍候...</div>';
-  
-  fetch('/admin/api/restore/files', { method: 'POST', body: fd })
-    .then(r => r.json())
-    .then(res => {
-      if(res.code === 0){
-        var msg = '<strong>文件恢复完成</strong><br/>文件数: ' + res.data.fileCount + '<br/>成功: ' + res.data.success + ', 失败: ' + res.data.failed + '<br/>总大小: ' + (res.data.totalSize / 1024 / 1024).toFixed(2) + ' MB';
-        if(res.data.errors && res.data.errors.length > 0){
-          msg += '<br/>错误: <pre style="max-height:200px;overflow:auto">' + res.data.errors.join('\\n').substring(0, 1000) + '</pre>';
-        }
-        progress.innerHTML = '<div class="alert alert-success">' + msg + '</div>';
+  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在启动下载任务...</div>';
+  document.getElementById('cancelBtn').style.display = 'inline-block';
+
+  var fd = new FormData();
+  fd.append('source_url', url);
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/admin/api/restore/files-from-source', true);
+  xhr.onload = function(){
+    try {
+      var res = JSON.parse(xhr.responseText);
+      if(res.code === 0 && res.data && res.data.taskId){
+        currentTaskId = res.data.taskId;
+        pollDownloadProgress();
       } else {
-        progress.innerHTML = '<div class="alert alert-danger">' + res.msg + '</div>';
+        progress.innerHTML = '<div class="alert alert-danger">启动失败: ' + (res.msg || '未知错误') + '</div>';
+        document.getElementById('cancelBtn').style.display = 'none';
       }
-    })
-    .catch(e => {
-      progress.innerHTML = '<div class="alert alert-danger">网络错误: ' + e.message + '</div>';
-    });
+    } catch(e) {
+      progress.innerHTML = '<div class="alert alert-danger">解析响应失败: ' + e.message + '<br/>响应: <pre>' + xhr.responseText.substring(0, 500) + '</pre></div>';
+    }
+  };
+  xhr.onerror = function(){
+    progress.innerHTML = '<div class="alert alert-danger">网络错误: 请重试</div>';
+  };
+  xhr.send(fd);
+}
+
+function pollDownloadProgress(){
+  if(!currentTaskId) return;
+  var progress = document.getElementById('sourceProgress');
+
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(function(){
+    fetch('/admin/api/restore/status?taskId=' + encodeURIComponent(currentTaskId))
+      .then(r => r.json())
+      .then(res => {
+        if(res.code !== 0){
+          progress.innerHTML = '<div class="alert alert-danger">查询失败: ' + (res.msg || '未知') + '</div>';
+          return;
+        }
+        var s = res.data;
+        var pct = s.total > 0 ? ((s.processed / s.total) * 100).toFixed(1) : '0';
+
+        var html = '<div class="alert alert-info">'
+          + '<h4 style="margin-top:0"><i class="fa fa-cloud-download"></i> 文件下载进度</h4>'
+          + '<div class="progress" style="margin-bottom:10px;height:22px;"><div class="progress-bar progress-bar-success progress-bar-striped active" style="width:' + pct + '%;line-height:22px;">' + pct + '%</div></div>'
+          + '<table class="table table-condensed" style="margin-bottom:5px;">'
+          + '<tr><th style="width:140px">总文件 / 已下载</th><td><strong>' + s.processed + ' / ' + s.total + '</strong></td></tr>'
+          + '<tr><th>成功 / 失败</th><td><span class="text-success">' + (s.success || 0) + '</span> / <span class="text-danger">' + (s.failed || 0) + '</span></td></tr>';
+        if(s.currentItem){
+          html += '<tr><th>当前下载文件</th><td><i class="fa fa-file"></i> ' + s.currentItem + '</td></tr>';
+        }
+        if(s.message){
+          html += '<tr><th>状态</th><td>' + s.message + '</td></tr>';
+        }
+        html += '</table>';
+        if(s.errors && s.errors.length > 0){
+          html += '<div><strong>最近错误 (' + s.errors.length + ')：</strong><pre style="max-height:150px;overflow:auto;margin:5px 0 0 0;">' + s.errors.slice(-5).join('\\n') + '</pre></div>';
+        }
+        html += '</div>';
+        progress.innerHTML = html;
+
+        if(s.status === 'completed'){
+          clearInterval(pollTimer);
+          pollTimer = null;
+          currentTaskId = null;
+          document.getElementById('cancelBtn').style.display = 'none';
+          var done = '<div class="alert alert-success">'
+            + '<h4 style="margin-top:0"><i class="fa fa-check-circle"></i> 文件下载完成</h4>'
+            + '<table class="table table-condensed">'
+            + '<tr><th>总文件</th><td>' + s.total + '</td></tr>'
+            + '<tr><th>成功</th><td><span class="text-success">' + s.success + '</span></td></tr>'
+            + '<tr><th>失败</th><td><span class="text-danger">' + s.failed + '</span></td></tr>'
+            + '</table>';
+          if(s.errors && s.errors.length > 0){
+            done += '<div><strong>失败的文件：</strong><pre style="max-height:250px;overflow:auto;">' + s.errors.join('\\n').substring(0, 3000) + '</pre></div>';
+          }
+          done += '</div>';
+          progress.innerHTML = done;
+        } else if(s.status === 'failed'){
+          clearInterval(pollTimer);
+          pollTimer = null;
+          currentTaskId = null;
+          document.getElementById('cancelBtn').style.display = 'none';
+          var fail = '<div class="alert alert-danger"><h4 style="margin-top:0"><i class="fa fa-times-circle"></i> 下载失败</h4>';
+          if(s.errors && s.errors.length > 0){
+            fail += '<pre style="max-height:200px;overflow:auto;">' + s.errors.join('\\n').substring(0, 2000) + '</pre>';
+          } else {
+            fail += '<p>请检查原站点 URL 是否正确、是否可访问</p>';
+          }
+          fail += '</div>';
+          progress.innerHTML = fail;
+        } else if(s.status === 'cancelled'){
+          clearInterval(pollTimer);
+          pollTimer = null;
+          currentTaskId = null;
+          document.getElementById('cancelBtn').style.display = 'none';
+          progress.innerHTML = '<div class="alert alert-warning">任务已取消</div>';
+        }
+      })
+      .catch(e => {});
+  }, 1000);
+}
+
+function cancelCurrentTask(){
+  if(!currentTaskId) return;
+  if(!confirm('确定要取消当前下载任务吗？')) return;
+  fetch('/admin/api/restore/cancel', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'taskId=' + encodeURIComponent(currentTaskId)
+  }).then(r => r.json()).then(res => {
+    layer.msg(res.msg || (res.code === 0 ? '已请求取消' : '取消失败'), {icon: res.code === 0 ? 1 : 2});
+  });
 }
 </script>
 `;
 
   return c.html(adminLayout('数据恢复', body, siteUrlStr, 'set', true, config.title));
 });
+
 
 // ===================== 后台 AJAX =====================
 frontend.post('/admin/ajax/login', async (c) => {

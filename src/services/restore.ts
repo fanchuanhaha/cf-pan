@@ -197,47 +197,196 @@ export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string,
     }
     
     try {
-      // 只处理 INSERT 语句，跳过 CREATE/DROP（结构由 D1 初始化管理）
-      if (/^INSERT\s+INTO\s+/i.test(stmt)) {
-        // 转换表名
-        const converted = convertTableName(stmt);
-        try {
+      const stmt = statements[i].trim();
+      if (!stmt) continue;
+      
+      // 更新任务进度
+      if (task) {
+        task.processed = i;
+        task.message = `正在执行 SQL 语句 ${i + 1}/${statements.length}`;
+      }
+      
+      const upperStmt = stmt.toUpperCase();
+      
+      // 跳过 MySQL 专有且 D1 不支持的语句
+      if (
+        upperStmt.startsWith('SET ') ||
+        upperStmt.startsWith('START TRANSACTION') ||
+        upperStmt.startsWith('BEGIN') ||
+        upperStmt.startsWith('COMMIT') ||
+        upperStmt.startsWith('ROLLBACK') ||
+        upperStmt.startsWith('LOCK ') ||
+        upperStmt.startsWith('UNLOCK ') ||
+        upperStmt.startsWith('USE ') ||
+        upperStmt.startsWith('DROP DATABASE') ||
+        upperStmt.startsWith('CREATE DATABASE') ||
+        upperStmt.startsWith('/*!') ||  // MySQL 条件注释
+        upperStmt.startsWith('DELIMITER') ||
+        /^!\d+/.test(upperStmt)  // MySQL 版本特定语句
+      ) {
+        result.success++;
+        continue;
+      }
+      
+      // CREATE TABLE - 跳过（D1 已有结构）
+      if (upperStmt.startsWith('CREATE TABLE') || upperStmt.startsWith('CREATE INDEX') || upperStmt.startsWith('CREATE UNIQUE INDEX')) {
+        result.success++;
+        continue;
+      }
+      
+      // DROP TABLE - 跳过（D1 已有结构）
+      if (upperStmt.startsWith('DROP TABLE') || upperStmt.startsWith('DROP INDEX')) {
+        result.success++;
+        continue;
+      }
+      
+      // ALTER TABLE - 跳过（D1 schema 已固定）
+      if (upperStmt.startsWith('ALTER TABLE')) {
+        result.success++;
+        continue;
+      }
+      
+      // DELETE - 跳过（避免误删现有数据）
+      if (upperStmt.startsWith('DELETE ')) {
+        result.success++;
+        continue;
+      }
+      
+      try {
+        // INSERT 语句：用 INSERT OR REPLACE 避免唯一冲突
+        if (upperStmt.startsWith('INSERT INTO')) {
+          const converted = convertTableName(stmt).replace(/^INSERT\s+INTO/i, 'INSERT OR REPLACE INTO');
           // @ts-ignore - D1 动态类型
           const stmt_obj = db.prepare(converted);
           // @ts-ignore - D1 动态类型
           await stmt_obj.run();
-        } catch (e: any) {
-          // 失败则跳过
-          result.failed++;
-          result.errors.push(`INSERT 失败: ${e.message || e}`);
-        }
-        result.success++;
-      } else if (/^CREATE\s+TABLE/i.test(stmt)) {
-        // 跳过 CREATE TABLE（D1 已有结构）
-        result.success++;
-      } else if (/^DROP/i.test(stmt) || /^DELETE/i.test(stmt)) {
-        // 跳过 DROP 和 DELETE
-        result.success++;
-      } else {
-        // 其他语句：尝试 prepare + run
-        try {
-          const statement = stmt.trim();
-          if (statement) {
-            // @ts-ignore - D1 动态类型
-            const stmt_obj = db.prepare(statement);
-            // @ts-ignore - D1 动态类型
-            await stmt_obj.run();
-          }
           result.success++;
-        } catch (e: any) {
-          result.failed++;
-          result.errors.push(`语句 ${i + 1}: ${e.message || e}`);
+        } else {
+          // 其他语句：尝试 prepare + run
+          // @ts-ignore - D1 动态类型
+          const stmt_obj = db.prepare(stmt);
+          // @ts-ignore - D1 动态类型
+          await stmt_obj.run();
+          result.success++;
         }
+      } catch (e: any) {
+        // 单条失败不影响整体
+        result.failed++;
+        const errMsg = (e.message || String(e)).substring(0, 150);
+        result.errors.push(`语句 ${i + 1}: ${errMsg}`);
       }
     } catch (e: any) {
       result.failed++;
       result.errors.push(`语句 ${i + 1}: ${(e.message || e).substring(0, 200)}`);
     }
+  }
+  
+  return result;
+}
+
+/**
+ * 从原站点批量下载文件
+ * @param db D1 数据库
+ * @param stor 目标存储
+ * @param sourceBaseUrl 原站点 URL（如 http://dl.802213.xyz/）
+ * @param taskId 任务 ID
+ */
+export async function restoreFilesFromSource(
+  db: any,
+  stor: IStorage,
+  sourceBaseUrl: string,
+  taskId: string
+): Promise<{ fileCount: number; success: number; failed: number; errors: string[]; totalSize: number }> {
+  const task = restoreTasks.get(taskId);
+  
+  // 标准化 URL
+  let baseUrl = sourceBaseUrl.trim();
+  if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+    baseUrl = 'http://' + baseUrl;
+  }
+  baseUrl = baseUrl.replace(/\/+$/, '');
+  
+  // 查询所有文件
+  const { results: files } = await db.prepare('SELECT id, name, hash, size FROM pre_file').all();
+  const fileList = (files as any[]) || [];
+  
+  if (task) {
+    task.stage = 'files';
+    task.total = fileList.length;
+    task.status = 'running';
+    task.message = `开始从 ${baseUrl} 下载 ${fileList.length} 个文件`;
+  }
+  
+  const result: { fileCount: number; success: number; failed: number; errors: string[]; totalSize: number } = {
+    fileCount: fileList.length,
+    success: 0,
+    failed: 0,
+    errors: [],
+    totalSize: 0,
+  };
+  
+  for (let i = 0; i < fileList.length; i++) {
+    if (task && task.status === 'cancelled') break;
+    
+    const file = fileList[i];
+    const downloadUrl = `${baseUrl}/file/${file.hash}`;
+    
+    if (task) {
+      task.processed = i;
+      task.currentItem = file.name;
+      task.message = `正在下载 (${i + 1}/${fileList.length}): ${file.name}`;
+    }
+    
+    const startTime = Date.now();
+    try {
+      // 下载文件
+      const res = await fetch(downloadUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 RestoreBot' }
+      });
+      
+      if (!res.ok) {
+        result.failed++;
+        result.errors.push(`${file.name}: HTTP ${res.status}`);
+        continue;
+      }
+      
+      const data = await res.arrayBuffer();
+      const elapsed = (Date.now() - startTime) / 1000;
+      const speed = data.byteLength / elapsed;
+      
+      // 上传到目标存储
+      const key = `file/${file.hash}`;
+      try {
+        // @ts-ignore
+        const ok = await stor.upload(key, data);
+        if (ok) {
+          result.success++;
+          result.totalSize += data.byteLength;
+          if (task) {
+            task.success = result.success;
+            task.failed = result.failed;
+            task.message = `已下载 ${i + 1}/${fileList.length}: ${file.name} (${formatSize(data.byteLength)} / ${formatSize(speed)}/s)`;
+          }
+        } else {
+          result.failed++;
+          result.errors.push(`${file.name}: 上传到存储失败`);
+        }
+      } catch (e: any) {
+        result.failed++;
+        result.errors.push(`${file.name}: 上传失败 ${(e.message || e).substring(0, 100)}`);
+      }
+    } catch (e: any) {
+      result.failed++;
+      result.errors.push(`${file.name}: ${(e.message || e).substring(0, 100)}`);
+    }
+  }
+  
+  if (task) {
+    task.processed = fileList.length;
+    task.success = result.success;
+    task.failed = result.failed;
+    task.currentItem = '';
+    task.message = `下载完成: 成功 ${result.success}, 失败 ${result.failed}`;
   }
   
   return result;

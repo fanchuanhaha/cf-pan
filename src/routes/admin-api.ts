@@ -14,7 +14,8 @@ import {
   downloadFromUrl, 
   extractZip, 
   restoreDatabaseFromSql, 
-  restoreFilesFromZip 
+  restoreFilesFromZip,
+  restoreFilesFromSource
 } from '../services/restore';
 import type { AppConfig } from '../config';
 
@@ -148,14 +149,48 @@ adminApi.post('/restore/sql', async (c) => {
     const sqlUrl = body['sql_url'] as string | undefined;
     
     if (sqlFile && sqlFile.size > 0) {
-      const text = await sqlFile.text();
-      sqlContent = text;
+      // Cloudflare Workers 请求体限制 100MB
+      if (sqlFile.size > 90 * 1024 * 1024) {
+        return jsonError(c, 'SQL 文件太大（' + (sqlFile.size / 1024 / 1024).toFixed(2) + 'MB），请使用 URL 方式或拆分后上传（最大 90MB）');
+      }
+      try {
+        const text = await sqlFile.text();
+        sqlContent = text;
+      } catch (e: any) {
+        return jsonError(c, '读取文件失败: ' + (e.message || e));
+      }
     } else if (sqlUrl) {
-      // 从 URL 下载
-      const data = await downloadFromUrl(sqlUrl, taskId);
-      sqlContent = new TextDecoder().decode(data);
+      // 从 URL 下载 - 立即返回 taskId，异步执行
+      c.executionCtx.waitUntil((async () => {
+        try {
+          const data = await downloadFromUrl(sqlUrl, taskId);
+          const sqlText = new TextDecoder().decode(data);
+          const result = await restoreDatabaseFromSql(db, sqlText, taskId);
+          const task = getRestoreStatus(taskId);
+          if (task) {
+            task.status = 'completed';
+            task.stage = 'done';
+            task.message = '数据库恢复完成';
+          }
+        } catch (e: any) {
+          const task = getRestoreStatus(taskId);
+          if (task) {
+            task.status = 'failed';
+            task.errors.push('下载/恢复失败: ' + (e.message || e));
+          }
+        }
+      })());
+      return jsonResult(c, {
+        code: 0,
+        msg: '任务已启动，请轮询 /admin/api/restore/status?taskId=' + taskId,
+        data: { taskId }
+      });
     } else {
       return jsonError(c, '请提供 SQL 文件或 URL');
+    }
+    
+    if (!sqlContent || sqlContent.trim().length === 0) {
+      return jsonError(c, 'SQL 文件内容为空');
     }
     
     // 执行恢复
@@ -167,6 +202,7 @@ adminApi.post('/restore/sql', async (c) => {
       data: { taskId, ...result },
     });
   } catch (e: any) {
+    console.error('SQL restore error:', e);
     return jsonError(c, '恢复失败: ' + (e.message || e));
   }
 });
@@ -186,10 +222,37 @@ adminApi.post('/restore/files', async (c) => {
     const zipUrl = body['zip_url'] as string | undefined;
     
     if (zipFile && zipFile.size > 0) {
+      // Cloudflare Workers 请求体限制 100MB
+      if (zipFile.size > 90 * 1024 * 1024) {
+        return jsonError(c, 'ZIP 文件太大（' + (zipFile.size / 1024 / 1024).toFixed(2) + 'MB），请使用 URL 方式（最大 90MB）');
+      }
       zipData = await zipFile.arrayBuffer();
     } else if (zipUrl) {
-      // 从 URL 下载
-      zipData = await downloadFromUrl(zipUrl, taskId);
+      // URL 异步下载，立即返回 taskId
+      c.executionCtx.waitUntil((async () => {
+        try {
+          const data = await downloadFromUrl(zipUrl, taskId);
+          const files = await extractZip(data, taskId);
+          const result = await restoreFilesFromZip(stor, files, taskId);
+          const task = getRestoreStatus(taskId);
+          if (task) {
+            task.status = 'completed';
+            task.stage = 'done';
+            task.message = '文件恢复完成';
+          }
+        } catch (e: any) {
+          const task = getRestoreStatus(taskId);
+          if (task) {
+            task.status = 'failed';
+            task.errors.push('下载/恢复失败: ' + (e.message || e));
+          }
+        }
+      })());
+      return jsonResult(c, {
+        code: 0,
+        msg: '任务已启动，请轮询 /admin/api/restore/status?taskId=' + taskId,
+        data: { taskId }
+      });
     } else {
       return jsonError(c, '请提供 ZIP 文件或 URL');
     }
@@ -206,7 +269,52 @@ adminApi.post('/restore/files', async (c) => {
       data: { taskId, fileCount: files.length, ...result },
     });
   } catch (e: any) {
+    console.error('Files restore error:', e);
     return jsonError(c, '恢复失败: ' + (e.message || e));
+  }
+});
+
+/** 步骤2（新版）：输入原站点 URL，从原站点批量下载文件到当前存储 */
+adminApi.post('/restore/files-from-source', async (c) => {
+  const db = getDB(c);
+  const stor = getStorOrThrow(c);
+  const taskId = 'rst_src_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  createRestoreTask(taskId);
+  
+  try {
+    const body = await c.req.parseBody() as Record<string, string>;
+    const sourceUrl = (body['source_url'] || '').trim();
+    
+    if (!sourceUrl) {
+      return jsonError(c, '请提供原站点 URL');
+    }
+    
+    // 异步执行批量下载
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const result = await restoreFilesFromSource(db, stor, sourceUrl, taskId);
+        const task = getRestoreStatus(taskId);
+        if (task) {
+          task.status = 'completed';
+          task.stage = 'done';
+        }
+      } catch (e: any) {
+        const task = getRestoreStatus(taskId);
+        if (task) {
+          task.status = 'failed';
+          task.errors.push('批量下载失败: ' + (e.message || e));
+        }
+      }
+    })());
+    
+    return jsonResult(c, {
+      code: 0,
+      msg: '任务已启动，请轮询 /admin/api/restore/status?taskId=' + taskId,
+      data: { taskId }
+    });
+  } catch (e: any) {
+    console.error('Restore from source error:', e);
+    return jsonError(c, '启动失败: ' + (e.message || e));
   }
 });
 
