@@ -37,10 +37,10 @@ export class QiniuStorage implements IStorage {
     this.cfg = config;
   }
 
-  /** 把 hash 映射到存储 key */
+  /** 把 hash 映射到存储 key（与原 PHP lib/Storage/Qiniu.php 的 $this->filepath.$name 一致） */
   private hashToKey(hash: string): string {
     const folder = (this.cfg.folder || DEFAULT_FOLDER).replace(/\/+$/, '');
-    return `${folder}/${hash.substring(0, 2)}/${hash.substring(2, 4)}/${hash}`;
+    return `${folder}/${hash}`;
   }
 
   /** URL 安全的 Base64（Base64URL） */
@@ -133,8 +133,13 @@ export class QiniuStorage implements IStorage {
 
   /**
    * 管理 API V2 签名（与 PHP Auth::signQiniuAuthorization + authorizationV2 完全一致）
-   * 签名字符串：<Method> <Path>\nHost: <Host>\nContent-Type: <CT>\nX-Qiniu-Date: <Date>\n\n<Body>
-   * 输出 Header: { 'Authorization': 'Qiniu <token>', 'Content-Type', 'X-Qiniu-Date' }
+   * 签名字符串：
+   *   <Method> <Path>
+   *   Host: <Host>
+   *   Content-Type: <CT>
+   *   X-Qiniu-Date: <Date>
+   *
+   *   <Body>  (空 body 时整段为空)
    */
   private async makeV2AuthHeaders(
     method: 'GET' | 'POST',
@@ -143,15 +148,14 @@ export class QiniuStorage implements IStorage {
     body: string
   ): Promise<Record<string, string>> {
     const signDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[-:]/g, '').replace(/(\d{2})(\d{2})$/, '$1:$2');
-    // 上面的 replace 顺序：把 ISO "2025-01-01T00:00:00.000Z" 转成 "20250101T000000Z"
+    // ISO 转换：2025-06-27T13:00:00.000Z → 20250627T130000Z (与 PHP gmdate('Ymd\THis\Z') 一致)
 
-    const dataToSign =
-      `${method} ${path}\n` +
-      `Host: ${host}\n` +
-      `Content-Type: ${MANAGEMENT_CONTENT_TYPE}\n` +
-      `X-Qiniu-Date: ${signDate}\n` +
-      `\n` +
-      body;
+    let dataToSign = `${method} ${path}\nHost: ${host}\nContent-Type: ${MANAGEMENT_CONTENT_TYPE}\nX-Qiniu-Date: ${signDate}\n\n`;
+    // PHP: 仅当 Content-Type != "application/octet-stream" 且 body 非空 时附加 body
+    if (body && body.length > 0) {
+      dataToSign += body;
+    }
+
     const sig = await this.hmacSha1Raw(this.cfg.secretKey, dataToSign);
     const signToken = this.cfg.accessKey + ':' + this.toBase64Url(sig);
 
@@ -243,13 +247,15 @@ export class QiniuStorage implements IStorage {
 
     // 优先用 cdnUpHosts，失败再回退到 srcUpHosts（与 PHP getUpHost 行为一致）
     const hosts = [...region.cdnUpHosts, ...region.srcUpHosts];
-    let lastErr = '';
+    const errors: string[] = [];
     for (const host of hosts) {
-      const res = await fetch(`https://${host}/`, { method: 'POST', body: formData });
+      // Cloudflare Worker 部署的 Worker 必须用 https 访问七牛云（Workers 不支持 http:// 出去）
+      const url = `https://${host}/`;
+      const res = await fetch(url, { method: 'POST', body: formData });
       if (res.ok) return true;
-      lastErr = `host=${host} status=${res.status} body=${(await res.text()).substring(0, 200)}`;
+      errors.push(`https://${host} status=${res.status} body=${(await res.text()).substring(0, 300)}`);
     }
-    throw new Error(`七牛云上传失败：${lastErr || '无可用上传 host'}`);
+    throw new Error(`七牛云上传失败（${errors.length} 个 host 均失败）: ${errors.join(' | ')}`);
   }
 
   async savefile(name: string, tmpfile: string, contentType?: string): Promise<boolean> {

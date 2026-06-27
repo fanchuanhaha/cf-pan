@@ -780,28 +780,37 @@ install.post('/test', async (c) => {
         accessKey: ak, secretKey: sk, bucket, folder,
       });
 
-      // 查询 region + 上传测试
+      // 第一步：先查 region（验证 AK + Bucket 匹配）
+      const region = await (storage as any).queryRegion();
+
+      // 第二步：上传测试文件
       const testHash = 'test' + Date.now();
       const testContent = '彩虹外链网盘存储测试';
       const encoder = new TextEncoder();
       const testData = encoder.encode(testContent);
 
-      const uploadOk = await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
-      if (!uploadOk) {
-        return jsonError(c, '七牛云测试失败：上传未成功。请检查 AK/SK 是否有该 Bucket 的写权限');
+      try {
+        await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
+      } catch (e: any) {
+        return jsonError(c, '七牛云测试失败：' + (e.message || e) + '\n提示：检查 AK/SK 是否有该 Bucket 的写权限，Bucket 名称是否正确');
       }
 
-      // 删除测试文件
-      await storage.delete(testHash);
+      // 第三步：删除测试文件
+      try {
+        await storage.delete(testHash);
+      } catch (e: any) {
+        // 删除失败不算致命错误
+        console.warn('Delete test file failed:', e.message);
+      }
 
-      return jsonResult(c, { ok: true, message: '七牛云连接成功！读写测试通过' });
+      return jsonResult(c, { ok: true, message: `七牛云连接成功！区域: ${region.iovipHost}` });
     } catch (e: any) {
       let msg = e.message || '未知错误';
       if (msg.includes('no such bucket') || msg.includes('612')) {
         msg = 'Bucket 不存在，请检查存储空间名称';
-      } else if (msg.includes('401') || msg.includes('bad token')) {
+      } else if (msg.includes('401') || msg.toLowerCase().includes('bad token') || msg.toLowerCase().includes('incorrect')) {
         msg = 'AK/SK 无效或已过期';
-      } else if (msg.includes('403') || msg.includes('no perm')) {
+      } else if (msg.includes('403') || msg.toLowerCase().includes('no perm')) {
         msg = '权限不足：AK 需要对该 Bucket 有读写权限';
       }
       return jsonError(c, '七牛云测试失败: ' + msg);
