@@ -84,7 +84,6 @@ export interface AppConfig {
   qiniu_ak: string;
   qiniu_sk: string;
   qiniu_bucket: string;
-  qiniu_region: string;
   qiniu_domain: string;
   qiniu_folder: string;
   // 安装标识
@@ -162,7 +161,6 @@ const defaults: AppConfig = {
   qiniu_ak: '',
   qiniu_sk: '',
   qiniu_bucket: '',
-  qiniu_region: 'z0',
   qiniu_domain: '',
   qiniu_folder: 'file',
   installed: 0,

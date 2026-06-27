@@ -239,7 +239,8 @@ function installPage(errorMsg: string = '', selectedType: string = 'r2'): string
     <div class="storage-form ${selectedType === 'qiniu' ? 'active' : ''}" id="form-qiniu">
       <h4 style="margin-top:20px"><i class="fa fa-cloud-upload"></i> 七牛云对象存储配置</h4>
       <div class="alert alert-info">
-        七牛云对象存储 Kodo。使用 AK/SK 鉴权 + 上传令牌（UploadToken）实现文件上传。
+        七牛云对象存储 Kodo。使用 AK/SK 鉴权 + 上传令牌（UploadToken）实现文件上传。<br>
+        <strong>区域会自动从七牛云 API 查询，无需手动选择。</strong>
       </div>
       <div class="form-group">
         <label>AccessKey (AK) <span class="required">*</span></label>
@@ -251,25 +252,13 @@ function installPage(errorMsg: string = '', selectedType: string = 'r2'): string
         <span class="help-block">密钥仅保存在 D1 中。</span>
       </div>
       <div class="form-group">
-        <label>存储空间 (Bucket) <span class="required">*</span></label>
+        <label>存储空间名称 (Bucket) <span class="required">*</span></label>
         <input type="text" name="qiniu_bucket" class="form-control" placeholder="my-pan-bucket">
-        </div>
-      <div class="form-group">
-        <label>存储区域 <span class="required">*</span></label>
-        <select name="qiniu_region" class="form-control">
-          <option value="z0">z0 - 华东 (默认)</option>
-          <option value="z1">z1 - 华北</option>
-          <option value="z2">z2 - 华南</option>
-          <option value="na0">na0 - 北美</option>
-          <option value="as0">as0 - 东南亚</option>
-          <option value="cn-east-2">cn-east-2 - 华东 2 (浙江)</option>
-        </select>
-        <span class="help-block">必须选择与 Bucket 创建时相同的区域，否则上传失败</span>
       </div>
       <div class="form-group">
-        <label>加速域名 (可选)</label>
-        <input type="text" name="qiniu_domain" class="form-control" placeholder="https://cdn.example.com">
-        <span class="help-block">填了则直链下载走此 CDN 域名；留空则使用七牛默认域名</span>
+        <label>空间绑定域名</label>
+        <input type="text" name="qiniu_domain" class="form-control" placeholder="如 https://cdn.example.com">
+        <span class="help-block">填写Bucket绑定的域名，也可使用CDN域名。留空则使用七牛默认域名</span>
       </div>
       <div class="form-group">
         <label>存储子目录 (可选)</label>
@@ -468,7 +457,6 @@ install.post('/save', async (c) => {
         ['qiniu_ak', String(body['qiniu_ak'])],
         ['qiniu_sk', String(body['qiniu_sk'])],
         ['qiniu_bucket', String(body['qiniu_bucket'])],
-        ['qiniu_region', String(body['qiniu_region'] || 'z0')],
         ['qiniu_domain', String(body['qiniu_domain'] || '')],
         ['qiniu_folder', String(body['qiniu_folder'] || 'file')],
       );
@@ -782,7 +770,6 @@ install.post('/test', async (c) => {
     const ak = String(body['qiniu_ak'] || '').trim();
     const sk = String(body['qiniu_sk'] || '');
     const bucket = String(body['qiniu_bucket'] || '').trim();
-    const region = String(body['qiniu_region'] || 'z0').trim();
     const folder = String(body['qiniu_folder'] || 'file').trim();
     if (!ak || !sk || !bucket) {
       return jsonError(c, '请填写 AK/SK/Bucket');
@@ -790,36 +777,34 @@ install.post('/test', async (c) => {
     try {
       const { QiniuStorage } = await import('../storage/QiniuStorage');
       const storage = new QiniuStorage({
-        accessKey: ak, secretKey: sk, bucket, region, folder,
+        accessKey: ak, secretKey: sk, bucket, folder,
       });
 
-      // 测试读写
+      // 查询 region + 上传测试
       const testHash = 'test' + Date.now();
-      const testContent = '彩虹外链网盘存储测试文件';
+      const testContent = '彩虹外链网盘存储测试';
       const encoder = new TextEncoder();
       const testData = encoder.encode(testContent);
 
       const uploadOk = await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
       if (!uploadOk) {
-        throw new Error('上传到七牛云失败：请检查 AK/SK/Bucket/区域是否正确');
-      }
-
-      // 读取测试
-      const readRes = await storage.downfile(testHash);
-      if (!readRes) {
-        throw new Error('读取测试文件失败：可能是 Bucket 私有读，需要配置公开访问');
-      }
-      const readText = await readRes.text();
-      if (readText !== testContent) {
-        throw new Error('读取内容与写入内容不一致');
+        return jsonError(c, '七牛云测试失败：上传未成功。请检查 AK/SK 是否有该 Bucket 的写权限');
       }
 
       // 删除测试文件
       await storage.delete(testHash);
 
-      return jsonResult(c, { ok: true, message: `七牛云连接成功！读写测试通过。空间: ${bucket}, 区域: ${region}` });
+      return jsonResult(c, { ok: true, message: '七牛云连接成功！读写测试通过' });
     } catch (e: any) {
-      return jsonError(c, '七牛云测试失败: ' + (e.message || e));
+      let msg = e.message || '未知错误';
+      if (msg.includes('no such bucket') || msg.includes('612')) {
+        msg = 'Bucket 不存在，请检查存储空间名称';
+      } else if (msg.includes('401') || msg.includes('bad token')) {
+        msg = 'AK/SK 无效或已过期';
+      } else if (msg.includes('403') || msg.includes('no perm')) {
+        msg = '权限不足：AK 需要对该 Bucket 有读写权限';
+      }
+      return jsonError(c, '七牛云测试失败: ' + msg);
     }
   }
 

@@ -1,6 +1,6 @@
 // 彩虹外链网盘 - 七牛云对象存储实现
-// 七牛云 SDK 签名算法：https://developer.qiniu.com/kodo/manual/1201/access-token
-// 区域：z0(华东) z1(华北) z2(华南) na0(北美) as0(东南亚)
+// 参考原 PHP 项目的七牛 SDK：上传走 UploadToken，管理 API 走 /v2/query 自动发现 region
+// 查询接口：https://api.qiniu.com/v2/query?ak=<ak>&bucket=<bucket>
 
 import type { IStorage } from './IStorage';
 
@@ -8,47 +8,42 @@ interface QiniuConfig {
   accessKey: string;     // AK
   secretKey: string;     // SK
   bucket: string;        // 存储空间名
-  region?: string;       // 区域代码 默认 z0
-  domain?: string;       // 加速域名（用于直链）
+  domain?: string;       // 加速域名（用于直链下载）
   folder?: string;       // 默认文件夹（默认 file）
 }
 
-const REGION_HOSTS: Record<string, string> = {
-  'z0': 'up.qiniup.com',         // 华东
-  'z1': 'up-z1.qiniup.com',      // 华北
-  'z2': 'up-z2.qiniup.com',      // 华南
-  'na0': 'up-na0.qiniup.com',    // 北美
-  'as0': 'up-as0.qiniup.com',    // 东南亚
-  'cn-east-2': 'up-cn-east-2.qiniup.com',
-};
+interface QiniuRegion {
+  srcUpHosts: string[];   // 源站上传域名
+  cdnUpHosts: string[];   // CDN 加速上传域名
+  rsHost: string;         // 资源管理域名
+  rsfHost: string;        // 资源列举域名
+  apiHost: string;        // 资源处理域名
+  iovipHost: string;      // 资源下载域名
+}
 
-const REGION_DOMAINS: Record<string, string> = {
-  'z0': 'iovip.qbox.me',
-  'z1': 'iovip-z1.qbox.me',
-  'z2': 'iovip-z2.qbox.me',
-  'na0': 'iovip-na0.qbox.me',
-  'as0': 'iovip-as0.qbox.me',
-};
+const DEFAULT_FOLDER = 'file';
+const UC_QUERY_URL = 'https://api.qiniu.com/v2/query';
 
 export class QiniuStorage implements IStorage {
   private cfg: QiniuConfig;
-  private uploadHost: string;
+  private region: QiniuRegion | null = null;
 
   constructor(config: QiniuConfig) {
     this.cfg = config;
-    const region = config.region || 'z0';
-    this.uploadHost = REGION_HOSTS[region] || REGION_HOSTS['z0'];
   }
 
-  /** 把 hash 映射到存储路径 */
+  /** 把 hash 映射到存储 key */
   private hashToKey(hash: string): string {
-    const folder = (this.cfg.folder || 'file').replace(/\/+$/, '');
+    const folder = (this.cfg.folder || DEFAULT_FOLDER).replace(/\/+$/, '');
     return `${folder}/${hash.substring(0, 2)}/${hash.substring(2, 4)}/${hash}`;
   }
 
-  /** URL 安全的 Base64 编码 */
+  /** URL 安全的 Base64 编码（去掉 =, +, / 替换为 -_） */
   private base64UrlEncode(str: string): string {
-    return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return btoa(unescape(encodeURIComponent(str)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
   }
 
   /** HMAC-SHA1 签名 */
@@ -60,29 +55,68 @@ export class QiniuStorage implements IStorage {
       false, ['sign']
     );
     const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
-    const bytes = new Uint8Array(sig);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    return btoa(String.fromCharCode(...new Uint8Array(sig)));
+  }
+
+  /** 调用 uc 接口自动查询 region（与原 PHP SDK 一致） */
+  private async queryRegion(): Promise<QiniuRegion> {
+    const url = `${UC_QUERY_URL}?ak=${encodeURIComponent(this.cfg.accessKey)}&bucket=${encodeURIComponent(this.cfg.bucket)}`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'pan-worker-qiniu' } });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`查询七牛云 region 失败 (${res.status}): ${text.substring(0, 200)}`);
     }
-    return btoa(binary);
+    const r: any = await res.json();
+    if (!r.io || !r.up) {
+      throw new Error('七牛云返回的 region 数据格式不正确');
+    }
+
+    const iovipHost: string = r.io.src.main[0];
+    const srcUpHosts: string[] = [r.up.src.main[0]];
+    if (Array.isArray(r.up.src.backup)) srcUpHosts.push(...r.up.src.backup);
+    const cdnUpHosts: string[] = [r.up.acc.main[0]];
+    if (Array.isArray(r.up.acc.backup)) cdnUpHosts.push(...r.up.acc.backup);
+
+    // 根据 iovipHost 判断其他 host（与 PHP Region.php 规则一致）
+    let rsHost = 'rs.qbox.me';
+    let rsfHost = 'rsf.qbox.me';
+    let apiHost = 'api.qiniu.com';
+    if (iovipHost.includes('z1')) {
+      rsHost = 'rs-z1.qbox.me';
+      rsfHost = 'rsf-z1.qbox.me';
+      apiHost = 'api-z1.qiniu.com';
+    } else if (iovipHost.includes('z2')) {
+      rsHost = 'rs-z2.qbox.me';
+      rsfHost = 'rsf-z2.qbox.me';
+      apiHost = 'api-z2.qiniu.com';
+    } else if (iovipHost.includes('cn-east-2')) {
+      rsHost = 'rs-cn-east-2.qiniuapi.com';
+      rsfHost = 'rsf-cn-east-2.qiniuapi.com';
+      apiHost = 'api-cn-east-2.qiniuapi.com';
+    } else if (iovipHost.includes('na0')) {
+      rsHost = 'rs-na0.qbox.me';
+      rsfHost = 'rsf-na0.qbox.me';
+      apiHost = 'api-na0.qiniu.com';
+    } else if (iovipHost.includes('as0')) {
+      rsHost = 'rs-as0.qbox.me';
+      rsfHost = 'rsf-as0.qbox.me';
+      apiHost = 'api-as0.qiniu.com';
+    }
+
+    return { srcUpHosts, cdnUpHosts, rsHost, rsfHost, apiHost, iovipHost };
   }
 
-  /** 生成管理凭证（用于删除、查询） */
-  private async makeManageToken(targetUrl: string, method: string = 'POST', body: string = ''): Promise<string> {
-    const path = targetUrl.replace(/^https?:\/\/[^/]+/, '');
-    const data = method + ' ' + path + '\nHost: ' + (REGION_DOMAINS[this.cfg.region || 'z0']) + '\n\n' + body;
-    const encoded = this.base64UrlEncode(data);
-    const sign = await this.hmacSha1(this.cfg.secretKey, encoded);
-    const encodedSign = sign.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    return this.cfg.accessKey + ':' + encodedSign;
+  /** 确保 region 已加载 */
+  private async ensureRegion(): Promise<QiniuRegion> {
+    if (!this.region) this.region = await this.queryRegion();
+    return this.region;
   }
 
-  /** 生成上传凭证 */
+  /** 生成上传凭证（UploadToken） */
   private async makeUploadToken(): Promise<string> {
     const putPolicy = {
       scope: this.cfg.bucket,
-      deadline: Math.floor(Date.now() / 1000) + 3600, // 1小时有效
+      deadline: Math.floor(Date.now() / 1000) + 3600,
     };
     const encoded = this.base64UrlEncode(JSON.stringify(putPolicy));
     const sign = await this.hmacSha1(this.cfg.secretKey, encoded);
@@ -90,41 +124,31 @@ export class QiniuStorage implements IStorage {
     return this.cfg.accessKey + ':' + encodedSign + ':' + encoded;
   }
 
-  /** 简单 GET 公共资源（无需签名） */
-  async downfile(name: string, range?: [number, number]): Promise<Response | null> {
-    const key = this.hashToKey(name);
-    let urlBase: string;
-    if (this.cfg.domain) {
-      urlBase = this.cfg.domain.replace(/\/$/, '');
-    } else {
-      const region = this.cfg.region || 'z0';
-      urlBase = `http://${REGION_DOMAINS[region] || REGION_DOMAINS['z0']}`;
-    }
-    const url = `${urlBase}/${key}`;
-    const headers: Record<string, string> = {};
-    if (range) {
-      headers['Range'] = `bytes=${range[0]}-${range[1]}`;
-    }
-    const res = await fetch(url, { headers });
-    if (!res.ok) return null;
-    return res;
+  /** 生成管理 API 凭证（QBox token） */
+  private async makeManageToken(urlPathWithQuery: string, body: string = ''): Promise<string> {
+    const urlObj = new URL(urlPathWithQuery, 'http://x');
+    const path = urlObj.pathname + urlObj.search;
+    // 管理 API 签名规则：<Method> <Path>\nHost: <Host>\n\n<Body>
+    const region = await this.ensureRegion();
+    const data = `POST ${path}\nHost: ${region.rsHost}\n\n${body}`;
+    const encoded = this.base64UrlEncode(data);
+    const sign = await this.hmacSha1(this.cfg.secretKey, encoded);
+    const encodedSign = sign.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return this.cfg.accessKey + ':' + encodedSign;
   }
 
   async exists(name: string): Promise<boolean> {
     const key = this.hashToKey(name);
-    // 使用资源管理 API 查询
-    const entryUrl = `http://${REGION_DOMAINS[this.cfg.region || 'z0']}/rs-batch/`;
-    const body = JSON.stringify({ op: 'stat', entries: [encodeURIComponent(key)] });
-    const token = await this.makeManageToken(entryUrl, 'POST', body);
-    const res = await fetch(entryUrl, {
+    const region = await this.ensureRegion();
+    const path = `/stat/${encodeURIComponent(this.cfg.bucket)}/${encodeURIComponent(key)}`;
+    const token = await this.makeManageToken(`http://${region.rsHost}${path}`);
+    const res = await fetch(`http://${region.rsHost}${path}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'QBox ' + token,
-      },
-      body,
+      headers: { 'Authorization': 'QBox ' + token },
     });
-    return res.ok;
+    if (!res.ok) return false;
+    const data: any = await res.json();
+    return data.code === 200;
   }
 
   async get(name: string): Promise<R2ObjectBody | null> {
@@ -144,6 +168,21 @@ export class QiniuStorage implements IStorage {
     } as unknown as R2ObjectBody;
   }
 
+  async downfile(name: string, range?: [number, number]): Promise<Response | null> {
+    const key = this.hashToKey(name);
+    const urlBase = this.cfg.domain
+      ? this.cfg.domain.replace(/\/$/, '')
+      : `http://${(await this.ensureRegion()).iovipHost}`;
+    const url = `${urlBase}/${key}`;
+    const headers: Record<string, string> = {};
+    if (range) {
+      headers['Range'] = `bytes=${range[0]}-${range[1]}`;
+    }
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    return res;
+  }
+
   async upload(name: string, body: ArrayBuffer | ReadableStream, contentType?: string): Promise<boolean> {
     const key = this.hashToKey(name);
     let buf: ArrayBuffer;
@@ -152,18 +191,25 @@ export class QiniuStorage implements IStorage {
     } else {
       buf = await new Response(body as ReadableStream).arrayBuffer();
     }
-    
+
+    const region = await this.ensureRegion();
     const token = await this.makeUploadToken();
+    // 与 PHP FormUploader 一致：使用 multipart/form-data，字段顺序为 file, key, token
     const formData = new FormData();
-    formData.append('token', token);
+    formData.append('file', new Blob([buf], { type: contentType || 'application/octet-stream' }), name);
     formData.append('key', key);
-    formData.append('file', new Blob([buf], { type: contentType || 'application/octet-stream' }));
-    
-    const res = await fetch(`https://${this.uploadHost}/`, {
-      method: 'POST',
-      body: formData,
-    });
-    return res.ok;
+    formData.append('token', token);
+
+    // 优先用 cdnUpHosts（加速上传），失败再回退到 srcUpHosts
+    const hosts = [...region.cdnUpHosts, ...region.srcUpHosts];
+    for (const host of hosts) {
+      const res = await fetch(`https://${host}/`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (res.ok) return true;
+    }
+    return false;
   }
 
   async savefile(name: string, tmpfile: string, contentType?: string): Promise<boolean> {
@@ -172,41 +218,30 @@ export class QiniuStorage implements IStorage {
 
   async getinfo(name: string): Promise<{ length: number; content_type: string } | null> {
     const key = this.hashToKey(name);
-    const region = this.cfg.region || 'z0';
-    const host = REGION_DOMAINS[region] || REGION_DOMAINS['z0'];
-    const url = `http://${host}/rs-batch/`;
-    const body = JSON.stringify({ op: 'stat', entries: [encodeURIComponent(key)] });
-    const token = await this.makeManageToken(url, 'POST', body);
-    const res = await fetch(url, {
+    const region = await this.ensureRegion();
+    const path = `/stat/${encodeURIComponent(this.cfg.bucket)}/${encodeURIComponent(key)}`;
+    const token = await this.makeManageToken(`http://${region.rsHost}${path}`);
+    const res = await fetch(`http://${region.rsHost}${path}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'QBox ' + token,
-      },
-      body,
+      headers: { 'Authorization': 'QBox ' + token },
     });
     if (!res.ok) return null;
     const data: any = await res.json();
-    const entry = data.entries?.[0];
-    if (entry?.code !== 200) return null;
+    if (data.code !== 200) return null;
     return {
-      length: entry.data?.fsize || 0,
-      content_type: 'application/octet-stream',
+      length: data.data?.fsize || 0,
+      content_type: data.data?.mimeType || 'application/octet-stream',
     };
   }
 
   async delete(name: string): Promise<boolean> {
     const key = this.hashToKey(name);
-    const region = this.cfg.region || 'z0';
-    const host = REGION_DOMAINS[region] || REGION_DOMAINS['z0'];
-    const path = `/delete/${this.cfg.bucket}/${encodeURIComponent(key)}`;
-    const url = `http://${host}${path}`;
-    const token = await this.makeManageToken(url, 'POST', '');
-    const res = await fetch(url, {
+    const region = await this.ensureRegion();
+    const path = `/delete/${encodeURIComponent(this.cfg.bucket)}/${encodeURIComponent(key)}`;
+    const token = await this.makeManageToken(`http://${region.rsHost}${path}`);
+    const res = await fetch(`http://${region.rsHost}${path}`, {
       method: 'POST',
-      headers: {
-        'Authorization': 'QBox ' + token,
-      },
+      headers: { 'Authorization': 'QBox ' + token },
     });
     return res.ok;
   }
@@ -216,43 +251,44 @@ export class QiniuStorage implements IStorage {
     if (this.cfg.domain) {
       return `${this.cfg.domain.replace(/\/$/, '')}/${key}`;
     }
-    const region = this.cfg.region || 'z0';
-    const host = REGION_DOMAINS[region] || REGION_DOMAINS['z0'];
-    return `http://${host}/${key}`;
+    try {
+      const region = await this.ensureRegion();
+      return `http://${region.iovipHost}/${key}`;
+    } catch {
+      return null;
+    }
   }
 
-  /** 验证配置 */
+  /** 验证配置（与 PHP 一致：实际上传+读取+删除） */
   static async testConnection(config: QiniuConfig): Promise<{ ok: boolean; message: string }> {
     try {
       if (!config.accessKey || !config.secretKey || !config.bucket) {
         return { ok: false, message: '缺少 AK/SK/Bucket' };
       }
-      // 测试获取 bucket 信息
-      const region = config.region || 'z0';
-      const host = REGION_DOMAINS[region] || REGION_DOMAINS['z0'];
-      const path = `/rs-batch/`;
-      const body = JSON.stringify({ op: 'list', bucket: config.bucket, max: 1 });
-      const putPolicy = { scope: config.bucket, deadline: Math.floor(Date.now() / 1000) + 60 };
-      // 简单测试：尝试用上传凭证上传一个测试文件
       const driver = new QiniuStorage(config);
-      const token = await driver.makeUploadToken();
-      const formData = new FormData();
-      formData.append('token', token);
-      formData.append('key', '__test_' + Date.now());
-      formData.append('file', new Blob(['ok'], { type: 'text/plain' }));
-      const res = await fetch(`https://${driver.uploadHost}/`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (res.ok) {
-        // 清理测试文件
-        const delToken = await driver.makeManageToken(`http://${host}/delete/${config.bucket}/__test_${Date.now() - 1000}`);
-        return { ok: true, message: '七牛云存储配置有效' };
+      // 查询 region（同时验证 AK 和 Bucket）
+      const region = await driver.queryRegion();
+      // 上传测试
+      const testHash = 'test' + Date.now();
+      const testContent = '彩虹外链网盘存储测试';
+      const testBytes = new TextEncoder().encode(testContent);
+      const uploaded = await driver.upload(testHash, testBytes.buffer as ArrayBuffer, 'text/plain');
+      if (!uploaded) {
+        return { ok: false, message: '上传到七牛云失败：可能是 Bucket 私有写、AK/SK 无权限或域名问题' };
       }
-      const text = await res.text();
-      return { ok: false, message: `上传测试失败 (${res.status}): ${text.substring(0, 200)}` };
+      // 删除测试文件
+      await driver.delete(testHash);
+      return { ok: true, message: `七牛云连接成功！区域: ${region.iovipHost}` };
     } catch (e: any) {
-      return { ok: false, message: e.message || '未知错误' };
+      let msg = e.message || '未知错误';
+      if (msg.includes('612') || msg.includes('no such bucket')) {
+        msg = 'Bucket 不存在，请检查存储空间名称';
+      } else if (msg.includes('401')) {
+        msg = 'AK/SK 无效或已过期';
+      } else if (msg.includes('403')) {
+        msg = '权限不足：AK 需对该 Bucket 有读写权限';
+      }
+      return { ok: false, message: '七牛云测试失败: ' + msg };
     }
   }
 }

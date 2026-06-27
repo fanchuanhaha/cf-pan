@@ -1326,24 +1326,11 @@ function saveSetting(obj){
       <div class="col-sm-9"><input type="password" name="qiniu_sk" value="${config.qiniu_sk}" class="form-control"/></div>
     </div><br/>
     <div class="form-group">
-      <label class="col-sm-3 control-label">存储空间 (Bucket)</label>
+      <label class="col-sm-3 control-label">存储空间名称 (Bucket)</label>
       <div class="col-sm-9"><input type="text" name="qiniu_bucket" value="${config.qiniu_bucket}" class="form-control"/></div>
     </div><br/>
     <div class="form-group">
-      <label class="col-sm-3 control-label">存储区域</label>
-      <div class="col-sm-9">
-        <select class="form-control" name="qiniu_region" default="${config.qiniu_region}">
-          <option value="z0"${config.qiniu_region === 'z0' ? ' selected' : ''}>z0 - 华东</option>
-          <option value="z1"${config.qiniu_region === 'z1' ? ' selected' : ''}>z1 - 华北</option>
-          <option value="z2"${config.qiniu_region === 'z2' ? ' selected' : ''}>z2 - 华南</option>
-          <option value="na0"${config.qiniu_region === 'na0' ? ' selected' : ''}>na0 - 北美</option>
-          <option value="as0"${config.qiniu_region === 'as0' ? ' selected' : ''}>as0 - 东南亚</option>
-          <option value="cn-east-2"${config.qiniu_region === 'cn-east-2' ? ' selected' : ''}>cn-east-2 - 华东 2</option>
-        </select>
-      </div>
-    </div><br/>
-    <div class="form-group">
-      <label class="col-sm-3 control-label">加速域名</label>
+      <label class="col-sm-3 control-label">空间绑定域名</label>
       <div class="col-sm-9"><input type="text" name="qiniu_domain" value="${config.qiniu_domain}" class="form-control" placeholder="如 https://cdn.example.com"/></div>
     </div><br/>
     <div class="form-group">

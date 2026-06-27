@@ -92,7 +92,6 @@ export function createStorage(config: AppConfig, env?: { FILE_R2?: R2Bucket }): 
         accessKey: config.qiniu_ak,
         secretKey: config.qiniu_sk,
         bucket: config.qiniu_bucket,
-        region: config.qiniu_region || 'z0',
         domain: config.qiniu_domain || undefined,
         folder: config.qiniu_folder || 'file',
       });

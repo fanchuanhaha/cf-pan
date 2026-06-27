@@ -73,7 +73,6 @@ adminApi.post('/migrate/start', async (c) => {
     targetConfig.qiniu_ak = body['qiniu_ak'] || currentConfig.qiniu_ak;
     targetConfig.qiniu_sk = body['qiniu_sk'] || currentConfig.qiniu_sk;
     targetConfig.qiniu_bucket = body['qiniu_bucket'] || currentConfig.qiniu_bucket;
-    targetConfig.qiniu_region = body['qiniu_region'] || currentConfig.qiniu_region;
     targetConfig.qiniu_domain = body['qiniu_domain'] || currentConfig.qiniu_domain;
     targetConfig.qiniu_folder = body['qiniu_folder'] || currentConfig.qiniu_folder;
   }
