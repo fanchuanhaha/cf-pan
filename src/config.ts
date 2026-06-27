@@ -5,7 +5,7 @@ interface D1Result {
   v: string;
 }
 
-export type StorageType = 'r2' | 's3' | 'github' | 'webdav';
+export type StorageType = 'r2' | 's3' | 'github' | 'webdav' | 'upyun' | 'qiniu';
 
 export interface AppConfig {
   title: string;
@@ -73,6 +73,20 @@ export interface AppConfig {
   webdav_user: string;
   webdav_pass: string;
   webdav_folder: string;
+  // 又拍云配置
+  upyun_bucket: string;
+  upyun_operator: string;
+  upyun_password: string;
+  upyun_endpoint: string;
+  upyun_domain: string;
+  upyun_folder: string;
+  // 七牛云配置
+  qiniu_ak: string;
+  qiniu_sk: string;
+  qiniu_bucket: string;
+  qiniu_region: string;
+  qiniu_domain: string;
+  qiniu_folder: string;
   // 安装标识
   installed: number;
 }
@@ -139,6 +153,18 @@ const defaults: AppConfig = {
   webdav_user: '',
   webdav_pass: '',
   webdav_folder: 'file',
+  upyun_bucket: '',
+  upyun_operator: '',
+  upyun_password: '',
+  upyun_endpoint: 'https://v0.api.upyun.com',
+  upyun_domain: '',
+  upyun_folder: 'file',
+  qiniu_ak: '',
+  qiniu_sk: '',
+  qiniu_bucket: '',
+  qiniu_region: 'z0',
+  qiniu_domain: '',
+  qiniu_folder: 'file',
   installed: 0,
 };
 

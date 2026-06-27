@@ -5,6 +5,8 @@ import { R2Storage } from './R2Storage';
 import { S3Storage } from './S3Storage';
 import { GitHubApiStorage } from './GitHubApiStorage';
 import { WebDavStorage } from './WebDavStorage';
+import { UpYunStorage } from './UpYunStorage';
+import { QiniuStorage } from './QiniuStorage';
 import type { AppConfig, StorageType } from '../config';
 
 export type StorageInitResult = {
@@ -67,6 +69,34 @@ export function createStorage(config: AppConfig, env?: { FILE_R2?: R2Bucket }): 
         return null;
       }
 
+    case 'upyun':
+      if (!config.upyun_bucket || !config.upyun_operator || !config.upyun_password) {
+        console.error('UpYun config incomplete (need bucket/operator/password)');
+        return null;
+      }
+      return new UpYunStorage({
+        bucket: config.upyun_bucket,
+        operator: config.upyun_operator,
+        password: config.upyun_password,
+        endpoint: config.upyun_endpoint || undefined,
+        domain: config.upyun_domain || undefined,
+        folder: config.upyun_folder || 'file',
+      });
+
+    case 'qiniu':
+      if (!config.qiniu_ak || !config.qiniu_sk || !config.qiniu_bucket) {
+        console.error('Qiniu config incomplete (need ak/sk/bucket)');
+        return null;
+      }
+      return new QiniuStorage({
+        accessKey: config.qiniu_ak,
+        secretKey: config.qiniu_sk,
+        bucket: config.qiniu_bucket,
+        region: config.qiniu_region || 'z0',
+        domain: config.qiniu_domain || undefined,
+        folder: config.qiniu_folder || 'file',
+      });
+
     default:
       console.error('Unknown storage type:', config.storage);
       return null;
@@ -85,6 +115,10 @@ export function isStorageConfigured(config: AppConfig, env?: { FILE_R2?: R2Bucke
       return !!(config.gh_owner && config.gh_repo && config.gh_token);
     case 'webdav':
       return !!(config.webdav_endpoint && config.webdav_user && config.webdav_pass);
+    case 'upyun':
+      return !!(config.upyun_bucket && config.upyun_operator && config.upyun_password);
+    case 'qiniu':
+      return !!(config.qiniu_ak && config.qiniu_sk && config.qiniu_bucket);
     default:
       return false;
   }

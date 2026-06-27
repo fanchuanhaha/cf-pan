@@ -1124,6 +1124,8 @@ function saveSetting(obj){
         { v: 's3', n: 'S3兼容存储' },
         { v: 'github', n: 'GitHub API' },
         { v: 'webdav', n: 'WebDAV' },
+        { v: 'upyun', n: '又拍云' },
+        { v: 'qiniu', n: '七牛云' },
       ];
       return types.map(t => `<option value="${t.v}"${config.storage === t.v ? ' selected' : ''}>${t.n}</option>`).join('');
     };
@@ -1266,6 +1268,87 @@ function saveSetting(obj){
     <div class="form-group">
       <label class="col-sm-3 control-label">存储目录</label>
       <div class="col-sm-9"><input type="text" name="webdav_folder" value="${config.webdav_folder}" class="form-control" placeholder="如 file"/></div>
+    </div><br/>
+    <div class="form-group">
+      <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">又拍云配置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">服务名 (Bucket)</label>
+      <div class="col-sm-9"><input type="text" name="upyun_bucket" value="${config.upyun_bucket}" class="form-control" placeholder="如 my-pan-storage"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">操作员</label>
+      <div class="col-sm-9"><input type="text" name="upyun_operator" value="${config.upyun_operator}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">密码</label>
+      <div class="col-sm-9"><input type="password" name="upyun_password" value="${config.upyun_password}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">API 端点</label>
+      <div class="col-sm-9"><input type="text" name="upyun_endpoint" value="${config.upyun_endpoint}" class="form-control" placeholder="如 https://v0.api.upyun.com"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">加速域名</label>
+      <div class="col-sm-9"><input type="text" name="upyun_domain" value="${config.upyun_domain}" class="form-control" placeholder="如 https://xxx.b0.upaiyun.com"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">存储目录</label>
+      <div class="col-sm-9"><input type="text" name="upyun_folder" value="${config.upyun_folder}" class="form-control" placeholder="如 file"/></div>
+    </div><br/>
+    <div class="form-group">
+      <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">七牛云配置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">AccessKey (AK)</label>
+      <div class="col-sm-9"><input type="text" name="qiniu_ak" value="${config.qiniu_ak}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">SecretKey (SK)</label>
+      <div class="col-sm-9"><input type="password" name="qiniu_sk" value="${config.qiniu_sk}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">存储空间 (Bucket)</label>
+      <div class="col-sm-9"><input type="text" name="qiniu_bucket" value="${config.qiniu_bucket}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">存储区域</label>
+      <div class="col-sm-9">
+        <select class="form-control" name="qiniu_region" default="${config.qiniu_region}">
+          <option value="z0"${config.qiniu_region === 'z0' ? ' selected' : ''}>z0 - 华东</option>
+          <option value="z1"${config.qiniu_region === 'z1' ? ' selected' : ''}>z1 - 华北</option>
+          <option value="z2"${config.qiniu_region === 'z2' ? ' selected' : ''}>z2 - 华南</option>
+          <option value="na0"${config.qiniu_region === 'na0' ? ' selected' : ''}>na0 - 北美</option>
+          <option value="as0"${config.qiniu_region === 'as0' ? ' selected' : ''}>as0 - 东南亚</option>
+          <option value="cn-east-2"${config.qiniu_region === 'cn-east-2' ? ' selected' : ''}>cn-east-2 - 华东 2</option>
+        </select>
+      </div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">加速域名</label>
+      <div class="col-sm-9"><input type="text" name="qiniu_domain" value="${config.qiniu_domain}" class="form-control" placeholder="如 https://cdn.example.com"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">存储目录</label>
+      <div class="col-sm-9"><input type="text" name="qiniu_folder" value="${config.qiniu_folder}" class="form-control" placeholder="如 file"/></div>
     </div><br/>
     <div class="form-group">
       <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>

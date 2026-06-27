@@ -75,6 +75,12 @@ function installPage(errorMsg: string = '', selectedType: string = 'r2'): string
     <button type="button" class="storage-tab ${selectedType === 'webdav' ? 'active' : ''}" data-target="form-webdav">
       <i class="fa fa-cloud"></i>WebDAV
     </button>
+    <button type="button" class="storage-tab ${selectedType === 'upyun' ? 'active' : ''}" data-target="form-upyun">
+      <i class="fa fa-cloud-upload"></i>又拍云
+    </button>
+    <button type="button" class="storage-tab ${selectedType === 'qiniu' ? 'active' : ''}" data-target="form-qiniu">
+      <i class="fa fa-cloud-upload"></i>七牛云
+    </button>
   </div>
 
   <form id="installForm" method="POST" action="/install/save">
@@ -190,6 +196,84 @@ function installPage(errorMsg: string = '', selectedType: string = 'r2'): string
         <label>存储子目录 (可选)</label>
         <input type="text" name="webdav_folder" class="form-control" value="file" placeholder="留空则使用 file/">
         <span class="help-block">文件会保存到此子目录下（路径分隔用 <code>/</code>）</span>
+      </div>
+    </div>
+
+    <!-- 又拍云 表单 -->
+    <div class="storage-form ${selectedType === 'upyun' ? 'active' : ''}" id="form-upyun">
+      <h4 style="margin-top:20px"><i class="fa fa-cloud-upload"></i> 又拍云存储配置</h4>
+      <div class="alert alert-info">
+        又拍云对象存储。通过 HTTP Basic Auth（操作员 + 密码）调用 REST API。推荐使用 <code>https://v0.api.upyun.com</code>（自动路由）。
+      </div>
+      <div class="form-group">
+        <label>服务名 (Bucket) <span class="required">*</span></label>
+        <input type="text" name="upyun_bucket" class="form-control" placeholder="my-pan-storage">
+        <span class="help-block">即存储服务名，不是显示名</span>
+      </div>
+      <div class="form-group">
+        <label>操作员 (Operator) <span class="required">*</span></label>
+        <input type="text" name="upyun_operator" class="form-control" placeholder="operator">
+      </div>
+      <div class="form-group">
+        <label>操作员密码 <span class="required">*</span></label>
+        <input type="password" name="upyun_password" class="form-control" placeholder="password">
+        <span class="help-block">密码仅保存在 D1 中。如开启 2FA，需用"操作员密码"而非登录密码。</span>
+      </div>
+      <div class="form-group">
+        <label>API 端点 (可选)</label>
+        <input type="text" name="upyun_endpoint" class="form-control" value="https://v0.api.upyun.com">
+        <span class="help-block">默认 <code>https://v0.api.upyun.com</code>。可用 <code>http://v0.file.upyun.com</code> 走内网上传加速。</span>
+      </div>
+      <div class="form-group">
+        <label>加速域名 (可选)</label>
+        <input type="text" name="upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com">
+        <span class="help-block">填了则直链下载走此 CDN 域名；留空则使用 API 域名</span>
+      </div>
+      <div class="form-group">
+        <label>存储子目录 (可选)</label>
+        <input type="text" name="upyun_folder" class="form-control" value="file" placeholder="留空则使用 file/">
+      </div>
+    </div>
+
+    <!-- 七牛云 表单 -->
+    <div class="storage-form ${selectedType === 'qiniu' ? 'active' : ''}" id="form-qiniu">
+      <h4 style="margin-top:20px"><i class="fa fa-cloud-upload"></i> 七牛云对象存储配置</h4>
+      <div class="alert alert-info">
+        七牛云对象存储 Kodo。使用 AK/SK 鉴权 + 上传令牌（UploadToken）实现文件上传。
+      </div>
+      <div class="form-group">
+        <label>AccessKey (AK) <span class="required">*</span></label>
+        <input type="text" name="qiniu_ak" class="form-control" placeholder="AKxxxxxxxxxxxx">
+      </div>
+      <div class="form-group">
+        <label>SecretKey (SK) <span class="required">*</span></label>
+        <input type="password" name="qiniu_sk" class="form-control" placeholder="SKxxxxxxxxxxxx">
+        <span class="help-block">密钥仅保存在 D1 中。</span>
+      </div>
+      <div class="form-group">
+        <label>存储空间 (Bucket) <span class="required">*</span></label>
+        <input type="text" name="qiniu_bucket" class="form-control" placeholder="my-pan-bucket">
+        </div>
+      <div class="form-group">
+        <label>存储区域 <span class="required">*</span></label>
+        <select name="qiniu_region" class="form-control">
+          <option value="z0">z0 - 华东 (默认)</option>
+          <option value="z1">z1 - 华北</option>
+          <option value="z2">z2 - 华南</option>
+          <option value="na0">na0 - 北美</option>
+          <option value="as0">as0 - 东南亚</option>
+          <option value="cn-east-2">cn-east-2 - 华东 2 (浙江)</option>
+        </select>
+        <span class="help-block">必须选择与 Bucket 创建时相同的区域，否则上传失败</span>
+      </div>
+      <div class="form-group">
+        <label>加速域名 (可选)</label>
+        <input type="text" name="qiniu_domain" class="form-control" placeholder="https://cdn.example.com">
+        <span class="help-block">填了则直链下载走此 CDN 域名；留空则使用七牛默认域名</span>
+      </div>
+      <div class="form-group">
+        <label>存储子目录 (可选)</label>
+        <input type="text" name="qiniu_folder" class="form-control" value="file" placeholder="留空则使用 file/">
       </div>
     </div>
 
@@ -318,6 +402,20 @@ install.post('/save', async (c) => {
         return c.html(installPage(`WebDAV 配置缺少: ${f}`, storageType), 400);
       }
     }
+  } else if (storageType === 'upyun') {
+    const required = ['upyun_bucket', 'upyun_operator', 'upyun_password'];
+    for (const f of required) {
+      if (!String(body[f] || '').trim()) {
+        return c.html(installPage(`又拍云配置缺少: ${f}`, storageType), 400);
+      }
+    }
+  } else if (storageType === 'qiniu') {
+    const required = ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'];
+    for (const f of required) {
+      if (!String(body[f] || '').trim()) {
+        return c.html(installPage(`七牛云配置缺少: ${f}`, storageType), 400);
+      }
+    }
   } else {
     return c.html(installPage(`未知的存储类型: ${storageType}`, storageType), 400);
   }
@@ -355,6 +453,24 @@ install.post('/save', async (c) => {
         ['webdav_user', String(body['webdav_user'])],
         ['webdav_pass', String(body['webdav_pass'])],
         ['webdav_folder', String(body['webdav_folder'] || 'file')],
+      );
+    } else if (storageType === 'upyun') {
+      fields.push(
+        ['upyun_bucket', String(body['upyun_bucket'])],
+        ['upyun_operator', String(body['upyun_operator'])],
+        ['upyun_password', String(body['upyun_password'])],
+        ['upyun_endpoint', String(body['upyun_endpoint'] || 'https://v0.api.upyun.com')],
+        ['upyun_domain', String(body['upyun_domain'] || '')],
+        ['upyun_folder', String(body['upyun_folder'] || 'file')],
+      );
+    } else if (storageType === 'qiniu') {
+      fields.push(
+        ['qiniu_ak', String(body['qiniu_ak'])],
+        ['qiniu_sk', String(body['qiniu_sk'])],
+        ['qiniu_bucket', String(body['qiniu_bucket'])],
+        ['qiniu_region', String(body['qiniu_region'] || 'z0')],
+        ['qiniu_domain', String(body['qiniu_domain'] || '')],
+        ['qiniu_folder', String(body['qiniu_folder'] || 'file')],
       );
     }
 
@@ -616,6 +732,94 @@ install.post('/test', async (c) => {
       return jsonResult(c, { ok: true, message: 'WebDAV 连接成功！读写测试通过' });
     } catch (e: any) {
       return jsonError(c, 'WebDAV 测试失败: ' + (e.message || e));
+    }
+  }
+
+  if (storageType === 'upyun') {
+    const bucket = String(body['upyun_bucket'] || '').trim();
+    const operator = String(body['upyun_operator'] || '').trim();
+    const password = String(body['upyun_password'] || '');
+    const endpoint = String(body['upyun_endpoint'] || 'https://v0.api.upyun.com').trim();
+    const folder = String(body['upyun_folder'] || 'file').trim();
+    if (!bucket || !operator || !password) {
+      return jsonError(c, '请填写 bucket/operator/password');
+    }
+    try {
+      const { UpYunStorage } = await import('../storage/UpYunStorage');
+      const storage = new UpYunStorage({ bucket, operator, password, endpoint, folder });
+
+      // 测试读写
+      const testHash = 'test' + Date.now();
+      const testContent = '彩虹外链网盘存储测试文件';
+      const encoder = new TextEncoder();
+      const testData = encoder.encode(testContent);
+
+      const uploadOk = await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
+      if (!uploadOk) {
+        throw new Error('上传到又拍云失败');
+      }
+
+      // 读取测试
+      const readRes = await storage.downfile(testHash);
+      if (!readRes) {
+        throw new Error('读取测试文件失败');
+      }
+      const readText = await readRes.text();
+      if (readText !== testContent) {
+        throw new Error('读取内容与写入内容不一致');
+      }
+
+      // 删除测试文件
+      await storage.delete(testHash);
+
+      return jsonResult(c, { ok: true, message: `又拍云连接成功！读写测试通过。服务: ${bucket}` });
+    } catch (e: any) {
+      return jsonError(c, '又拍云测试失败: ' + (e.message || e));
+    }
+  }
+
+  if (storageType === 'qiniu') {
+    const ak = String(body['qiniu_ak'] || '').trim();
+    const sk = String(body['qiniu_sk'] || '');
+    const bucket = String(body['qiniu_bucket'] || '').trim();
+    const region = String(body['qiniu_region'] || 'z0').trim();
+    const folder = String(body['qiniu_folder'] || 'file').trim();
+    if (!ak || !sk || !bucket) {
+      return jsonError(c, '请填写 AK/SK/Bucket');
+    }
+    try {
+      const { QiniuStorage } = await import('../storage/QiniuStorage');
+      const storage = new QiniuStorage({
+        accessKey: ak, secretKey: sk, bucket, region, folder,
+      });
+
+      // 测试读写
+      const testHash = 'test' + Date.now();
+      const testContent = '彩虹外链网盘存储测试文件';
+      const encoder = new TextEncoder();
+      const testData = encoder.encode(testContent);
+
+      const uploadOk = await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
+      if (!uploadOk) {
+        throw new Error('上传到七牛云失败：请检查 AK/SK/Bucket/区域是否正确');
+      }
+
+      // 读取测试
+      const readRes = await storage.downfile(testHash);
+      if (!readRes) {
+        throw new Error('读取测试文件失败：可能是 Bucket 私有读，需要配置公开访问');
+      }
+      const readText = await readRes.text();
+      if (readText !== testContent) {
+        throw new Error('读取内容与写入内容不一致');
+      }
+
+      // 删除测试文件
+      await storage.delete(testHash);
+
+      return jsonResult(c, { ok: true, message: `七牛云连接成功！读写测试通过。空间: ${bucket}, 区域: ${region}` });
+    } catch (e: any) {
+      return jsonError(c, '七牛云测试失败: ' + (e.message || e));
     }
   }
 

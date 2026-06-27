@@ -30,7 +30,7 @@ adminApi.post('/migrate/start', async (c) => {
   const body = await c.req.parseBody() as Record<string, string>;
   
   const mode = (body['mode'] || 'new') as MigrationMode;
-  const targetType = body['target_type'] as 'r2' | 's3' | 'github' | 'webdav';
+  const targetType = body['target_type'] as 'r2' | 's3' | 'github' | 'webdav' | 'upyun' | 'qiniu';
   
   if (!['copy', 'new', 'switch'].includes(mode)) {
     return jsonError(c, '无效的迁移模式');
@@ -62,6 +62,20 @@ adminApi.post('/migrate/start', async (c) => {
     targetConfig.webdav_user = body['webdav_user'] || currentConfig.webdav_user;
     targetConfig.webdav_pass = body['webdav_pass'] || currentConfig.webdav_pass;
     targetConfig.webdav_folder = body['webdav_folder'] || currentConfig.webdav_folder;
+  } else if (targetType === 'upyun') {
+    targetConfig.upyun_bucket = body['upyun_bucket'] || currentConfig.upyun_bucket;
+    targetConfig.upyun_operator = body['upyun_operator'] || currentConfig.upyun_operator;
+    targetConfig.upyun_password = body['upyun_password'] || currentConfig.upyun_password;
+    targetConfig.upyun_endpoint = body['upyun_endpoint'] || currentConfig.upyun_endpoint;
+    targetConfig.upyun_domain = body['upyun_domain'] || currentConfig.upyun_domain;
+    targetConfig.upyun_folder = body['upyun_folder'] || currentConfig.upyun_folder;
+  } else if (targetType === 'qiniu') {
+    targetConfig.qiniu_ak = body['qiniu_ak'] || currentConfig.qiniu_ak;
+    targetConfig.qiniu_sk = body['qiniu_sk'] || currentConfig.qiniu_sk;
+    targetConfig.qiniu_bucket = body['qiniu_bucket'] || currentConfig.qiniu_bucket;
+    targetConfig.qiniu_region = body['qiniu_region'] || currentConfig.qiniu_region;
+    targetConfig.qiniu_domain = body['qiniu_domain'] || currentConfig.qiniu_domain;
+    targetConfig.qiniu_folder = body['qiniu_folder'] || currentConfig.qiniu_folder;
   }
   
   const targetStor = createStorage(targetConfig, { FILE_R2: c.env.FILE_R2 });
