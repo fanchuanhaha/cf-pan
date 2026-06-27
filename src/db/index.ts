@@ -107,6 +107,14 @@ export async function getFileListAll(db: D1Database, options: {
   return { total: r?.c ?? 0, rows: results };
 }
 
+/** 获取所有文件（用于迁移） */
+export async function getAllFiles(db: D1Database): Promise<FileRow[]> {
+  const { results } = await db.prepare(
+    `SELECT * FROM pre_file`
+  ).all<FileRow>();
+  return results;
+}
+
 /** 更新文件计数与最后访问时间 */
 export async function touchFile(db: D1Database, id: number): Promise<void> {
   await db.prepare(

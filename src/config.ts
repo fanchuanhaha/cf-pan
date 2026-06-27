@@ -146,8 +146,7 @@ let cached: AppConfig | null = null;
 
 /** 从 D1 加载配置 */
 export async function loadConfig(db: D1Database): Promise<AppConfig> {
-  if (cached) return cached;
-
+  // 不使用缓存，每次都从数据库加载最新配置（确保配置修改后立即生效）
   const { results } = await db.prepare('SELECT k, v FROM pre_config').all<D1Result>();
   const config = { ...defaults };
   for (const row of results) {

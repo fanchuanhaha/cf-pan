@@ -1287,7 +1287,97 @@ $("select[name='downfile_type']").change(function(){
   if($(this).val() == '1'){ $("#downfile_type_form").show(); }
   else{ $("#downfile_type_form").hide(); }
 });
-</script>`;
+
+function startMigrate(){
+  var targetType = $("select[name='storage']").val();
+  var currentStorage = '${config.storage}';
+  if(targetType === currentStorage){
+    layer.alert('目标存储类型与当前相同', {icon: 2});
+    return;
+  }
+  var dialogContent = ''
+    + '<div style="padding:20px">'
+    + '<p><strong>当前存储：</strong>' + currentStorage.toUpperCase() + '</p>'
+    + '<p><strong>目标存储：</strong>' + targetType.toUpperCase() + '</p>'
+    + '<hr/>'
+    + '<div class="radio"><label><input type="radio" name="migrate_mode" value="copy" checked> 迁移数据：将所有现有文件复制到新存储（耗时较长）</label></div>'
+    + '<div class="radio"><label><input type="radio" name="migrate_mode" value="new"> 新文件用新存储：只对新上传的文件使用新存储，旧文件保留在旧存储</label></div>'
+    + '<div class="radio"><label><input type="radio" name="migrate_mode" value="switch"> 直接切换：完全切换到新存储，旧文件不可访问（最快）</label></div>'
+    + '<hr/>'
+    + '<p style="color:#999">是否在迁移完成后删除旧存储的文件？</p>'
+    + '<div class="radio"><label><input type="radio" name="delete_old" value="0" checked> 保留旧存储文件</label></div>'
+    + '<div class="radio"><label><input type="radio" name="delete_old" value="1"> 删除旧存储文件（仅迁移模式有效）</label></div>'
+    + '</div>';
+  layer.open({
+    type: 1,
+    title: '存储迁移选项',
+    area: ['500px', 'auto'],
+    content: dialogContent,
+    btn: ['开始迁移', '取消'],
+    yes: function(){
+      var mode = $('input[name="migrate_mode"]:checked').val();
+      var deleteOld = $('input[name="delete_old"]:checked').val();
+      layer.closeAll();
+      var ii = layer.load(2, {shade:[0.1,'#fff']});
+      $.ajax({
+        type: 'POST',
+        url: '/admin/api/migrate/start',
+        data: { mode: mode, target_type: targetType, delete_old: deleteOld },
+        dataType: 'json',
+        success: function(res){
+          layer.close(ii);
+          if(res.code === 0){
+            pollMigrateProgress(res.taskId);
+          } else {
+            layer.alert(res.msg, {icon: 2});
+          }
+        },
+        error: function(){
+          layer.close(ii);
+          layer.alert('服务器错误', {icon: 2});
+        }
+      });
+    }
+  });
+}
+
+function pollMigrateProgress(taskId){
+  var ii = layer.load(2, {shade:[0.1,'#fff']});
+  var timer = setInterval(function(){
+    $.ajax({
+      type: 'GET',
+      url: '/admin/api/migrate/status?taskId=' + taskId,
+      dataType: 'json',
+      success: function(res){
+        if(res.data && res.data.status === 'running'){
+          var msg = '迁移进度: ' + res.data.processed + '/' + res.data.total + '\\n当前: ' + res.data.currentFile;
+          layer.msg(msg, {time: 2000});
+        } else if(res.data && res.data.status === 'completed'){
+          clearInterval(timer);
+          layer.close(ii);
+          layer.alert('迁移完成！成功: ' + res.data.success + ', 失败: ' + res.data.failed, {icon: 1}, function(){
+            window.location.reload();
+          });
+        } else if(res.data && res.data.status === 'failed'){
+          clearInterval(timer);
+          layer.close(ii);
+          layer.alert('迁移完成但有错误。成功: ' + res.data.success + ', 失败: ' + res.data.failed, {icon: 2});
+        }
+      }
+    });
+  }, 2000);
+}
+</script>
+
+<div class="panel panel-warning">
+<div class="panel-heading"><h3 class="panel-title">存储迁移</h3></div>
+<div class="panel-body">
+  <p>修改存储类型后点击下方按钮进行迁移。可选择迁移全部数据、新文件用新存储或直接切换。</p>
+  <button type="button" class="btn btn-warning" onclick="startMigrate()"><i class="fa fa-exchange"></i> 开始迁移到新存储</button>
+  <a href="/admin/restore" class="btn btn-info" style="margin-left:10px"><i class="fa fa-history"></i> 从原 PHP 项目恢复数据</a>
+</div>
+</div>
+`;
   } else if (mod === 'file') {
     pageTitle = '文件上传设置';
     panelBody = `<div class="panel panel-primary">
@@ -1479,6 +1569,146 @@ ${panelBody}
 ${saveScript}`;
 
   return c.html(adminLayout(pageTitle, body, siteUrlStr, 'set', true, config.title));
+});
+
+// ===================== 数据恢复页面 /admin/restore =====================
+frontend.get('/admin/restore', async (c) => {
+  const config = getConf(c);
+  const siteUrlStr = siteUrl(c);
+  if (!await checkAdmin(c)) {
+    return c.html(`<script>window.location.href='/admin/login';</script>`);
+  }
+
+  const body = `<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">从原 PHP 项目恢复数据</h3></div>
+<div class="panel-body">
+  <div class="alert alert-warning">
+    <p><strong>使用说明：</strong></p>
+    <ol>
+      <li>第一步：恢复数据库 - 上传原项目的 SQL 备份文件，或提供下载链接</li>
+      <li>第二步：恢复文件 - 上传原项目根目录的 ZIP 压缩包（包含 file/ 目录和 config.php 等），或提供下载链接</li>
+      <li>系统会自动识别并恢复到当前配置的存储后端</li>
+    </ol>
+  </div>
+</div>
+</div>
+
+<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">第一步：恢复数据库 (SQL 文件)</h3></div>
+<div class="panel-body">
+  <ul class="nav nav-tabs" role="tablist">
+    <li role="presentation" class="active"><a href="#sql-upload" data-toggle="tab">上传文件</a></li>
+    <li role="presentation"><a href="#sql-url" data-toggle="tab">从链接下载</a></li>
+  </ul>
+  <div class="tab-content" style="padding-top:20px">
+    <div role="tabpanel" class="tab-pane active" id="sql-upload">
+      <form id="sqlFormUpload" enctype="multipart/form-data">
+        <div class="form-group">
+          <label>选择 SQL 备份文件</label>
+          <input type="file" name="sql_file" class="form-control" accept=".sql" required/>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="restoreSql('upload')"><i class="fa fa-upload"></i> 上传并恢复</button>
+      </form>
+    </div>
+    <div role="tabpanel" class="tab-pane" id="sql-url">
+      <form id="sqlFormUrl">
+        <div class="form-group">
+          <label>SQL 文件下载链接</label>
+          <input type="url" name="sql_url" class="form-control" placeholder="https://example.com/backup.sql" required/>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="restoreSql('url')"><i class="fa fa-download"></i> 下载并恢复</button>
+      </form>
+    </div>
+  </div>
+  <div id="sqlProgress" style="margin-top:15px;display:none;"></div>
+</div>
+</div>
+
+<div class="panel panel-success">
+<div class="panel-heading"><h3 class="panel-title">第二步：恢复文件 (ZIP 压缩包)</h3></div>
+<div class="panel-body">
+  <ul class="nav nav-tabs" role="tablist">
+    <li role="presentation" class="active"><a href="#zip-upload" data-toggle="tab">上传文件</a></li>
+    <li role="presentation"><a href="#zip-url" data-toggle="tab">从链接下载</a></li>
+  </ul>
+  <div class="tab-content" style="padding-top:20px">
+    <div role="tabpanel" class="tab-pane active" id="zip-upload">
+      <form id="zipFormUpload" enctype="multipart/form-data">
+        <div class="form-group">
+          <label>选择 ZIP 压缩包（包含原项目根目录的 file/ 目录）</label>
+          <input type="file" name="zip_file" class="form-control" accept=".zip" required/>
+        </div>
+        <button type="button" class="btn btn-success" onclick="restoreFiles('upload')"><i class="fa fa-upload"></i> 上传并恢复</button>
+      </form>
+    </div>
+    <div role="tabpanel" class="tab-pane" id="zip-url">
+      <form id="zipFormUrl">
+        <div class="form-group">
+          <label>ZIP 压缩包下载链接</label>
+          <input type="url" name="zip_url" class="form-control" placeholder="https://example.com/backup.zip" required/>
+        </div>
+        <button type="button" class="btn btn-success" onclick="restoreFiles('url')"><i class="fa fa-download"></i> 下载并恢复</button>
+      </form>
+    </div>
+  </div>
+  <div id="zipProgress" style="margin-top:15px;display:none;"></div>
+</div>
+</div>
+
+<script>
+function restoreSql(mode){
+  var form = mode === 'upload' ? document.getElementById('sqlFormUpload') : document.getElementById('sqlFormUrl');
+  var fd = new FormData(form);
+  var progress = document.getElementById('sqlProgress');
+  progress.style.display = 'block';
+  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在恢复数据库...</div>';
+  
+  fetch('/admin/api/restore/sql', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(res => {
+      if(res.code === 0){
+        var msg = '<strong>数据库恢复完成</strong><br/>成功: ' + res.data.success + ', 失败: ' + res.data.failed;
+        if(res.data.errors && res.data.errors.length > 0){
+          msg += '<br/>错误: <pre style="max-height:200px;overflow:auto">' + res.data.errors.join('\\n').substring(0, 1000) + '</pre>';
+        }
+        progress.innerHTML = '<div class="alert alert-success">' + msg + '</div>';
+      } else {
+        progress.innerHTML = '<div class="alert alert-danger">' + res.msg + '</div>';
+      }
+    })
+    .catch(e => {
+      progress.innerHTML = '<div class="alert alert-danger">网络错误: ' + e.message + '</div>';
+    });
+}
+
+function restoreFiles(mode){
+  var form = mode === 'upload' ? document.getElementById('zipFormUpload') : document.getElementById('zipFormUrl');
+  var fd = new FormData(form);
+  var progress = document.getElementById('zipProgress');
+  progress.style.display = 'block';
+  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在下载/解压/恢复文件，请稍候...</div>';
+  
+  fetch('/admin/api/restore/files', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(res => {
+      if(res.code === 0){
+        var msg = '<strong>文件恢复完成</strong><br/>文件数: ' + res.data.fileCount + '<br/>成功: ' + res.data.success + ', 失败: ' + res.data.failed + '<br/>总大小: ' + (res.data.totalSize / 1024 / 1024).toFixed(2) + ' MB';
+        if(res.data.errors && res.data.errors.length > 0){
+          msg += '<br/>错误: <pre style="max-height:200px;overflow:auto">' + res.data.errors.join('\\n').substring(0, 1000) + '</pre>';
+        }
+        progress.innerHTML = '<div class="alert alert-success">' + msg + '</div>';
+      } else {
+        progress.innerHTML = '<div class="alert alert-danger">' + res.msg + '</div>';
+      }
+    })
+    .catch(e => {
+      progress.innerHTML = '<div class="alert alert-danger">网络错误: ' + e.message + '</div>';
+    });
+}
+</script>
+`;
+
+  return c.html(adminLayout('数据恢复', body, siteUrlStr, 'set', true, config.title));
 });
 
 // ===================== 后台 AJAX =====================

@@ -496,7 +496,7 @@ install.post('/test', async (c) => {
       // 写入测试
       const encoder = new TextEncoder();
       const testData = encoder.encode(testContent);
-      const uploadSuccess = await storage.upload(testHash, testData.buffer, 'text/plain');
+      const uploadSuccess = await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
       
       if (!uploadSuccess) {
         throw new Error('写入测试失败');

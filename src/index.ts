@@ -11,6 +11,7 @@ import apiRoutes from './routes/api';
 import downloadRoutes from './routes/download';
 import viewRoutes from './routes/view';
 import adminAjaxRoutes from './routes/admin';
+import adminApiRoutes from './routes/admin-api';
 import frontendRoutes from './routes/frontend';
 import installRoutes from './routes/install';
 
@@ -100,6 +101,9 @@ app.route('/view.php', viewRoutes);
 
 // 后台 AJAX
 app.route('/admin/ajax', adminAjaxRoutes);
+
+// 管理后台 API（存储迁移、数据恢复）
+app.route('/admin/api', adminApiRoutes);
 
 // 管理后台 /admin/ 也走 frontend 路由
 app.get('/admin/', (c) => {
