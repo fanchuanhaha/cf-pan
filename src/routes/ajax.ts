@@ -21,11 +21,27 @@ ajax.get('/csrf', (c) => {
   return jsonResult(c, { code: 0, token });
 });
 
+// 统一处理 ?act=xxx 和 /xxx 两种路由方式
+ajax.post('/', async (c) => {
+  const act = c.req.query('act');
+  if (act === 'pre_upload') return handlePreUpload(c);
+  if (act === 'upload_part') return handleUploadPart(c);
+  if (act === 'complete_upload') return handleCompleteUpload(c);
+  if (act === 'deleteFile') return handleDeleteFile(c);
+  return jsonError(c, 'Unknown action');
+});
+
+// 路径方式的路由（兼容）
+ajax.post('/pre_upload', handlePreUpload);
+ajax.post('/upload_part', handleUploadPart);
+ajax.post('/complete_upload', handleCompleteUpload);
+ajax.post('/deleteFile', handleDeleteFile);
+
 // 文件预上传 (秒传检测)
-ajax.post('/pre_upload', async (c) => {
+async function handlePreUpload(c: any) {
   const db = getDB(c);
   const config = getConf(c);
-  const body = await c.req.parseBody<Record<string, string>>();
+  const body = await c.req.parseBody() as Record<string, string>;
 
   const csrfToken = body['csrf_token'];
   const ip = getClientIP(c);
@@ -34,7 +50,6 @@ ajax.post('/pre_upload', async (c) => {
   }
 
   if (config.forcelogin === 1) {
-    // 简单检查 user_token cookie
     const userToken = c.req.header('cookie')?.match(/user_token=([^;]+)/)?.[1];
     if (!userToken) return jsonError(c, '请先登录');
   }
@@ -58,11 +73,9 @@ ajax.post('/pre_upload', async (c) => {
     return jsonError(c, '文件密码只能为字母和数字');
   }
 
-  // 大小限制
   const limitSize = config.upload_size;
   const size = parseInt(sizeStr);
 
-  // 每日上传限制
   const todayCount = await getTodayUploadCount(db, ip, 0);
   if (config.upload_limit > 0 && todayCount >= config.upload_limit) {
     return jsonError(c, '你今天上传文件的数量已超过限制');
@@ -77,8 +90,7 @@ ajax.post('/pre_upload', async (c) => {
     });
   }
 
-  // 当前实现：网站中转模式（前端分片上传到 Worker）
-  // Workers 没有本地磁盘，强制 chunks=1 让前端用 uploadPart(file, 1) 一次发送整个文件
+  // Workers 没有本地磁盘，强制 chunks=1 让前端一次发送整个文件
   const chunkSize = 8 * 1024 * 1024;
   const chunks = 1;
 
@@ -86,14 +98,14 @@ ajax.post('/pre_upload', async (c) => {
     code: 0, third: false, hash,
     chunksize: chunkSize, chunks,
   });
-});
+}
 
 // 文件分片上传
-ajax.post('/upload_part', async (c) => {
+async function handleUploadPart(c: any) {
   const db = getDB(c);
   const config = getConf(c);
 
-  const body = await c.req.parseBody<Record<string, string | File>>();
+  const body = await c.req.parseBody() as Record<string, string | File>;
   const file = body['file'] as File | undefined;
   if (!file) return jsonError(c, '请选择文件');
 
@@ -112,7 +124,6 @@ ajax.post('/upload_part', async (c) => {
 
   if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
 
-  // 真实文件名（分片上传时 file.name 可能为空，优先从 body.name 取）
   const realName = sanitizeFileName(String(body['name'] || file.name || 'file'));
   const realSize = parseInt(String(body['size'] || '0')) || file.size;
   const ext = getFileExt(realName);
@@ -122,7 +133,7 @@ ajax.post('/upload_part', async (c) => {
   const success = await stor.upload(hash, arrayBuf, getMimeType(ext));
   if (!success) return jsonError(c, '文件上传失败');
 
-  // 入库（去重：如果 hash 已存在直接返回）
+  // 入库（去重）
   const existing = await getFileByHash(db, hash);
   if (existing) {
     delete csrfTokens[ip];
@@ -158,13 +169,34 @@ ajax.post('/upload_part', async (c) => {
   return jsonResult(c, {
     code: 1, msg: '文件上传成功！', exists: 0, hash, name: realName, size: realSize, type: ext, id,
   });
-});
+}
+
+// 完成上传
+async function handleCompleteUpload(c: any) {
+  const body = await c.req.parseBody() as Record<string, string>;
+  const hash = String(body['hash'] || '');
+  const csrfToken = String(body['csrf_token'] || '');
+  const ip = getClientIP(c);
+
+  if (!csrfToken || csrfToken !== csrfTokens[ip]) {
+    return jsonError(c, 'CSRF TOKEN ERROR');
+  }
+
+  const db = getDB(c);
+  const file = await getFileByHash(db, hash);
+  if (!file) return jsonError(c, '文件不存在');
+
+  delete csrfTokens[ip];
+  return jsonResult(c, {
+    code: 1, msg: '文件上传成功！', hash, name: file.name, size: file.size, type: file.type, id: file.id,
+  });
+}
 
 // 删除文件
-ajax.post('/deleteFile', async (c) => {
+async function handleDeleteFile(c: any) {
   const db = getDB(c);
   const stor = getStorOrThrow(c);
-  const body = await c.req.parseBody<Record<string, string>>();
+  const body = await c.req.parseBody() as Record<string, string>;
 
   const hash = String(body['hash'] || '');
   const csrfToken = String(body['csrf_token'] || '');
@@ -183,6 +215,6 @@ ajax.post('/deleteFile', async (c) => {
   const ok = await deleteFile(db, row.id);
   if (ok) return jsonResult(c, { code: 0, msg: '删除文件成功！' });
   return jsonError(c, '删除文件失败');
-});
+}
 
 export default ajax;
