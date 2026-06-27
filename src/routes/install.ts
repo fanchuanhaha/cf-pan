@@ -416,15 +416,47 @@ install.post('/test', async (c) => {
       return jsonError(c, '请填写完整的 S3 配置');
     }
     try {
-      const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3');
+      const { S3Client, HeadBucketCommand, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = await import('@aws-sdk/client-s3');
       const client = new S3Client({
         endpoint,
         region: region || 'auto',
         credentials: { accessKeyId: ak, secretAccessKey: sk },
         forcePathStyle: true,
       });
+
+      // 测试连接
       await client.send(new HeadBucketCommand({ Bucket: bucket }));
-      return jsonResult(c, { ok: true, message: 'S3 连接成功！' });
+
+      // 测试读写
+      const testKey = 'test-' + Date.now() + '.txt';
+      const testContent = '彩虹外链网盘存储测试文件';
+
+      // 写入测试
+      await client.send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: testKey,
+        Body: testContent,
+        ContentType: 'text/plain; charset=utf-8',
+      }));
+
+      // 读取测试
+      const getRes = await client.send(new GetObjectCommand({
+        Bucket: bucket,
+        Key: testKey,
+      }));
+      const readContent = await getRes.Body?.transformToString();
+
+      if (readContent !== testContent) {
+        throw new Error('读取内容与写入内容不一致');
+      }
+
+      // 删除测试文件
+      await client.send(new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: testKey,
+      }));
+
+      return jsonResult(c, { ok: true, message: 'S3 连接成功！读写测试通过' });
     } catch (e: any) {
       return jsonError(c, 'S3 测试失败: ' + (e.message || e));
     }
@@ -440,6 +472,7 @@ install.post('/test', async (c) => {
       return jsonError(c, '请填写 owner/repo/token');
     }
     try {
+      // 测试连接
       const res = await fetch(`${apiBase}/repos/${owner}/${repo}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -453,9 +486,76 @@ install.post('/test', async (c) => {
         return jsonError(c, `GitHub API 错误 (${res.status}): ${t.substring(0, 200)}`);
       }
       const data = await res.json() as any;
+
+      // 测试读写
+      const testPath = 'test-' + Date.now() + '.txt';
+      const testContent = '彩虹外链网盘存储测试文件';
+
+      // 写入测试
+      const putRes = await fetch(`${apiBase}/repos/${owner}/${repo}/contents/${testPath}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'pan-worker',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: '测试写入',
+          content: btoa(testContent),
+          branch: ref || data.default_branch,
+        }),
+      });
+
+      if (!putRes.ok) {
+        const t = await putRes.text();
+        throw new Error(`写入测试失败: ${t.substring(0, 200)}`);
+      }
+
+      const putData = await putRes.json() as any;
+      const sha = putData.content?.sha;
+
+      // 读取测试
+      const getRes = await fetch(`${apiBase}/repos/${owner}/${repo}/contents/${testPath}?ref=${ref || data.default_branch}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'pan-worker',
+        },
+      });
+
+      if (getRes.ok) {
+        const getData = await getRes.json() as any;
+        const readContent = atob(getData.content || '');
+        if (readContent !== testContent) {
+          throw new Error('读取内容与写入内容不一致');
+        }
+      }
+
+      // 删除测试文件
+      if (sha) {
+        await fetch(`${apiBase}/repos/${owner}/${repo}/contents/${testPath}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'pan-worker',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: '删除测试文件',
+            sha: sha,
+            branch: ref || data.default_branch,
+          }),
+        });
+      }
+
       return jsonResult(c, {
         ok: true,
-        message: `GitHub 连接成功！仓库: ${data.full_name}, 默认分支: ${data.default_branch}${ref && ref !== data.default_branch ? ' (注意：指定的 ref 与默认分支不同)' : ''}`
+        message: `GitHub 连接成功！仓库: ${data.full_name}, 默认分支: ${data.default_branch}, 读写测试通过${ref && ref !== data.default_branch ? ' (注意：指定的 ref 与默认分支不同)' : ''}`
       });
     } catch (e: any) {
       return jsonError(c, 'GitHub 测试失败: ' + (e.message || e));
@@ -478,7 +578,8 @@ install.post('/test', async (c) => {
         return jsonError(c, 'WebDAV 地址必须以 http:// 或 https:// 开头');
       }
       const auth = 'Basic ' + btoa(`${username}:${password}`);
-      // 用 PROPFIND 探测根目录
+
+      // 测试连接
       const res = await fetch(ep, {
         method: 'PROPFIND',
         headers: {
@@ -487,11 +588,57 @@ install.post('/test', async (c) => {
           'User-Agent': 'pan-worker-webdav',
         },
       });
-      if (res.ok || res.status === 207) {
-        return jsonResult(c, { ok: true, message: `WebDAV 连接成功！服务器响应 ${res.status}` });
+      if (!(res.ok || res.status === 207)) {
+        const t = await res.text();
+        return jsonError(c, `WebDAV 服务器返回 ${res.status}: ${t.substring(0, 200)}`);
       }
-      const t = await res.text();
-      return jsonError(c, `WebDAV 服务器返回 ${res.status}: ${t.substring(0, 200)}`);
+
+      // 测试读写
+      const testFile = 'test-' + Date.now() + '.txt';
+      const testContent = '彩虹外链网盘存储测试文件';
+      const testUrl = ep + testFile;
+
+      // 写入测试
+      const putRes = await fetch(testUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': auth,
+          'Content-Type': 'text/plain; charset=utf-8',
+          'User-Agent': 'pan-worker-webdav',
+        },
+        body: testContent,
+      });
+
+      if (!putRes.ok && putRes.status !== 201 && putRes.status !== 204) {
+        throw new Error(`写入测试失败: HTTP ${putRes.status}`);
+      }
+
+      // 读取测试
+      const getRes = await fetch(testUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': auth,
+          'User-Agent': 'pan-worker-webdav',
+        },
+      });
+
+      if (getRes.ok) {
+        const readContent = await getRes.text();
+        if (readContent !== testContent) {
+          throw new Error('读取内容与写入内容不一致');
+        }
+      }
+
+      // 删除测试文件
+      await fetch(testUrl, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': auth,
+          'User-Agent': 'pan-worker-webdav',
+        },
+      });
+
+      return jsonResult(c, { ok: true, message: 'WebDAV 连接成功！读写测试通过' });
     } catch (e: any) {
       return jsonError(c, 'WebDAV 测试失败: ' + (e.message || e));
     }

@@ -668,20 +668,20 @@ frontend.get('/admin/login', async (c) => {
   const config = getConf(c);
   const siteUrlStr = siteUrl(c);
 
+  // 登出（必须在已登录检查之前，否则已登录用户无法退出）
+  if (c.req.query('logout') === '1') {
+    c.header('Set-Cookie', 'admin_token=; Path=/; Max-Age=0');
+    return c.html('<script>window.location.href="/admin/login";</script>');
+  }
+
   // 已登录则跳到后台
   const cookie = c.req.header('cookie') || '';
   const token = cookie.match(/admin_token=([^;]+)/)?.[1];
   if (token) {
     const valid = await verifyAdminToken(decodeURIComponent(token), config.admin_user, config.admin_pwd, config.syskey);
     if (valid) {
-      return c.html('<script>window.location.href="./";</script>');
+      return c.html('<script>window.location.href="/admin";</script>');
     }
-  }
-
-  // 登出
-  if (c.req.query('logout') === '1') {
-    c.header('Set-Cookie', 'admin_token=; Path=/; Max-Age=0');
-    return c.html('<script>window.location.href="./login";</script>');
   }
 
   const body = `<div class="container" style="padding-top:100px">

@@ -42,10 +42,12 @@ async function handlePreUpload(c: any) {
   const db = getDB(c);
   const config = getConf(c);
   const body = await c.req.parseBody() as Record<string, string>;
+  const ip = getClientIP(c);
 
   const csrfToken = body['csrf_token'];
-  const ip = getClientIP(c);
-  if (!csrfToken || csrfToken !== csrfTokens[ip]) {
+  // 验证 cookie 中的 token
+  const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
+  if (!csrfToken || csrfToken !== cookieCsrf) {
     return jsonError(c, 'CSRF TOKEN ERROR');
   }
 
@@ -104,14 +106,16 @@ async function handlePreUpload(c: any) {
 async function handleUploadPart(c: any) {
   const db = getDB(c);
   const config = getConf(c);
+  const ip = getClientIP(c);
 
   const body = await c.req.parseBody() as Record<string, string | File>;
   const file = body['file'] as File | undefined;
   if (!file) return jsonError(c, '请选择文件');
 
   const csrfToken = String(body['csrf_token'] || '');
-  const ip = getClientIP(c);
-  if (!csrfToken || csrfToken !== csrfTokens[ip]) {
+  // 验证 cookie 中的 token
+  const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
+  if (!csrfToken || csrfToken !== cookieCsrf) {
     return jsonError(c, 'CSRF TOKEN ERROR');
   }
 
@@ -176,9 +180,10 @@ async function handleCompleteUpload(c: any) {
   const body = await c.req.parseBody() as Record<string, string>;
   const hash = String(body['hash'] || '');
   const csrfToken = String(body['csrf_token'] || '');
-  const ip = getClientIP(c);
 
-  if (!csrfToken || csrfToken !== csrfTokens[ip]) {
+  // 验证 cookie 中的 token
+  const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
+  if (!csrfToken || csrfToken !== cookieCsrf) {
     return jsonError(c, 'CSRF TOKEN ERROR');
   }
 
@@ -186,7 +191,6 @@ async function handleCompleteUpload(c: any) {
   const file = await getFileByHash(db, hash);
   if (!file) return jsonError(c, '文件不存在');
 
-  delete csrfTokens[ip];
   return jsonResult(c, {
     code: 1, msg: '文件上传成功！', hash, name: file.name, size: file.size, type: file.type, id: file.id,
   });
