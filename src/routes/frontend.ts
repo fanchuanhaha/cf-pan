@@ -10,6 +10,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
 import { getDB, getConf, getStor, getStorOrThrow } from '../middleware';
+import { updateConfig, clearConfigCache } from '../config';
 import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileTotal, getFileCountByDateRange } from '../db';
 import { verifyAdminToken, signAdminToken } from '../auth/admin';
 import { getViewType, sizeFormat, typeToIcon } from '../utils/mime';
@@ -47,7 +48,7 @@ function siteUrl(c: any): string {
 }
 
 /** 顶部导航栏（仿原 header.php） */
-function publicNavBar(active: 'index' | 'upload' | 'file' | 'mine', siteUrlStr: string): string {
+function publicNavBar(active: 'index' | 'upload' | 'file' | 'mine', siteUrlStr: string, siteTitle: string): string {
   const cls = (key: string) => active === key ? 'active' : '';
   return `<div class="navbar navbar-default">
 <div class="container">
@@ -57,7 +58,7 @@ function publicNavBar(active: 'index' | 'upload' | 'file' | 'mine', siteUrlStr: 
       <span class="icon-bar"></span>
       <span class="icon-bar"></span>
     </button>
-    <a class="navbar-brand" href="./">彩虹外链网盘</a>
+    <a class="navbar-brand" href="./">${htmlspecialchars(siteTitle)}</a>
   </div>
   <div class="navbar-collapse collapse navbar-responsive-collapse">
     <ul class="nav navbar-nav">
@@ -73,16 +74,16 @@ function publicNavBar(active: 'index' | 'upload' | 'file' | 'mine', siteUrlStr: 
 </div>`;
 }
 
-function publicFooter(): string {
+function publicFooter(siteTitle: string): string {
   return `<footer class="footer text-center">
 <div class="container">
-<p class="text-muted">Copyright &copy; ${new Date().getFullYear()} <a href="/">彩虹外链网盘</a></p>
+<p class="text-muted">Copyright &copy; ${new Date().getFullYear()} <a href="/">${htmlspecialchars(siteTitle)}</a></p>
 </div>
 </footer>`;
 }
 
 /** 前台页面通用 layout（与原 header.php/footer.php 完全一致） */
-function publicLayout(title: string, body: string, siteUrlStr: string, active: 'index' | 'upload' | 'file' | 'mine' = 'index', isFile: boolean = false): string {
+function publicLayout(title: string, body: string, siteUrlStr: string, active: 'index' | 'upload' | 'file' | 'mine' = 'index', isFile: boolean = false, siteTitle: string = '彩虹外链网盘'): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -108,19 +109,19 @@ ${isFile ? `<link rel="stylesheet" href="${CDN.aplayerCss}"><link href="assets/c
 <script src="${CDN.jquery}"></script>
 </head>
 <body>
-${publicNavBar(active, siteUrlStr)}
+${publicNavBar(active, siteUrlStr, siteTitle)}
 ${body}
-${publicFooter()}
+${publicFooter(siteTitle)}
 <script src="${CDN.bootstrapJs}"></script>
 <script src="${CDN.materialJs}"></script>
 <script src="${CDN.ripplesJs}"></script>
-<script>if(window.\\$)\\$().material.init();</script>
+<script>$.material.init();</script>
 </body>
 </html>`;
 }
 
 /** 管理后台 layout（仿原 admin/head.php） */
-function adminLayout(title: string, body: string, siteUrlStr: string, active: 'index' | 'file' | 'user' | 'set' = 'index', showNav: boolean = true): string {
+function adminLayout(title: string, body: string, siteUrlStr: string, active: 'index' | 'file' | 'user' | 'set' = 'index', showNav: boolean = true, siteTitle: string = '彩虹外链网盘'): string {
   const cls = (key: string) => active === key ? 'active' : '';
   const nav = showNav ? `<nav class="navbar navbar-fixed-top navbar-default">
 <div class="container">
@@ -131,13 +132,25 @@ function adminLayout(title: string, body: string, siteUrlStr: string, active: 'i
       <span class="icon-bar"></span>
       <span class="icon-bar"></span>
     </button>
-    <a class="navbar-brand" href="./">彩虹外链网盘管理中心</a>
+    <a class="navbar-brand" href="/admin">${htmlspecialchars(siteTitle)}管理中心</a>
   </div>
   <div id="navbar" class="collapse navbar-collapse">
     <ul class="nav navbar-nav navbar-right">
-      <li class="${cls('index')}"><a href="./"><i class="fa fa-home"></i> 后台首页</a></li>
-      <li class="${cls('file')}"><a href="./file"><i class="fa fa-folder-open"></i> 文件管理</a></li>
-      <li><a href="./login?logout=1" onclick="return confirm('是否确定退出登录？')"><i class="fa fa-sign-out"></i> 退出登录</a></li>
+      <li class="${cls('index')}"><a href="/admin"><i class="fa fa-home"></i> 后台首页</a></li>
+      <li class="${cls('file')}"><a href="/admin/file"><i class="fa fa-folder-open"></i> 文件管理</a></li>
+      <li class="dropdown ${cls('set')}">
+        <a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false"><i class="fa fa-cog"></i> 系统设置 <span class="caret"></span></a>
+        <ul class="dropdown-menu">
+          <li><a href="/admin/set?mod=site"><i class="fa fa-info-circle"></i> 网站信息设置</a></li>
+          <li><a href="/admin/set?mod=user"><i class="fa fa-users"></i> 用户登录设置</a></li>
+          <li><a href="/admin/set?mod=stor"><i class="fa fa-database"></i> 存储类型设置</a></li>
+          <li><a href="/admin/set?mod=file"><i class="fa fa-upload"></i> 文件上传设置</a></li>
+          <li><a href="/admin/set?mod=green"><i class="fa fa-image"></i> 图片检测设置</a></li>
+          <li><a href="/admin/set?mod=api"><i class="fa fa-code"></i> 上传API设置</a></li>
+          <li><a href="/admin/set?mod=account"><i class="fa fa-user-secret"></i> 管理员账号设置</a></li>
+        </ul>
+      </li>
+      <li><a href="/admin/login?logout=1" onclick="return confirm('是否确定退出登录？')"><i class="fa fa-sign-out"></i> 退出登录</a></li>
     </ul>
   </div>
 </div>
@@ -155,6 +168,7 @@ function adminLayout(title: string, body: string, siteUrlStr: string, active: 'i
 <link href="assets/css/admin.css" rel="stylesheet"/>
 <script src="${CDN.jquery2}"></script>
 <script src="${CDN.bootstrapJs}"></script>
+<script src="https://s4.zstatic.net/ajax/libs/layer/2.3/layer.js"></script>
 <!--[if lt IE 9]>
 <script src="https://s4.zstatic.net/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
 <script src="https://s4.zstatic.net/ajax/libs/respond.js/1.4.2/respond.min.js"></script>
@@ -308,7 +322,7 @@ frontend.get('/', async (c) => {
 </div>
 </div>`;
 
-  return c.html(publicLayout(title, body, siteUrlStr, isMine ? 'mine' : 'index'));
+  return c.html(publicLayout(title, body, siteUrlStr, isMine ? 'mine' : 'index', false, config.title));
 });
 
 // ===================== 上传页 /upload.php =====================
@@ -320,56 +334,81 @@ frontend.get('/upload.php', (c) => {
   // 保存 csrf 到一个临时 cookie，ajax 端会比对
   c.header('Set-Cookie', `upload_csrf=${csrf}; Path=/; Max-Age=3600; SameSite=Lax`);
 
-  const body = `<div class="container" style="padding-top:30px">
-<div class="well bs-component">
-  <div id="app">
-    <div class="panel panel-primary">
-      <div class="panel-heading">
-        <h3 class="panel-title"><i class="fa fa-cloud-upload"></i> 上传文件</h3>
+  // 获取客户端IP
+  const clientip = c.req.header('CF-Connecting-IP') || c.req.header('X-Real-IP') || c.req.header('X-Forwarded-For')?.split(',')[0]?.trim() || '0.0.0.0';
+
+  const body = `<div class="container" id="app" style="padding-top:30px">
+    <div class="row">
+      <div class="col-sm-9">
+        <div class="well infobox" align="center" id="fileInput" :style="{background: background}">
+        <div style="min-height:50px;">
+            <div id="progressBar" v-if="showtype==1">
+                <div class="progress progress-striped active"><div class="progress-bar" style="width: 0%" :style="{ width: progress + '%' }">{{progress_tip}}</div></div><div class="row"><div class="col-xs-3" style="text-align:left;" id="percentage"><span v-if="progress>0">{{progress}}%</span></div><div class="col-xs-6 filename">{{filename}}</div><div class="col-xs-3" style="text-align:right;" id="uploadspeed">{{uploadspeed}}</div></div>
+            </div>
+            <div class="alert alert-dismissible" :class="'alert-'+alert.type" v-if="showtype==2">
+                <button type="button" class="close" data-dismiss="alert">×</button>
+                <strong>{{alert.msg}}</strong>
+            </div>
+        </div>
+
+         <br><br>
+         <h1 style="color:#8d8b8b;" id="uploadTitle">{{uploadTitle}}</h1>
+
+         <input type="hidden" id="csrf_token" name="csrf_token" value="${csrf}">
+         <input type="file" id="file" name="myfile" @change="selectFile" style="display:none"/>
+
+         <div id="upload_frame">
+         <button id="uploadFile" class="btn btn-raised btn-primary" style="height:50px;font-size:20px;" @click="clickUpload"><i class="fa fa-upload"></i> 选择文件<div class="ripple-container"></div></button>
+<div class="form-group">
+<div class="checkbox">
+<label>
+<input type="checkbox" id="show" v-model="input.show"> 在首页文件列表显示
+</label>
+</div>
+</div>
+<div class="form-group">
+<div class="checkbox">
+<label>
+<input type="checkbox" id="ispwd" v-model="input.ispwd"> 设定密码
+</label>
+</div>
+</div>
+<div class="form-group" style="max-width:220px;" id="pwd_frame" v-if="input.ispwd">
+<input type="text" class="form-control" id="pwd" placeholder="请输入密码" autocomplete="off" v-model="input.pwd">
+<p class="help-block">密码只能为字母或数字</p>
+</div>
+         </div>
+
+        <br><br><br><br>
+        </div>
       </div>
-      <div class="panel-body">
-        <input type="file" id="file" style="display:none" @change="selectFile($event)">
-        <div id="fileInput" @click="clickUpload()" :style="'background:'+background" style="border:2px dashed #ccc;padding:60px 20px;text-align:center;cursor:pointer;border-radius:8px;transition:background 0.2s">
-          <i class="fa fa-cloud-upload" style="font-size:48px;color:#999"></i>
-          <p style="margin-top:15px;font-size:18px">{{ uploadTitle }}</p>
-          <input type="hidden" id="csrf_token" value="${csrf}">
-        </div>
-
-        <div v-if="filename" class="alert alert-info" style="margin-top:15px">
-          <i class="fa fa-file"></i> {{ filename }}
-        </div>
-
-        <div v-if="showtype==1" style="margin-top:15px">
-          <div class="progress" style="height:20px;">
-            <div class="progress-bar progress-bar-striped active" :style="'width:'+progress+'%'">{{ progress }}%</div>
-          </div>
-          <p style="margin-top:8px;color:#666">{{ progress_tip }} <span class="pull-right" v-if="uploadspeed">{{ uploadspeed }}</span></p>
-        </div>
-
-        <div v-if="showtype==2" class="alert" :class="'alert-'+alert.type" style="margin-top:15px">
-          <i class="fa fa-info-circle"></i> {{ alert.msg }}
-        </div>
-
-        <div v-if="isBlock" style="margin-top:15px">
-          <button class="btn btn-primary" @click="clickUpload()"><i class="fa fa-upload"></i> 重新选择文件</button>
-        </div>
-
-        <div style="margin-top:15px">
-          <label style="margin-right:20px"><input type="checkbox" v-model="input.show" checked> 显示在主页</label>
-          <label><input type="checkbox" v-model="input.ispwd"> 启用下载密码</label>
-          <input v-if="input.ispwd" type="text" class="form-control" style="margin-top:8px" v-model="input.pwd" placeholder="下载密码（仅字母+数字）">
-        </div>
+      <div class="col-sm-3">
+      <div class="panel panel-primary">
+<div class="panel-heading">
+<h3 class="panel-title"><i class="fa fa-exclamation-circle"></i> 上传提示</h3>
+</div>
+<div class="list-group-item">
+**您的IP是${clientip}，请不要上传违规文件！
+</div>
+${config.upload_size > 0 ? `<div class="list-group-item">**上传无格式限制，当前服务器单个文件上传最大支持<b>${config.upload_size}MB</b>！
+</div>` : `<div class="list-group-item">**上传无格式限制，无大小限制！
+</div>`}
+${config.videoreview == 1 ? `<div class="list-group-item">**当前网站已开启视频文件审核，如果上传的是视频文件，需要等待审核通过后才能下载和播放。
+</div>` : ''}
+</div>
       </div>
     </div>
   </div>
-</div>
+<div class="colorful_loading_frame">
+  <div class="colorful_loading"><i class="rect1"></i><i class="rect2"></i><i class="rect3"></i><i class="rect4"></i><i class="rect5"></i></div>
 </div>
 <script src="${CDN.vue}"></script>
 <script src="https://s4.zstatic.net/ajax/libs/spark-md5/3.0.2/spark-md5.min.js"></script>
-<script src="https://s4.zstatic.net/ajax/libs/layer/3.1.1/layer.min.js"></script>
+<script src="https://s4.zstatic.net/ajax/libs/layer/3.1.1/layer.js"></script>
+<script>var upload_max_filesize = '${config.upload_size}';</script>
 <script src="assets/js/uploadnew.js"></script>`;
 
-  return c.html(publicLayout('上传文件 - ' + config.title, body, siteUrlStr, 'upload'));
+  return c.html(publicLayout('上传文件 - ' + config.title, body, siteUrlStr, 'upload', false, config.title));
 });
 
 // ===================== 文件查看页 /file.php?hash=xxx =====================
@@ -621,7 +660,7 @@ $(function(){
 });` : ''}
 </script>`;
 
-  return c.html(publicLayout('文件查看 - ' + config.title, body, siteUrlStr, 'file', filetype > 0));
+  return c.html(publicLayout('文件查看 - ' + config.title, body, siteUrlStr, 'file', filetype > 0, config.title));
 });
 
 // ===================== 管理后台登录页 /admin/login =====================
@@ -674,7 +713,7 @@ document.getElementById('loginForm').onsubmit = async function(e){
 };
 </script>`;
 
-  return c.html(adminLayout('管理员登录', body, siteUrlStr, 'index', false));
+  return c.html(adminLayout('管理员登录', body, siteUrlStr, 'index', false, config.title));
 });
 
 // ===================== 管理后台首页 /admin =====================
@@ -688,8 +727,9 @@ async function checkAdmin(c: any): Promise<boolean> {
 
 frontend.get('/admin', async (c) => {
   const siteUrlStr = siteUrl(c);
+  const config = getConf(c);
   if (!await checkAdmin(c)) {
-    return c.html(`<script>window.location.href='./login';</script>`);
+    return c.html(`<script>window.location.href='/admin/login';</script>`);
   }
 
   const body = `<div class="container" style="padding-top:70px">
@@ -701,7 +741,7 @@ frontend.get('/admin', async (c) => {
         <div class="col-xs-3"><i class="fa fa-cloud fa-5x"></i></div>
         <div class="col-xs-9 text-right"><div class="huge" id="count1">0</div><div>文件总数</div></div>
       </div></div>
-      <a href="./file"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
+      <a href="/admin/file"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
     </div>
   </div>
   <div class="col-lg-3 col-md-6">
@@ -710,7 +750,7 @@ frontend.get('/admin', async (c) => {
         <div class="col-xs-3"><i class="fa fa-cloud-upload fa-5x"></i></div>
         <div class="col-xs-9 text-right"><div class="huge" id="count2">0</div><div>今日上传文件</div></div>
       </div></div>
-      <a href="./file"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
+      <a href="/admin/file"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
     </div>
   </div>
   <div class="col-lg-3 col-md-6">
@@ -719,7 +759,7 @@ frontend.get('/admin', async (c) => {
         <div class="col-xs-3"><i class="fa fa-inbox fa-5x"></i></div>
         <div class="col-xs-9 text-right"><div class="huge" id="count3">0</div><div>昨日上传文件</div></div>
       </div></div>
-      <a href="./file"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
+      <a href="/admin/file"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
     </div>
   </div>
   <div class="col-lg-3 col-md-6">
@@ -772,14 +812,15 @@ $.ajax({
 });
 </script>`;
 
-  return c.html(adminLayout('后台首页', body, siteUrlStr, 'index'));
+  return c.html(adminLayout('后台首页', body, siteUrlStr, 'index', true, config.title));
 });
 
 // ===================== 管理后台文件管理 /admin/file =====================
 frontend.get('/admin/file', async (c) => {
   const siteUrlStr = siteUrl(c);
+  const config = getConf(c);
   if (!await checkAdmin(c)) {
-    return c.html(`<script>window.location.href='../login';</script>`);
+    return c.html(`<script>window.location.href='/admin/login';</script>`);
   }
 
   const body = `<style>
@@ -945,7 +986,499 @@ function searchSubmit(){ window.location.href = './file?' + $('#searchToolbar').
 function searchClear(){ window.location.href = './file'; }
 </script>`;
 
-  return c.html(adminLayout('文件管理', body, siteUrlStr, 'file'));
+  return c.html(adminLayout('文件管理', body, siteUrlStr, 'file', true, config.title));
+});
+
+// ===================== 管理后台设置 /admin/set =====================
+frontend.get('/admin/set', async (c) => {
+  const config = getConf(c);
+  const siteUrlStr = siteUrl(c);
+  if (!await checkAdmin(c)) {
+    return c.html(`<script>window.location.href='/admin/login';</script>`);
+  }
+
+  const mod = c.req.query('mod') || 'site';
+  let panelBody = '';
+  let pageTitle = '系统设置';
+
+  // 通用 saveSetting 脚本
+  const saveScript = `<script>
+var items = $("select[default]");
+for (i = 0; i < items.length; i++) {
+  $(items[i]).val($(items[i]).attr("default")||0);
+}
+function saveSetting(obj){
+  var ii = layer.load(2, {shade:[0.1,'#fff']});
+  $.ajax({
+    type : 'POST',
+    url : '/admin/ajax/set',
+    data : $(obj).serialize(),
+    dataType : 'json',
+    success : function(data) {
+      layer.close(ii);
+      if(data.code == 0){
+        layer.alert('设置保存成功！', { icon: 1, closeBtn: false }, function(){ window.location.reload(); });
+      }else{
+        layer.alert(data.msg, {icon: 2});
+      }
+    },
+    error:function(){ layer.msg('服务器错误'); }
+  });
+  return false;
+}
+</script>`;
+
+  if (mod === 'site') {
+    pageTitle = '网站信息设置';
+    panelBody = `<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">网站信息设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+  <div class="form-group">
+    <label class="col-sm-2 control-label">网站标题</label>
+    <div class="col-sm-10"><input type="text" name="title" value="${config.title}" class="form-control" required/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">关键字</label>
+    <div class="col-sm-10"><input type="text" name="keywords" value="${config.keywords}" class="form-control"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">网站描述</label>
+    <div class="col-sm-10"><input type="text" name="description" value="${config.description}" class="form-control"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">禁止访问IP</label>
+    <div class="col-sm-10"><textarea class="form-control" name="blackip" rows="2" placeholder="多个IP用|隔开">${config.blackip}</textarea></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">首页公告</label>
+    <div class="col-sm-10"><textarea class="form-control" name="gonggao" rows="3" placeholder="不填写则不显示首页公告">${config.gonggao}</textarea></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">文件查看页公告</label>
+    <div class="col-sm-10"><textarea class="form-control" name="gg_file" rows="3" placeholder="不填写则不显示">${config.gg_file}</textarea></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">统计代码</label>
+    <div class="col-sm-10"><textarea class="form-control" name="tongji" rows="3" placeholder="不填写则不显示统计代码">${config.tongji}</textarea></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">文件搜索功能</label>
+    <div class="col-sm-10"><select class="form-control" name="filesearch" default="${config.filesearch}"><option value="0">关闭</option><option value="1">开启</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <div class="col-sm-offset-2 col-sm-10"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/>
+   </div>
+  </div>
+  </form>
+</div>
+</div>`;
+  } else if (mod === 'user') {
+    pageTitle = '用户登录设置';
+    panelBody = `<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">用户登录设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+    <label class="col-sm-3 control-label">用户登录开关</label>
+    <div class="col-sm-9"><select class="form-control" name="userlogin" default="${config.userlogin}"><option value="0">关闭</option><option value="1">开启</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">聚合登录接口地址</label>
+    <div class="col-sm-9"><input type="text" name="login_apiurl" value="${config.login_apiurl}" class="form-control" placeholder="接口地址要以http://或https://开头，以/结尾"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">应用APPID</label>
+    <div class="col-sm-9"><input type="text" name="login_appid" value="${config.login_appid}" class="form-control"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">应用APPKEY</label>
+    <div class="col-sm-9"><input type="text" name="login_appkey" value="${config.login_appkey}" class="form-control"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">开启的登录方式</label>
+    <div class="col-sm-9">
+    <input type="hidden" name="login_qq" value="0"/>
+    <input type="hidden" name="login_wx" value="0"/>
+    <label class="checkbox-inline"><input type="checkbox" name="login_qq" value="1" ${config.login_qq ? 'checked' : ''}> QQ</label>
+    <label class="checkbox-inline"><input type="checkbox" name="login_wx" value="1" ${config.login_wx ? 'checked' : ''}> 微信</label>
+    </div>
+  </div><br/>
+  <div class="form-group">
+    <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/>
+   </div>
+  </div>
+  </form>
+</div>
+<div class="panel-footer">
+<span class="glyphicon glyphicon-info-sign"></span>
+聚合登录接口是使用彩虹聚合登录系统搭建的站点。<br/>
+开启后请勿随意更换登录接口站点，否则会导致之前注册的用户全部无法登录。
+</div>
+</div>`;
+  } else if (mod === 'stor') {
+    pageTitle = '存储类型设置';
+    const storOptions = (val: string) => {
+      const types = [
+        { v: 'r2', n: 'Cloudflare R2' },
+        { v: 's3', n: 'S3兼容存储' },
+        { v: 'github', n: 'GitHub API' },
+        { v: 'webdav', n: 'WebDAV' },
+      ];
+      return types.map(t => `<option value="${t.v}"${config.storage === t.v ? ' selected' : ''}>${t.n}</option>`).join('');
+    };
+    panelBody = `<div class="panel panel-success">
+<div class="panel-heading"><h3 class="panel-title">存储类型设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">切换存储类型</label>
+      <div class="col-sm-9"><select class="form-control" name="storage" default="${config.storage}">${storOptions(config.storage)}</select><font color="green">已有文件的情况下请勿随意变更，否则之前上传的文件全部无法下载</font></div>
+    </div><br/>
+    <div id="cloud_stor" style="${config.storage === 'r2' ? '' : 'display:none;'}">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">文件上传方式</label>
+      <div class="col-sm-9"><select class="form-control" name="uploadfile_type" default="${config.uploadfile_type}"><option value="0">网站中转</option><option value="1">直接链接</option></select></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">文件下载方式</label>
+      <div class="col-sm-9"><select class="form-control" name="downfile_type" default="${config.downfile_type}"><option value="0">网站中转</option><option value="1">直接链接</option></select></div>
+    </div><br/>
+    <div class="form-group" id="downfile_type_form" style="${config.downfile_type !== 1 ? 'display:none;' : ''}">
+      <label class="col-sm-3 control-label">文件下载域名</label>
+      <div class="col-sm-9">
+        <div class="row">
+        <div class="col-xs-4 col-md-3" style="padding-right: 0px;">
+          <select class="form-control" name="downfile_protocol" default="${config.downfile_protocol}"><option value="0">http://</option><option value="1">https://</option></select>
+        </div>
+        <div class="col-xs-8 col-md-9" style="padding-left: 0px;">
+          <input type="text" class="form-control" name="downfile_domain" value="${config.downfile_domain}" placeholder="留空则使用云存储默认域名">
+        </div>
+        </div>
+        <font color="green">填写Bucket绑定的域名，也可使用CDN域名</font>
+      </div>
+    </div><br/>
+    </div>
+    <div class="form-group">
+      <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">Cloudflare R2 配置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">R2 公开访问URL</label>
+      <div class="col-sm-9"><input type="text" name="r2_public_url" value="${config.r2_public_url}" class="form-control" placeholder="如 https://files.example.com"/></div>
+    </div><br/>
+    <div class="form-group">
+      <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">S3 兼容存储配置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">S3 Endpoint</label>
+      <div class="col-sm-9"><input type="text" name="s3_endpoint" value="${config.s3_endpoint}" class="form-control" placeholder="如 https://s3.amazonaws.com"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">S3 Region</label>
+      <div class="col-sm-9"><input type="text" name="s3_region" value="${config.s3_region}" class="form-control" placeholder="如 us-east-1"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">S3 Bucket</label>
+      <div class="col-sm-9"><input type="text" name="s3_bucket" value="${config.s3_bucket}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">AccessKey</label>
+      <div class="col-sm-9"><input type="text" name="s3_ak" value="${config.s3_ak}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">SecretKey</label>
+      <div class="col-sm-9"><input type="text" name="s3_sk" value="${config.s3_sk}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">GitHub API 配置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">GitHub 用户名</label>
+      <div class="col-sm-9"><input type="text" name="gh_owner" value="${config.gh_owner}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">仓库名称</label>
+      <div class="col-sm-9"><input type="text" name="gh_repo" value="${config.gh_repo}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">Token</label>
+      <div class="col-sm-9"><input type="text" name="gh_token" value="${config.gh_token}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">分支</label>
+      <div class="col-sm-9"><input type="text" name="gh_ref" value="${config.gh_ref}" class="form-control" placeholder="如 main"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">存储目录</label>
+      <div class="col-sm-9"><input type="text" name="gh_folder" value="${config.gh_folder}" class="form-control" placeholder="如 file"/></div>
+    </div><br/>
+    <div class="form-group">
+      <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">WebDAV 配置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-3 control-label">WebDAV 地址</label>
+      <div class="col-sm-9"><input type="text" name="webdav_endpoint" value="${config.webdav_endpoint}" class="form-control" placeholder="如 https://dav.example.com"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">用户名</label>
+      <div class="col-sm-9"><input type="text" name="webdav_user" value="${config.webdav_user}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">密码</label>
+      <div class="col-sm-9"><input type="text" name="webdav_pass" value="${config.webdav_pass}" class="form-control"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">存储目录</label>
+      <div class="col-sm-9"><input type="text" name="webdav_folder" value="${config.webdav_folder}" class="form-control" placeholder="如 file"/></div>
+    </div><br/>
+    <div class="form-group">
+      <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary btn-block"/>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<script>
+$("select[name='storage']").change(function(){
+  if($(this).val() == 'r2'){
+    $("#cloud_stor").show();
+  }else{
+    $("#cloud_stor").hide();
+  }
+});
+$("select[name='downfile_type']").change(function(){
+  if($(this).val() == '1'){ $("#downfile_type_form").show(); }
+  else{ $("#downfile_type_form").hide(); }
+});
+</script>`;
+  } else if (mod === 'file') {
+    pageTitle = '文件上传设置';
+    panelBody = `<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">文件上传设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+  <div class="form-group">
+    <label class="col-sm-3 control-label">图片文件类型</label>
+    <div class="col-sm-9"><input type="text" name="type_image" value="${config.type_image}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面，以上文件类型将以图片的形式展示</font></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">音频文件类型</label>
+    <div class="col-sm-9"><input type="text" name="type_audio" value="${config.type_audio}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面，以上文件类型将以音频的形式展示</font></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">视频文件类型</label>
+    <div class="col-sm-9"><input type="text" name="type_video" value="${config.type_video}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面，以上文件类型将以视频的形式展示</font></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">禁止上传的文件类型</label>
+    <div class="col-sm-9"><input type="text" name="type_block" value="${config.type_block}" class="form-control" placeholder="多个文件类型用|隔开"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">文件名屏蔽关键词</label>
+    <div class="col-sm-9"><input type="text" name="name_block" value="${config.name_block}" class="form-control" placeholder="多个关键词用|隔开"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">每IP每天限制上传数量</label>
+    <div class="col-sm-9"><input type="text" name="upload_limit" value="${config.upload_limit}" class="form-control" placeholder="0或留空为不限制"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">视频文件需要审核</label>
+    <div class="col-sm-9"><select class="form-control" name="videoreview" default="${config.videoreview}"><option value="0">关闭</option><option value="1">开启</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">上传大小限制</label>
+    <div class="col-sm-9"><div class="input-group"><input type="text" name="upload_size" value="${config.upload_size}" class="form-control" placeholder="不填写则不限制大小"/><span class="input-group-addon">MB</span></div></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">仅限登录用户上传</label>
+    <div class="col-sm-9"><select class="form-control" name="forcelogin" default="${config.forcelogin}"><option value="0">否</option><option value="1">是</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/>
+   </div>
+  </div>
+  </form>
+</div>
+</div>`;
+  } else if (mod === 'green') {
+    pageTitle = '图片检测设置';
+    const greenLabelPorn = config.green_label_porn ? config.green_label_porn.split(',') : [];
+    const greenLabelTerrorism = config.green_label_terrorism ? config.green_label_terrorism.split(',') : [];
+    panelBody = `<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">图片检测设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+    <label class="col-sm-3 control-label">图片违规检测</label>
+    <div class="col-sm-9"><select class="form-control" name="green_check" default="${config.green_check}"><option value="0">关闭</option><option value="1">阿里云内容安全接口</option><option value="2">腾讯云内容安全接口</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">AccessKey Id</label>
+    <div class="col-sm-9"><input type="text" name="green_ak" value="${config.green_ak}" class="form-control"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">AccessKey Secret</label>
+    <div class="col-sm-9"><input type="text" name="green_sk" value="${config.green_sk}" class="form-control"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">图片检测接入区域</label>
+    <div class="col-sm-9"><select class="form-control" name="green_region" default="${config.green_region}"><option value="cn-beijing">华北2（北京）</option><option value="cn-shanghai">华东2（上海）</option><option value="cn-shenzhen">华南1（深圳）</option><option value="ap-southeast-1">新加坡</option><option value="us-west-1">美西</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">图片智能鉴黄</label>
+    <div class="col-sm-9"><select class="form-control" name="green_check_porn" default="${config.green_check_porn}"><option value="0">关闭</option><option value="1">开启</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">图片智能鉴黄屏蔽类型</label>
+    <div class="col-sm-9">
+    <label class="checkbox-inline"><input type="checkbox" name="green_label_porn" value="porn" ${greenLabelPorn.includes('porn') ? 'checked' : ''}/> 色情图片（porn）</label>
+    <label class="checkbox-inline"><input type="checkbox" name="green_label_porn" value="sexy" ${greenLabelPorn.includes('sexy') ? 'checked' : ''}/> 性感图片（sexy）</label>
+    </div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">图片暴恐涉政识别</label>
+    <div class="col-sm-9"><select class="form-control" name="green_check_terrorism" default="${config.green_check_terrorism}"><option value="0">关闭</option><option value="1">开启</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">图片暴恐涉政识别屏蔽类型</label>
+    <div class="col-sm-9">
+    <label class="checkbox-inline"><input type="checkbox" name="green_label_terrorism" value="bloody" ${greenLabelTerrorism.includes('bloody') ? 'checked' : ''}/> 血腥（bloody）</label>
+    <label class="checkbox-inline"><input type="checkbox" name="green_label_terrorism" value="terrorism" ${greenLabelTerrorism.includes('terrorism') ? 'checked' : ''}/> 暴恐（terrorism）</label>
+    </div>
+  </div><br/>
+  <div class="form-group">
+    <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/>
+   </div>
+  </div>
+  </form>
+</div>
+</div>`;
+  } else if (mod === 'api') {
+    pageTitle = '上传API设置';
+    const siteUrlStr2 = siteUrl(c);
+    panelBody = `<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">上传API设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+  <div class="form-group">
+    <label class="col-sm-3 control-label">上传API开关</label>
+    <div class="col-sm-9"><select class="form-control" name="api_open" default="${config.api_open}"><option value="0">关闭</option><option value="1">开启</option></select></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-3 control-label">来源域名白名单</label>
+    <div class="col-sm-9"><input type="text" name="api_referer" value="${config.api_referer}" class="form-control" placeholder="多个域名用|隔开"/><font color="green">多个域名用|隔开，不填写则不限制来源域名</font></div>
+  </div><br/>
+  <div class="form-group">
+    <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/>
+   </div>
+  </div>
+  </form>
+</div>
+</div>
+<div class="panel panel-info">
+<div class="panel-heading"><h3 class="panel-title">上传API文档</h3></div>
+<div class="panel-body">
+<pre>
+API接口地址：${siteUrlStr2}api.php
+
+当前API支持JSON、JSONP、FORM 3种返回方式，支持Web跨域调用，也支持程序中直接调用。
+
+请求方式：POST  multipart/form-data
+
+请求参数说明：
+file - 文件（必填）
+show - 是否首页显示（默认1）
+ispwd - 是否设置密码（默认0）
+pwd - 下载密码
+format - 返回格式（json/jsonp/form，默认json）
+
+返回参数说明：
+code - 0为成功
+msg - 提示信息
+hash - 文件MD5
+name - 文件名称
+size - 文件大小
+type - 文件格式
+downurl - 下载地址
+</pre>
+</div>
+</div>`;
+  } else if (mod === 'account') {
+    pageTitle = '管理员账号设置';
+    panelBody = `<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">管理员账号设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+  <div class="form-group">
+    <label class="col-sm-2 control-label">用户名</label>
+    <div class="col-sm-10"><input type="text" name="admin_user" value="${config.admin_user}" class="form-control" required/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">旧密码</label>
+    <div class="col-sm-10"><input type="password" name="oldpwd" value="" class="form-control" placeholder="请输入当前的管理员密码"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">新密码</label>
+    <div class="col-sm-10"><input type="password" name="newpwd" value="" class="form-control" placeholder="不修改请留空"/></div>
+  </div><br/>
+  <div class="form-group">
+    <label class="col-sm-2 control-label">重输密码</label>
+    <div class="col-sm-10"><input type="password" name="newpwd2" value="" class="form-control" placeholder="不修改请留空"/></div>
+  </div><br/>
+  <div class="form-group">
+    <div class="col-sm-offset-2 col-sm-10"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/>
+   </div>
+  </div>
+  </form>
+</div>
+</div>`;
+  }
+
+  const body = `<div class="container" style="padding-top:70px">
+<div class="col-xs-12 col-sm-10 col-lg-8 center-block" style="float: none;">
+${panelBody}
+</div>
+</div>
+${saveScript}`;
+
+  return c.html(adminLayout(pageTitle, body, siteUrlStr, 'set', true, config.title));
 });
 
 // ===================== 后台 AJAX =====================
@@ -959,6 +1492,67 @@ frontend.post('/admin/ajax/login', async (c) => {
     return c.json({ code: 0, msg: '登录成功' });
   }
   return c.json({ code: -1, msg: '用户名或密码错误' });
+});
+
+/** 保存设置 */
+frontend.post('/admin/ajax/set', async (c) => {
+  if (!await checkAdmin(c)) return c.json({ code: -1, msg: '未登录' });
+  const config = getConf(c);
+  const db = getDB(c);
+  const formData = await c.req.formData();
+
+  // 处理管理员账号特殊逻辑
+  const adminUser = formData.get('admin_user') as string | null;
+  const oldpwd = formData.get('oldpwd') as string | null;
+  const newpwd = formData.get('newpwd') as string | null;
+  const newpwd2 = formData.get('newpwd2') as string | null;
+
+  if (adminUser !== null) {
+    // 管理员账号设置
+    if (!adminUser) return c.json({ code: -1, msg: '用户名不能为空' });
+    await updateConfig(db, 'admin_user', adminUser);
+    if (newpwd && newpwd2) {
+      if (oldpwd !== config.admin_pwd) return c.json({ code: -1, msg: '旧密码不正确' });
+      if (newpwd !== newpwd2) return c.json({ code: -1, msg: '两次输入的密码不一致' });
+      await updateConfig(db, 'admin_pwd', newpwd);
+    }
+    clearConfigCache();
+    return c.json({ code: 0, msg: '修改成功！请重新登录' });
+  }
+
+  // 处理复选框类型字段（未选中时不会提交，需要设为 0）
+  const checkboxFields = ['login_qq', 'login_wx'];
+  // 处理多选字段（数组形式）
+  const multiFields = ['green_label_porn', 'green_label_terrorism'];
+
+  // 遍历所有提交的字段
+  const updates: Record<string, string> = {};
+  for (const [key, value] of formData.entries()) {
+    if (key === 'submit') continue;
+    if (multiFields.includes(key)) {
+      if (!updates[key]) updates[key] = '';
+      updates[key] = updates[key] ? updates[key] + ',' + value : value;
+    } else {
+      updates[key] = value as string;
+    }
+  }
+
+  // 确保复选框字段有值
+  for (const field of checkboxFields) {
+    if (!(field in updates)) updates[field] = '0';
+  }
+  // 确保多选字段有值
+  for (const field of multiFields) {
+    if (!(field in updates)) updates[field] = '';
+  }
+
+  // 保存到数据库
+  for (const [key, value] of Object.entries(updates)) {
+    await updateConfig(db, key, value);
+  }
+
+  clearConfigCache();
+  return c.json({ code: 0, msg: '设置保存成功' });
 });
 
 /** 仪表盘统计 */

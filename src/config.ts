@@ -9,6 +9,12 @@ export type StorageType = 'r2' | 's3' | 'github' | 'webdav';
 
 export interface AppConfig {
   title: string;
+  keywords: string;
+  description: string;
+  gonggao: string;
+  gg_file: string;
+  tongji: string;
+  filesearch: number;
   syskey: string;
   admin_user: string;
   admin_pwd: string;
@@ -25,18 +31,30 @@ export interface AppConfig {
   type_block: string;
   name_block: string;
   type_image: string;
+  type_audio: string;
   type_video: string;
   green_check: number;
   green_provider: string;   // 'aliyun' | 'qcloud' | ''
   green_ak: string;
   green_sk: string;
   green_region: string;
+  green_check_porn: number;
+  green_check_terrorism: number;
+  green_label_porn: string;
+  green_label_terrorism: string;
   videoreview: number;
   version: number;
   ip_type: number;
   blackip: string;
   upload_max_filesize: string;
   r2_public_url: string;
+  // 用户登录
+  userlogin: number;
+  login_apiurl: string;
+  login_appid: string;
+  login_appkey: string;
+  login_qq: number;
+  login_wx: number;
   // S3 配置
   s3_endpoint: string;
   s3_region: string;
@@ -61,6 +79,12 @@ export interface AppConfig {
 
 const defaults: AppConfig = {
   title: '彩虹外链网盘',
+  keywords: '',
+  description: '',
+  gonggao: '',
+  gg_file: '',
+  tongji: '',
+  filesearch: 1,
   syskey: 'changeme_please',
   admin_user: 'admin',
   admin_pwd: '123456',
@@ -77,18 +101,29 @@ const defaults: AppConfig = {
   type_block: '',
   name_block: '',
   type_image: 'jpg|jpeg|png|gif|webp|bmp|svg',
+  type_audio: 'mp3|wav|ogg|flac|aac|m4a',
   type_video: 'mp4|mov|webm|flv|avi|mkv',
   green_check: 0,
   green_provider: '',
   green_ak: '',
   green_sk: '',
   green_region: 'cn-beijing',
+  green_check_porn: 0,
+  green_check_terrorism: 0,
+  green_label_porn: 'porn,sexy',
+  green_label_terrorism: 'bloody,terrorism',
   videoreview: 0,
   version: 1001,
   ip_type: 0,
   blackip: '',
   upload_max_filesize: '',
   r2_public_url: '',
+  userlogin: 0,
+  login_apiurl: '',
+  login_appid: '',
+  login_appkey: '',
+  login_qq: 0,
+  login_wx: 0,
   s3_endpoint: '',
   s3_region: '',
   s3_bucket: '',
