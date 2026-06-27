@@ -66,6 +66,47 @@ export async function deleteFile(db: D1Database, id: number): Promise<boolean> {
   return result.meta.changes > 0;
 }
 
+/** 更新文件信息 */
+export async function updateFile(db: D1Database, data: {
+  id: number; name: string; type: string; hide: number; pwd: string | null;
+}): Promise<void> {
+  await db.prepare(
+    `UPDATE pre_file SET name = ?, type = ?, hide = ?, pwd = ? WHERE id = ?`
+  ).bind(data.name, data.type || '', data.hide ?? 0, data.pwd ?? null, data.id).run();
+}
+
+/** 获取所有文件总数 */
+export async function getFileTotal(db: D1Database): Promise<number> {
+  const r = await db.prepare('SELECT count(*) as c FROM pre_file').first<{ c: number }>();
+  return r?.c ?? 0;
+}
+
+/** 获取指定日期范围文件数 */
+export async function getFileCountByDateRange(db: D1Database, from: string, to?: string): Promise<number> {
+  if (to) {
+    const r = await db.prepare(
+      'SELECT count(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
+    ).bind(from, to).first<{ c: number }>();
+    return r?.c ?? 0;
+  }
+  const r = await db.prepare(
+    'SELECT count(*) as c FROM pre_file WHERE addtime >= ?'
+  ).bind(from).first<{ c: number }>();
+  return r?.c ?? 0;
+}
+
+/** 分页查询所有文件（无附加条件，仪表盘使用） */
+export async function getFileListAll(db: D1Database, options: {
+  offset: number; limit: number; orderby?: string;
+}): Promise<{ total: number; rows: FileRow[] }> {
+  const order = options.orderby === 'count' ? 'count DESC' : 'id DESC';
+  const r = await db.prepare('SELECT count(*) as c FROM pre_file').first<{ c: number }>();
+  const { results } = await db.prepare(
+    `SELECT * FROM pre_file ORDER BY ${order} LIMIT ? OFFSET ?`
+  ).bind(options.limit, options.offset).all<FileRow>();
+  return { total: r?.c ?? 0, rows: results };
+}
+
 /** 更新文件计数与最后访问时间 */
 export async function touchFile(db: D1Database, id: number): Promise<void> {
   await db.prepare(

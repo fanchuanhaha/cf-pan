@@ -274,7 +274,7 @@ export class GitHubApiStorage implements IStorage {
 
   async savefile(name: string, tmpfile: string, contentType?: string): Promise<boolean> {
     // GitHub API 不需要本地临时文件
-    return this.upload(name, new Uint8Array(0), contentType);
+    return this.upload(name, new Uint8Array(0) as unknown as ArrayBuffer, contentType);
   }
 
   async getinfo(name: string): Promise<{ length: number; content_type: string } | null> {

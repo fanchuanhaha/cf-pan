@@ -78,14 +78,12 @@ export class S3Storage implements IStorage {
 
   async downfile(name: string, range?: [number, number]): Promise<Response | null> {
     try {
-      const cmdInput: Parameters<typeof this.client.send>[0] = new GetObjectCommand({
+      const cmd = new GetObjectCommand({
         Bucket: this.cfg.bucket,
         Key: this.key(name),
+        Range: range ? `bytes=${range[0]}-${range[1]}` : undefined,
       });
-      if (range) {
-        (cmdInput.input as Record<string, unknown>).Range = `bytes=${range[0]}-${range[1]}`;
-      }
-      const result = await this.client.send(cmdInput as GetObjectCommand);
+      const result = await this.client.send(cmd);
       if (!result.Body) return null;
 
       const headers: Record<string, string> = {

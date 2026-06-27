@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStor, getConf } from '../middleware';
+import { getDB, getStorOrThrow, getConf } from '../middleware';
 import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock } from '../db';
 import { updateConfig, clearConfigCache } from '../config';
 import { verifyAdminToken } from '../auth/admin';
@@ -27,7 +27,7 @@ adminAjax.get('/getcount', async (c) => {
   const today = new Date().toISOString().substring(0, 10) + ' 00:00:00';
   const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10) + ' 00:00:00';
 
-  const [[total], [todayCount], [yesterdayCount], [userCount]] = await Promise.all([
+  const [total, todayCount, yesterdayCount, userCount] = await Promise.all([
     db.prepare('SELECT count(*) as cnt FROM pre_file').first<{ cnt: number }>(),
     db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ?").bind(today).first<{ cnt: number }>(),
     db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ? AND addtime < ?").bind(yesterday, today).first<{ cnt: number }>(),
@@ -81,7 +81,7 @@ adminAjax.get('/setBlock', async (c) => {
 // 删除文件
 adminAjax.get('/delFile', async (c) => {
   const db = getDB(c);
-  const stor = getStor(c);
+  const stor = getStorOrThrow(c);
   const id = parseInt(c.req.query('id') || '0');
   if (!id) return jsonError(c, '参数错误');
 
@@ -97,7 +97,7 @@ adminAjax.get('/delFile', async (c) => {
 // 批量操作
 adminAjax.post('/operation', async (c) => {
   const db = getDB(c);
-  const stor = getStor(c);
+  const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const status = parseInt(body['status'] || '0');
   const checkboxStr = body['checkbox[]'] || body['checkbox'];

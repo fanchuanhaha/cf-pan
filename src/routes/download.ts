@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStor } from '../middleware';
+import { getDB, getStorOrThrow } from '../middleware';
 import { getFileByHash, touchFile } from '../db';
 import { fileOutput } from '../services/upload';
 
@@ -11,7 +11,7 @@ const download = new Hono<AppEnv>();
 // 处理 /down.php/:hash.:ext 和 /down.php/:hash.:ext&:pwd
 download.get('/*', async (c) => {
   const db = getDB(c);
-  const stor = getStor(c);
+  const stor = getStorOrThrow(c);
 
   const path = c.req.path.replace(/^\/down\.php\//, '');
   const parts = path.split('&');

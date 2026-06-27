@@ -139,9 +139,9 @@ export async function updateConfig(db: D1Database, k: string, v: string): Promis
   if (cached && k in cached) {
     const key = k as keyof AppConfig;
     if (typeof defaults[key] === 'number') {
-      (cached as Record<string, unknown>)[key] = parseInt(v) || 0;
+      (cached as unknown as Record<string, unknown>)[key] = parseInt(v) || 0;
     } else {
-      (cached as Record<string, unknown>)[key] = v;
+      (cached as unknown as Record<string, unknown>)[key] = v;
     }
   }
 }

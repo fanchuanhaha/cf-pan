@@ -10,196 +10,207 @@ import { jsonResult, jsonError } from '../utils/response';
 
 const install = new Hono<AppEnv>();
 
-/** 安装页面 HTML */
+/** 安装页面 HTML（仿照原项目 header.php + footer.php 风格） */
 function installPage(errorMsg: string = '', selectedType: string = 'r2'): string {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="renderer" content="webkit">
+<meta name="viewport" content="width=device-width,height=device-height,inital-scale=1.0,maximum-scale=1.0,user-scalable=no;">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>彩虹外链网盘 - 安装向导</title>
-<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/css/bootstrap-material-design.min.css">
+<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/css/ripples.min.css">
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<!--[if lt IE 9]>
+<script src="https://s4.zstatic.net/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
+<script src="https://s4.zstatic.net/ajax/libs/respond.js/1.4.2/respond.min.js"></script>
+<![endif]-->
+<script src="https://s4.zstatic.net/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
 <style>
-body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px 0; }
-.install-box { max-width: 720px; margin: 30px auto; background: #fff; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); overflow: hidden; }
-.install-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 30px; text-align: center; }
-.install-header h1 { margin: 0; font-size: 28px; }
-.install-header p { margin: 10px 0 0; opacity: 0.9; }
-.install-body { padding: 30px; }
+.install-header { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); color: #fff; padding: 20px 0; margin-bottom: 20px; }
+.install-header h2 { margin: 0; font-weight: 400; }
+.install-header small { color: #f1f1f1; }
 .storage-tabs { display: flex; border-bottom: 2px solid #eee; margin-bottom: 25px; }
-.storage-tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; background: #f8f9fa; color: #666; border: none; border-bottom: 3px solid transparent; transition: all 0.2s; }
-.storage-tab.active { background: #fff; color: #667eea; border-bottom-color: #667eea; font-weight: bold; }
+.storage-tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; background: #f8f9fa; color: #666; border: 1px solid #e7e7e7; border-bottom: none; transition: all 0.2s; }
+.storage-tab.active { background: #fff; color: #2e8bcc; font-weight: bold; border-bottom: 3px solid #2e8bcc; margin-bottom: -2px; }
 .storage-tab i { display: block; font-size: 24px; margin-bottom: 5px; }
 .storage-form { display: none; }
 .storage-form.active { display: block; }
-.form-group { margin-bottom: 18px; }
-.form-group label { font-weight: 600; color: #333; margin-bottom: 6px; display: block; }
-.form-group .form-control { border-radius: 6px; border: 1px solid #ddd; padding: 10px 12px; }
-.form-group .help-block { color: #999; font-size: 12px; margin-top: 4px; }
-.alert { border-radius: 6px; padding: 12px 15px; margin-bottom: 20px; }
-.alert-danger { background: #fee; color: #c33; border: 1px solid #fcc; }
-.alert-info { background: #e7f3ff; color: #0c5da5; border: 1px solid #b8daff; }
-.btn-install { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; border: none; padding: 12px 30px; border-radius: 6px; font-size: 16px; cursor: pointer; width: 100%; }
-.btn-install:hover { opacity: 0.9; color: #fff; }
-.btn-install:disabled { opacity: 0.5; cursor: not-allowed; }
 .required { color: #e44; }
+.btn-install { background: #2e8bcc; color: #fff; border: none; padding: 10px 30px; border-radius: 4px; font-size: 16px; cursor: pointer; width: 100%; }
+.btn-install:hover { background: #2976a8; color: #fff; }
+.btn-install:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-test { background: #5bc0de; }
+.btn-test:hover { background: #46b8da; }
 </style>
 </head>
 <body>
-<div class="install-box">
-  <div class="install-header">
-    <h1><i class="fa fa-cloud"></i> 彩虹外链网盘</h1>
-    <p>Cloudflare Workers + D1 + 存储后端 一体化部署</p>
-  </div>
-  <div class="install-body">
-    <div class="alert alert-info">
-      <i class="fa fa-info-circle"></i> 请选择并配置一种存储后端。所有配置项都保存在 D1 数据库，可随时通过后台修改。
-    </div>
-    ${errorMsg ? `<div class="alert alert-danger"><i class="fa fa-exclamation-circle"></i> ${errorMsg}</div>` : ''}
-
-    <div class="storage-tabs">
-      <button type="button" class="storage-tab ${selectedType === 'r2' ? 'active' : ''}" data-target="form-r2">
-        <i class="fa fa-database"></i>Cloudflare R2
-      </button>
-      <button type="button" class="storage-tab ${selectedType === 's3' ? 'active' : ''}" data-target="form-s3">
-        <i class="fa fa-cloud"></i>S3 兼容
-      </button>
-      <button type="button" class="storage-tab ${selectedType === 'github' ? 'active' : ''}" data-target="form-github">
-        <i class="fa fa-github"></i>GitHub API
-      </button>
-      <button type="button" class="storage-tab ${selectedType === 'webdav' ? 'active' : ''}" data-target="form-webdav">
-        <i class="fa fa-cloud"></i>WebDAV
-      </button>
-    </div>
-
-    <form id="installForm" method="POST" action="/install/save">
-      <!-- 管理员账号 -->
-      <div class="form-group">
-        <label>管理员账号 <span class="required">*</span></label>
-        <input type="text" name="admin_user" class="form-control" value="admin" required>
-      </div>
-      <div class="form-group">
-        <label>管理员密码 <span class="required">*</span></label>
-        <input type="password" name="admin_pwd" class="form-control" placeholder="请设置一个强密码" required>
-      </div>
-      <div class="form-group">
-        <label>站点名称</label>
-        <input type="text" name="title" class="form-control" value="彩虹外链网盘">
-      </div>
-
-      <!-- R2 表单 -->
-      <div class="storage-form ${selectedType === 'r2' ? 'active' : ''}" id="form-r2">
-        <h4 style="margin-top:20px"><i class="fa fa-database"></i> Cloudflare R2 配置</h4>
-        <div class="alert alert-info">
-          R2 存储桶需在 Cloudflare Dashboard 中手动创建。wrangler.toml 中已绑定 <code>FILE_R2</code>，此处只需确认即可。
-        </div>
-        <div class="form-group">
-          <label>存储桶名称</label>
-          <input type="text" class="form-control" value="pan-files" disabled>
-          <div class="help-block">名称在 wrangler.toml 中固定配置</div>
-        </div>
-      </div>
-
-      <!-- S3 表单 -->
-      <div class="storage-form ${selectedType === 's3' ? 'active' : ''}" id="form-s3">
-        <h4 style="margin-top:20px"><i class="fa fa-cloud"></i> S3 兼容存储配置</h4>
-        <div class="form-group">
-          <label>Endpoint (S3 API 地址) <span class="required">*</span></label>
-          <input type="text" name="s3_endpoint" class="form-control" placeholder="https://s3.amazonaws.com 或 https://oss-cn-hangzhou.aliyuncs.com">
-          <div class="help-block">支持 AWS S3 / 阿里云 OSS / 腾讯云 COS / MinIO 等</div>
-        </div>
-        <div class="form-group">
-          <label>Region <span class="required">*</span></label>
-          <input type="text" name="s3_region" class="form-control" placeholder="us-east-1 / cn-hangzhou / auto">
-        </div>
-        <div class="form-group">
-          <label>Bucket 名称 <span class="required">*</span></label>
-          <input type="text" name="s3_bucket" class="form-control" placeholder="my-bucket">
-        </div>
-        <div class="form-group">
-          <label>AccessKey ID <span class="required">*</span></label>
-          <input type="text" name="s3_ak" class="form-control">
-        </div>
-        <div class="form-group">
-          <label>SecretAccessKey <span class="required">*</span></label>
-          <input type="password" name="s3_sk" class="form-control">
-        </div>
-      </div>
-
-      <!-- GitHub 表单 -->
-      <div class="storage-form ${selectedType === 'github' ? 'active' : ''}" id="form-github">
-        <h4 style="margin-top:20px"><i class="fa fa-github"></i> GitHub API 存储配置</h4>
-        <div class="alert alert-info">
-          适用于 Cloudflare API Token 无 R2 权限的场景。文件以 Git 提交方式存到 GitHub 仓库。
-          <br>需要 Token 具备 <code>repo</code> (完整仓库) 权限。
-        </div>
-        <div class="form-group">
-          <label>仓库 Owner (用户名或组织) <span class="required">*</span></label>
-          <input type="text" name="gh_owner" class="form-control" placeholder="octocat">
-        </div>
-        <div class="form-group">
-          <label>仓库名 <span class="required">*</span></label>
-          <input type="text" name="gh_repo" class="form-control" placeholder="my-pan-storage">
-          <div class="help-block">建议使用一个空的私有仓库</div>
-        </div>
-        <div class="form-group">
-          <label>Personal Access Token <span class="required">*</span></label>
-          <input type="password" name="gh_token" class="form-control" placeholder="ghp_xxxxxxxxxxxx">
-          <div class="help-block">需要 <code>repo</code> 权限。Token 仅保存在 D1 中，不会上传到任何地方。</div>
-        </div>
-        <div class="form-group">
-          <label>分支 (留空则使用默认分支)</label>
-          <input type="text" name="gh_ref" class="form-control" placeholder="main">
-        </div>
-        <div class="form-group">
-          <label>存储子目录 (可选)</label>
-          <input type="text" name="gh_folder" class="form-control" placeholder="留空则使用 file/">
-        </div>
-        <div class="form-group">
-          <label>API Base (自定义 GitHub 代理时填写)</label>
-          <input type="text" name="gh_api_base" class="form-control" value="https://api.github.com">
-        </div>
-      </div>
-
-      <!-- WebDAV 表单 -->
-      <div class="storage-form ${selectedType === 'webdav' ? 'active' : ''}" id="form-webdav">
-        <h4 style="margin-top:20px"><i class="fa fa-cloud"></i> WebDAV 存储配置</h4>
-        <div class="alert alert-info">
-          兼容坚果云 / 群晖 / Nextcloud / ownCloud / 通用 WebDAV 服务。通过 HTTP 协议 (Basic Auth) 操作远程存储。
-        </div>
-        <div class="form-group">
-          <label>WebDAV 服务地址 <span class="required">*</span></label>
-          <input type="text" name="webdav_endpoint" class="form-control" placeholder="https://dav.example.com/remote.php/webdav/">
-          <div class="help-block">必须以 <code>http://</code> 或 <code>https://</code> 开头，路径末尾可有可无 <code>/</code></div>
-        </div>
-        <div class="form-group">
-          <label>用户名 <span class="required">*</span></label>
-          <input type="text" name="webdav_user" class="form-control" placeholder="username">
-        </div>
-        <div class="form-group">
-          <label>密码 / 应用专用密码 <span class="required">*</span></label>
-          <input type="password" name="webdav_pass" class="form-control" placeholder="password">
-          <div class="help-block">坚果云 / 群晖等需使用"应用专用密码"，而非登录密码。密码仅保存在 D1 中。</div>
-        </div>
-        <div class="form-group">
-          <label>存储子目录 (可选)</label>
-          <input type="text" name="webdav_folder" class="form-control" value="file" placeholder="留空则使用 file/">
-          <div class="help-block">文件会保存到此子目录下（路径分隔用 <code>/</code>）</div>
-        </div>
-      </div>
-
-      <input type="hidden" name="storage_type" id="storage_type" value="${selectedType}">
-
-      <div class="form-group" style="margin-top:30px">
-        <button type="button" id="btnTest" class="btn-install" style="background:#17a2b8;margin-bottom:10px;"><i class="fa fa-plug"></i> 测试连接</button>
-        <button type="submit" class="btn-install"><i class="fa fa-check"></i> 完成安装</button>
-      </div>
-      <div id="testResult" style="margin-top:15px;display:none;"></div>
-    </form>
-  </div>
+<div class="install-header">
+<div class="container">
+  <h2><i class="fa fa-cloud"></i> 彩虹外链网盘 安装向导</h2>
+  <small>Cloudflare Workers + D1 + 多存储后端 一体化部署</small>
 </div>
+</div>
+<div class="container">
+<div class="well bs-component">
+  <div class="alert alert-info">
+    <i class="fa fa-info-circle"></i> 请选择并配置一种存储后端。所有配置项都保存在 D1 数据库，可随时通过后台修改。
+  </div>
+  ${errorMsg ? `<div class="alert alert-danger"><i class="fa fa-exclamation-circle"></i> ${errorMsg}</div>` : ''}
 
+  <div class="storage-tabs">
+    <button type="button" class="storage-tab ${selectedType === 'r2' ? 'active' : ''}" data-target="form-r2">
+      <i class="fa fa-database"></i>Cloudflare R2
+    </button>
+    <button type="button" class="storage-tab ${selectedType === 's3' ? 'active' : ''}" data-target="form-s3">
+      <i class="fa fa-cloud"></i>S3 兼容
+    </button>
+    <button type="button" class="storage-tab ${selectedType === 'github' ? 'active' : ''}" data-target="form-github">
+      <i class="fa fa-github"></i>GitHub API
+    </button>
+    <button type="button" class="storage-tab ${selectedType === 'webdav' ? 'active' : ''}" data-target="form-webdav">
+      <i class="fa fa-cloud"></i>WebDAV
+    </button>
+  </div>
+
+  <form id="installForm" method="POST" action="/install/save">
+    <!-- 管理员账号 -->
+    <div class="form-group">
+      <label>管理员账号 <span class="required">*</span></label>
+      <input type="text" name="admin_user" class="form-control" value="admin" required>
+    </div>
+    <div class="form-group">
+      <label>管理员密码 <span class="required">*</span></label>
+      <input type="password" name="admin_pwd" class="form-control" placeholder="请设置一个强密码" required>
+    </div>
+    <div class="form-group">
+      <label>站点名称</label>
+      <input type="text" name="title" class="form-control" value="彩虹外链网盘">
+    </div>
+
+    <!-- R2 表单 -->
+    <div class="storage-form ${selectedType === 'r2' ? 'active' : ''}" id="form-r2">
+      <h4 style="margin-top:20px"><i class="fa fa-database"></i> Cloudflare R2 配置</h4>
+      <div class="alert alert-info">
+        R2 存储桶需在 Cloudflare Dashboard 中手动创建。wrangler.toml 中已绑定 <code>FILE_R2</code>，此处只需确认即可。
+      </div>
+      <div class="form-group">
+        <label>存储桶名称</label>
+        <input type="text" class="form-control" value="pan-files" disabled>
+        <span class="help-block">名称在 wrangler.toml 中固定配置</span>
+      </div>
+    </div>
+
+    <!-- S3 表单 -->
+    <div class="storage-form ${selectedType === 's3' ? 'active' : ''}" id="form-s3">
+      <h4 style="margin-top:20px"><i class="fa fa-cloud"></i> S3 兼容存储配置</h4>
+      <div class="form-group">
+        <label>Endpoint (S3 API 地址) <span class="required">*</span></label>
+        <input type="text" name="s3_endpoint" class="form-control" placeholder="https://s3.amazonaws.com 或 https://oss-cn-hangzhou.aliyuncs.com">
+        <span class="help-block">支持 AWS S3 / 阿里云 OSS / 腾讯云 COS / MinIO 等</span>
+      </div>
+      <div class="form-group">
+        <label>Region <span class="required">*</span></label>
+        <input type="text" name="s3_region" class="form-control" placeholder="us-east-1 / cn-hangzhou / auto">
+      </div>
+      <div class="form-group">
+        <label>Bucket 名称 <span class="required">*</span></label>
+        <input type="text" name="s3_bucket" class="form-control" placeholder="my-bucket">
+      </div>
+      <div class="form-group">
+        <label>AccessKey ID <span class="required">*</span></label>
+        <input type="text" name="s3_ak" class="form-control">
+      </div>
+      <div class="form-group">
+        <label>SecretAccessKey <span class="required">*</span></label>
+        <input type="password" name="s3_sk" class="form-control">
+      </div>
+    </div>
+
+    <!-- GitHub 表单 -->
+    <div class="storage-form ${selectedType === 'github' ? 'active' : ''}" id="form-github">
+      <h4 style="margin-top:20px"><i class="fa fa-github"></i> GitHub API 存储配置</h4>
+      <div class="alert alert-info">
+        适用于 Cloudflare API Token 无 R2 权限的场景。文件以 Git 提交方式存到 GitHub 仓库。
+        <br>需要 Token 具备 <code>repo</code> (完整仓库) 权限。
+      </div>
+      <div class="form-group">
+        <label>仓库 Owner (用户名或组织) <span class="required">*</span></label>
+        <input type="text" name="gh_owner" class="form-control" placeholder="octocat">
+      </div>
+      <div class="form-group">
+        <label>仓库名 <span class="required">*</span></label>
+        <input type="text" name="gh_repo" class="form-control" placeholder="my-pan-storage">
+        <span class="help-block">建议使用一个空的私有仓库</span>
+      </div>
+      <div class="form-group">
+        <label>Personal Access Token <span class="required">*</span></label>
+        <input type="password" name="gh_token" class="form-control" placeholder="ghp_xxxxxxxxxxxx">
+        <span class="help-block">需要 <code>repo</code> 权限。Token 仅保存在 D1 中，不会上传到任何地方。</span>
+      </div>
+      <div class="form-group">
+        <label>分支 (留空则使用默认分支)</label>
+        <input type="text" name="gh_ref" class="form-control" placeholder="main">
+      </div>
+      <div class="form-group">
+        <label>存储子目录 (可选)</label>
+        <input type="text" name="gh_folder" class="form-control" placeholder="留空则使用 file/">
+      </div>
+      <div class="form-group">
+        <label>API Base (自定义 GitHub 代理时填写)</label>
+        <input type="text" name="gh_api_base" class="form-control" value="https://api.github.com">
+      </div>
+    </div>
+
+    <!-- WebDAV 表单 -->
+    <div class="storage-form ${selectedType === 'webdav' ? 'active' : ''}" id="form-webdav">
+      <h4 style="margin-top:20px"><i class="fa fa-cloud"></i> WebDAV 存储配置</h4>
+      <div class="alert alert-info">
+        兼容坚果云 / 群晖 / Nextcloud / ownCloud / 通用 WebDAV 服务。通过 HTTP 协议 (Basic Auth) 操作远程存储。
+      </div>
+      <div class="form-group">
+        <label>WebDAV 服务地址 <span class="required">*</span></label>
+        <input type="text" name="webdav_endpoint" class="form-control" placeholder="https://dav.example.com/remote.php/webdav/">
+        <span class="help-block">必须以 <code>http://</code> 或 <code>https://</code> 开头，路径末尾可有可无 <code>/</code></span>
+      </div>
+      <div class="form-group">
+        <label>用户名 <span class="required">*</span></label>
+        <input type="text" name="webdav_user" class="form-control" placeholder="username">
+      </div>
+      <div class="form-group">
+        <label>密码 / 应用专用密码 <span class="required">*</span></label>
+        <input type="password" name="webdav_pass" class="form-control" placeholder="password">
+        <span class="help-block">坚果云 / 群晖等需使用"应用专用密码"，而非登录密码。密码仅保存在 D1 中。</span>
+      </div>
+      <div class="form-group">
+        <label>存储子目录 (可选)</label>
+        <input type="text" name="webdav_folder" class="form-control" value="file" placeholder="留空则使用 file/">
+        <span class="help-block">文件会保存到此子目录下（路径分隔用 <code>/</code>）</span>
+      </div>
+    </div>
+
+    <input type="hidden" name="storage_type" id="storage_type" value="${selectedType}">
+
+    <div class="form-group" style="margin-top:30px">
+      <button type="button" id="btnTest" class="btn-install btn-test" style="margin-bottom:10px;"><i class="fa fa-plug"></i> 测试连接</button>
+      <button type="submit" class="btn-install"><i class="fa fa-check"></i> 完成安装</button>
+    </div>
+    <div id="testResult" style="margin-top:15px;display:none;"></div>
+  </form>
+</div>
+</div>
+<footer class="footer text-center">
+<div class="container">
+<p class="text-muted">Copyright &copy; ${new Date().getFullYear()} <a href="/">彩虹外链网盘</a></p>
+</div>
+</footer>
+<script src="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/js/bootstrap.min.js"></script>
+<script src="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/material.min.js"></script>
+<script src="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/ripples.min.js"></script>
 <script>
 document.querySelectorAll('.storage-tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -244,6 +255,7 @@ document.getElementById('btnTest').addEventListener('click', async () => {
     btn.innerHTML = '<i class="fa fa-plug"></i> 测试连接';
   }
 });
+$.material.init();
 </script>
 </body>
 </html>`;

@@ -45,17 +45,17 @@ export const initApp = (): MiddlewareHandler<AppEnv> => {
 };
 
 /** 快速获取 db */
-export function getDB(c: Context<{ Variables: AppVariables }>): D1Database {
+export function getDB(c: Context<AppEnv>): D1Database {
   return c.var.db;
 }
 
 /** 快速获取 stor（可能为 null） */
-export function getStor(c: Context<{ Variables: AppVariables }>): IStorage | null {
+export function getStor(c: Context<AppEnv>): IStorage | null {
   return c.var.stor;
 }
 
 /** 快速获取 stor，如果未就绪则抛错 */
-export function getStorOrThrow(c: Context<{ Variables: AppVariables }>): IStorage {
+export function getStorOrThrow(c: Context<AppEnv>): IStorage {
   if (!c.var.stor) {
     throw new Error('Storage not configured');
   }
@@ -63,11 +63,11 @@ export function getStorOrThrow(c: Context<{ Variables: AppVariables }>): IStorag
 }
 
 /** 快速获取 config */
-export function getConf(c: Context<{ Variables: AppVariables }>): AppConfig {
+export function getConf(c: Context<AppEnv>): AppConfig {
   return c.var.config;
 }
 
 /** 检查存储是否就绪 */
-export function isStorageReady(c: Context<{ Variables: AppVariables }>): boolean {
+export function isStorageReady(c: Context<AppEnv>): boolean {
   return c.var.storageOk && c.var.stor !== null;
 }

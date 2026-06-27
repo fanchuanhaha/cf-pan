@@ -9,13 +9,14 @@ export interface GreenCheckResult {
 }
 
 /** 对已上传到 R2 的图片进行 NSFW 检测 */
-export async function checkImage(hash: string, ext: string, env: { FILE_R2: R2Bucket; AI?: unknown }): Promise<GreenCheckResult> {
+export async function checkImage(hash: string, ext: string, env: { FILE_R2?: R2Bucket; AI?: unknown }): Promise<GreenCheckResult> {
   const config = getConfig();
   if (!config.green_check) return { safe: true };
 
   // Cloudflare AI NSFW 模型
   if (config.green_provider === 'cf' || !config.green_provider) {
     try {
+      if (!env.FILE_R2) return { safe: true };
       const obj = await env.FILE_R2.get(`file/${hash}`);
       if (!obj) return { safe: true };
       

@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStor, getConf } from '../middleware';
+import { getDB, getStorOrThrow, getConf } from '../middleware';
 import { getFileByHash, insertFile } from '../db';
 import { isBlocked, sanitizeFileName } from '../services/upload';
 import { getFileExt, getMimeType } from '../utils/mime';
@@ -12,7 +12,7 @@ const api = new Hono<AppEnv>();
 
 api.post('/', async (c) => {
   const db = getDB(c);
-  const stor = getStor(c);
+  const stor = getStorOrThrow(c);
   const config = getConf(c);
 
   if (!config.api_open) {

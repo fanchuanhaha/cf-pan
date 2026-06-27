@@ -2,17 +2,17 @@
 import type { Context } from 'hono';
 
 /** JSON 成功响应 */
-export function jsonOk(c: Context, data: Record<string, unknown>, status = 200): Response {
+export function jsonOk(c: Context, data: Record<string, unknown>, status: 200 | 201 = 200): Response {
   return c.json(data, status);
 }
 
 /** JSON 错误响应 */
-export function jsonError(c: Context, msg: string, code = -1, status = 200): Response {
+export function jsonError(c: Context, msg: string, code = -1, status: 200 | 400 | 403 | 404 | 500 = 200): Response {
   return c.json({ code, msg }, status);
 }
 
 /** JSON 响应（带自定义 HTTP 状态） */
-export function jsonResult(c: Context, result: Record<string, unknown>, status = 200): Response {
+export function jsonResult(c: Context, result: Record<string, unknown>, status: 200 | 201 | 400 | 500 = 200): Response {
   return c.json(result, status);
 }
 

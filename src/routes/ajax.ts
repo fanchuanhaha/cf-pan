@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv, AppVariables } from '../middleware';
-import { getDB, getStor, getConf } from '../middleware';
+import { getDB, getStorOrThrow, getConf } from '../middleware';
 import { getFileByHash, insertFile, deleteFile, getFileById, getTodayUploadCount, now } from '../db';
 import { isBlocked, sanitizeFileName } from '../services/upload';
 import { getFileExt, getMimeType, isView as isViewExt } from '../utils/mime';
@@ -118,7 +118,7 @@ ajax.post('/upload_part', async (c) => {
   const ext = getFileExt(realName);
   const arrayBuf = await file.arrayBuffer();
 
-  const stor = getStor(c);
+  const stor = getStorOrThrow(c);
   const success = await stor.upload(hash, arrayBuf, getMimeType(ext));
   if (!success) return jsonError(c, '文件上传失败');
 
@@ -163,7 +163,7 @@ ajax.post('/upload_part', async (c) => {
 // 删除文件
 ajax.post('/deleteFile', async (c) => {
   const db = getDB(c);
-  const stor = getStor(c);
+  const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
 
   const hash = String(body['hash'] || '');

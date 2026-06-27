@@ -58,7 +58,7 @@ export class R2Storage implements IStorage {
 
   async upload(name: string, body: ArrayBuffer | ReadableStream, contentType?: string): Promise<boolean> {
     try {
-      await this.bucket.put(this.key(name), body, {
+      await this.bucket.put(this.key(name), body as ReadableStream | ArrayBuffer, {
         httpMetadata: contentType ? { contentType } : undefined,
       });
       return true;
@@ -69,7 +69,7 @@ export class R2Storage implements IStorage {
   }
 
   async savefile(name: string, tmpfile: string, contentType?: string): Promise<boolean> {
-    return this.upload(name, new Uint8Array(0), contentType); // R2 不需要本地文件
+    return this.upload(name, new Uint8Array(0) as unknown as ArrayBuffer, contentType); // R2 不需要本地文件
   }
 
   async getinfo(name: string): Promise<{ length: number; content_type: string } | null> {

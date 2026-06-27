@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStor } from '../middleware';
+import { getDB, getStorOrThrow } from '../middleware';
 import { getFileByHash, touchFile } from '../db';
 import { fileOutput } from '../services/upload';
 
@@ -11,7 +11,7 @@ const view = new Hono<AppEnv>();
 // /view.php/:hash.:ext 直接流式输出文件 (用于 img/audio/video src)
 view.get('/*', async (c) => {
   const db = getDB(c);
-  const stor = getStor(c);
+  const stor = getStorOrThrow(c);
 
   const path = c.req.path.replace(/^\/view\.php\//, '');
   let hash: string;
