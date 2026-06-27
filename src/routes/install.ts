@@ -463,102 +463,77 @@ install.post('/test', async (c) => {
   }
 
   if (storageType === 'github') {
-    const owner = String(body['gh_owner'] || '');
-    const repo = String(body['gh_repo'] || '');
-    const token = String(body['gh_token'] || '');
-    const ref = String(body['gh_ref'] || '');
-    const apiBase = String(body['gh_api_base'] || 'https://api.github.com');
+    const owner = String(body['gh_owner'] || '').trim();
+    const repo = String(body['gh_repo'] || '').trim();
+    const token = String(body['gh_token'] || '').trim();
+    const ref = String(body['gh_ref'] || '').trim();
+    const apiBase = String(body['gh_api_base'] || 'https://api.github.com').trim();
+    const folder = String(body['gh_folder'] || '').trim();
+    
     if (!owner || !repo || !token) {
       return jsonError(c, '请填写 owner/repo/token');
     }
+    
     try {
-      // 测试连接
-      const res = await fetch(`${apiBase}/repos/${owner}/${repo}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Accept': 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'pan-worker',
-        },
+      // 直接使用 GitHubApiStorage 类进行测试，确保与实际使用完全一致
+      const { GitHubApiStorage } = await import('../storage/GitHubApiStorage');
+      const storage = new GitHubApiStorage({
+        owner,
+        repo,
+        token,
+        ref: ref || undefined,
+        defaultFolder: folder || undefined,
+        apiBase: apiBase || undefined,
       });
-      if (!res.ok) {
-        const t = await res.text();
-        return jsonError(c, `GitHub API 错误 (${res.status}): ${t.substring(0, 200)}`);
-      }
-      const data = await res.json() as any;
-
+      
+      // 调用 initialize 方法测试连接
+      await storage.initialize();
+      
       // 测试读写
-      const testPath = 'test-' + Date.now() + '.txt';
+      const testHash = 'test' + Date.now();
       const testContent = '彩虹外链网盘存储测试文件';
-
+      
       // 写入测试
-      const putRes = await fetch(`${apiBase}/repos/${owner}/${repo}/contents/${testPath}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Accept': 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'pan-worker',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: '测试写入',
-          content: btoa(testContent),
-          branch: ref || data.default_branch,
-        }),
-      });
-
-      if (!putRes.ok) {
-        const t = await putRes.text();
-        throw new Error(`写入测试失败: ${t.substring(0, 200)}`);
+      const encoder = new TextEncoder();
+      const testData = encoder.encode(testContent);
+      const uploadSuccess = await storage.upload(testHash, testData.buffer, 'text/plain');
+      
+      if (!uploadSuccess) {
+        throw new Error('写入测试失败');
       }
-
-      const putData = await putRes.json() as any;
-      const sha = putData.content?.sha;
-
+      
       // 读取测试
-      const getRes = await fetch(`${apiBase}/repos/${owner}/${repo}/contents/${testPath}?ref=${ref || data.default_branch}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Accept': 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'pan-worker',
-        },
-      });
-
-      if (getRes.ok) {
-        const getData = await getRes.json() as any;
-        const readContent = atob(getData.content || '');
-        if (readContent !== testContent) {
-          throw new Error('读取内容与写入内容不一致');
-        }
+      const downloadRes = await storage.downfile(testHash);
+      if (!downloadRes) {
+        throw new Error('读取测试失败：无法下载文件');
       }
-
+      
+      const downloadedText = await downloadRes.text();
+      if (downloadedText !== testContent) {
+        throw new Error('读取内容与写入内容不一致');
+      }
+      
       // 删除测试文件
-      if (sha) {
-        await fetch(`${apiBase}/repos/${owner}/${repo}/contents/${testPath}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-            'User-Agent': 'pan-worker',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message: '删除测试文件',
-            sha: sha,
-            branch: ref || data.default_branch,
-          }),
-        });
-      }
-
-      return jsonResult(c, {
-        ok: true,
-        message: `GitHub 连接成功！仓库: ${data.full_name}, 默认分支: ${data.default_branch}, 读写测试通过${ref && ref !== data.default_branch ? ' (注意：指定的 ref 与默认分支不同)' : ''}`
+      await storage.delete(testHash);
+      
+      return jsonResult(c, { 
+        ok: true, 
+        message: `GitHub 连接成功！读写测试通过。仓库: ${owner}/${repo}${ref ? `, 分支: ${ref}` : ''}` 
       });
     } catch (e: any) {
-      return jsonError(c, 'GitHub 测试失败: ' + (e.message || e));
+      let errorMsg = 'GitHub 测试失败';
+      if (e.message) {
+        if (e.message.includes('404')) {
+          errorMsg = '仓库不存在或 Token 没有访问权限。请检查：1) 仓库名称是否正确 2) Token 是否有 repo 权限 3) 如果是私有仓库，Token 必须有访问权限';
+        } else if (e.message.includes('401')) {
+          errorMsg = 'Token 无效或已过期';
+        } else if (e.message.includes('403')) {
+          errorMsg = '访问被拒绝或 API 限制';
+        } else {
+          errorMsg = e.message;
+        }
+      }
+      return jsonError(c, errorMsg);
     }
   }
 
