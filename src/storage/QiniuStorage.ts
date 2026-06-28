@@ -43,7 +43,7 @@ export class QiniuStorage implements IStorage {
     return `${folder}/${hash}`;
   }
 
-  /** URL 安全的 Base64（Base64URL） */
+  /** URL 安全的 Base64（与 PHP base64_urlSafeEncode 一致：仅替换 +/→-_，保留 =） */
   private base64UrlEncode(input: string | Uint8Array): string {
     let raw: string;
     if (typeof input === 'string') {
@@ -53,7 +53,8 @@ export class QiniuStorage implements IStorage {
       for (let i = 0; i < input.length; i++) bin += String.fromCharCode(input[i]);
       raw = btoa(bin);
     }
-    return raw.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return raw.replace(/\+/g, '-').replace(/\//g, '_');
+    // 不 strip =，与 PHP base64_urlSafeEncode 一致
   }
 
   /** base64url(entry(bucket,key))  —— 与 PHP Qiniu\entry() 一致 */
@@ -61,7 +62,7 @@ export class QiniuStorage implements IStorage {
     return this.base64UrlEncode(`${bucket}:${key}`);
   }
 
-  /** HMAC-SHA1，返回原始字节的 base64 字符串 */
+  /** HMAC-SHA1，返回原始 base64（含 =/+），后续由 toBase64Url 统一 url-safe 化 */
   private async hmacSha1Raw(secret: string, message: string): Promise<string> {
     const enc = new TextEncoder();
     const key = await crypto.subtle.importKey(
@@ -73,9 +74,10 @@ export class QiniuStorage implements IStorage {
     return btoa(String.fromCharCode(...new Uint8Array(sig)));
   }
 
-  /** 把 base64 字符串转为 base64url */
+  /** 把 HMAC 的 base64 转为 base64url（仅替换 +/→-_，保留 =） */
   private toBase64Url(b64: string): string {
-    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return b64.replace(/\+/g, '-').replace(/\//g, '_');
+    // 不 strip =，与 PHP base64_urlSafeEncode 一致
   }
 
   /** 自动查询 region（与 PHP Region::queryRegion 行为一致） */

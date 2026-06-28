@@ -98,6 +98,29 @@ function installPage(errorMsg: string = '', selectedType: string = 'r2'): string
       <input type="text" name="title" class="form-control" value="彩虹外链网盘">
     </div>
 
+    <!-- 通用云存储设置 -->
+    <div class="form-group" id="cloud_stor" style="display:${selectedType !== 'r2' ? '' : 'none'};">
+       <label>文件上传方式</label>
+       <select class="form-control" name="uploadfile_type"><option value="0">网站中转</option><option value="1">直接链接</option></select>
+       <span class="help-block">直接链接：文件直接上传到云存储，不经过本站服务器。需要先在云存储设置跨域。</span>
+     </div>
+     <div class="form-group" id="cloud_stor2" style="display:${selectedType !== 'r2' ? '' : 'none'};">
+      <label>文件下载方式</label>
+      <select class="form-control" name="downfile_type"><option value="0">网站中转</option><option value="1">直接链接</option></select>
+    </div>
+    <div class="form-group" id="downfile_domain_form" style="display:none;">
+      <label>文件下载域名</label>
+      <div class="row">
+        <div class="col-xs-4 col-md-3" style="padding-right: 0px;">
+          <select class="form-control" name="downfile_protocol"><option value="0">http://</option><option value="1">https://</option></select>
+        </div>
+        <div class="col-xs-8 col-md-9" style="padding-left: 0px;">
+          <input type="text" class="form-control" name="downfile_domain" placeholder="留空则使用云存储默认域名">
+        </div>
+      </div>
+      <span class="help-block">填写Bucket绑定的域名，也可使用CDN域名</span>
+    </div>
+
     <!-- R2 表单 -->
     <div class="storage-form ${selectedType === 'r2' ? 'active' : ''}" id="form-r2">
       <h4 style="margin-top:20px"><i class="fa fa-database"></i> Cloudflare R2 配置</h4>
@@ -329,6 +352,21 @@ document.getElementById('btnTest').addEventListener('click', async () => {
   }
 });
 $.material.init();
+
+// 下载方式切换：显示/隐藏下载域名
+document.querySelector('select[name="downfile_type"]').addEventListener('change', function() {
+  document.getElementById('downfile_domain_form').style.display = this.value === '1' ? 'block' : 'none';
+});
+
+// 存储类型切换：显示/隐藏云存储通用设置
+var storageTypeInput = document.getElementById('storage_type');
+function toggleCloudStor(type) {
+  var show = type !== 'r2' && type !== '';
+  document.getElementById('cloud_stor').style.display = show ? '' : 'none';
+  document.getElementById('cloud_stor2').style.display = show ? '' : 'none';
+}
+storageTypeInput.addEventListener('change', function() { toggleCloudStor(this.value); });
+toggleCloudStor(storageTypeInput.value);
 </script>
 </body>
 </html>`;
@@ -417,6 +455,11 @@ install.post('/save', async (c) => {
       ['admin_pwd', adminPwd],
       ['title', title],
       ['installed', '1'],
+      // 通用云存储设置（与 PHP set_stor.php 一致）
+      ['uploadfile_type', String(body['uploadfile_type'] || '0')],
+      ['downfile_type', String(body['downfile_type'] || '0')],
+      ['downfile_protocol', String(body['downfile_protocol'] || '0')],
+      ['downfile_domain', String(body['downfile_domain'] || '')],
     ];
 
     if (storageType === 's3') {
