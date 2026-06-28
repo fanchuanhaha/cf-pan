@@ -214,7 +214,7 @@ new Vue({
                 $.ajax({
                     type: 'POST',
                     url: 'ajax.php?act=complete_upload',
-                    data: {hash: that.input.hash, csrf_token: that.input.csrf_token},
+                    data: {hash: that.input.hash, name: that.input.name, size: that.input.size, csrf_token: that.input.csrf_token},
                     dataType: 'json',
                     success: function(data) {
                         if(data.code == 0 || data.code == 1){

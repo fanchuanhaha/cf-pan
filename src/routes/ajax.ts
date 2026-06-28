@@ -129,9 +129,9 @@ async function handleUploadPart(c: any) {
   if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
 
   const realName = sanitizeFileName(String(body['name'] || file.name || 'file'));
-  const realSize = parseInt(String(body['size'] || '0')) || file.size;
   const ext = getFileExt(realName);
   const arrayBuf = await file.arrayBuffer();
+  const realSize = arrayBuf.byteLength || parseInt(String(body['size'] || '0')) || file.size;
 
   const stor = getStorOrThrow(c);
   const success = await stor.upload(hash, arrayBuf, getMimeType(ext));
@@ -177,6 +177,10 @@ async function handleUploadPart(c: any) {
 
 // 完成上传
 async function handleCompleteUpload(c: any) {
+  const db = getDB(c);
+  const config = getConf(c);
+  const stor = getStorOrThrow(c);
+  const ip = getClientIP(c);
   const body = await c.req.parseBody() as Record<string, string>;
   const hash = String(body['hash'] || '');
   const csrfToken = String(body['csrf_token'] || '');
@@ -187,12 +191,39 @@ async function handleCompleteUpload(c: any) {
     return jsonError(c, 'CSRF TOKEN ERROR');
   }
 
-  const db = getDB(c);
-  const file = await getFileByHash(db, hash);
-  if (!file) return jsonError(c, '文件不存在');
+  // 确认文件在存储中存在
+  const exists = await stor.exists(hash);
+  if (!exists) return jsonError(c, '文件上传失败：存储中未找到文件，请刷新重试');
+
+  // 去重
+  const existing = await getFileByHash(db, hash);
+  if (existing) {
+    return jsonResult(c, {
+      code: 1, msg: '本站已存在该文件', exists: 1, hash,
+      name: existing.name, size: existing.size, type: existing.type, id: existing.id,
+    });
+  }
+
+  // 从存储获取实际文件信息（与 PHP complete_upload 一致：从 session 取，回调没有 session 则从存储取）
+  let fileSize = parseInt(String(body['size'] || '0'));
+  let fileType = '';
+  const fileName = String(body['name'] || 'file').replace(/[\/\\:*"<>|?]/g, '');
+  const ext = getFileExt(fileName);
+
+  try {
+    const info = await stor.getinfo(hash);
+    if (info) {
+      fileSize = info.length || fileSize;
+      fileType = info.content_type || '';
+    }
+  } catch { /* getinfo 失败不阻塞 */ }
+
+  const id = await insertFile(db, {
+    name: fileName, type: ext, size: fileSize, hash, ip, hide: 0, pwd: null, uid: 0,
+  });
 
   return jsonResult(c, {
-    code: 1, msg: '文件上传成功！', hash, name: file.name, size: file.size, type: file.type, id: file.id,
+    code: 1, msg: '文件上传成功！', exists: 0, hash, name: fileName, size: fileSize, type: ext, id,
   });
 }
 
