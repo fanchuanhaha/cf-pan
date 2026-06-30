@@ -329,7 +329,12 @@ export async function restoreFilesFromSource(
     if (task && task.status === 'cancelled') break;
     
     const file = fileList[i];
-    const downloadUrl = `${baseUrl}/file/${file.hash}`;
+    // 尝试多种下载 URL 格式
+    const downloadUrls = [
+      `${baseUrl}/down.php/${file.hash}.${file.type || 'file'}`,
+      `${baseUrl}/file/${file.hash}`,
+      `${baseUrl}/down.php/${file.hash}`,
+    ];
     
     if (task) {
       task.processed = i;
@@ -338,30 +343,28 @@ export async function restoreFilesFromSource(
     }
     
     const startTime = Date.now();
-    try {
-      // 下载文件
-      const res = await fetch(downloadUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 RestoreBot' }
-      });
-      
-      if (!res.ok) {
-        result.failed++;
-        result.errors.push(`${file.name}: HTTP ${res.status}`);
-        continue;
-      }
-      
-      const data = await res.arrayBuffer();
-      const elapsed = (Date.now() - startTime) / 1000;
-      const speed = data.byteLength / elapsed;
-      
-      // 上传到目标存储
-      const key = `file/${file.hash}`;
+    let downloaded = false;
+    for (const downloadUrl of downloadUrls) {
       try {
+        const res = await fetch(downloadUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 RestoreBot' }
+        });
+        
+        if (!res.ok) continue;
+        
+        const data = await res.arrayBuffer();
+        if (data.byteLength === 0) continue;
+        
+        const elapsed = (Date.now() - startTime) / 1000;
+        const speed = data.byteLength / elapsed;
+        
+        // 上传到目标存储 - 注意：只传 hash，hashToKey 会自动添加 file/ 前缀
         // @ts-ignore
-        const ok = await stor.upload(key, data);
+        const ok = await stor.upload(file.hash, data);
         if (ok) {
           result.success++;
           result.totalSize += data.byteLength;
+          downloaded = true;
           if (task) {
             task.success = result.success;
             task.failed = result.failed;
@@ -370,14 +373,17 @@ export async function restoreFilesFromSource(
         } else {
           result.failed++;
           result.errors.push(`${file.name}: 上传到存储失败`);
+          downloaded = true; // 已尝试过，不再尝试其他 URL
         }
+        break; // 找到一个可用的 URL 后退出循环
       } catch (e: any) {
-        result.failed++;
-        result.errors.push(`${file.name}: 上传失败 ${(e.message || e).substring(0, 100)}`);
+        continue; // 尝试下一个 URL
       }
-    } catch (e: any) {
+    }
+    
+    if (!downloaded) {
       result.failed++;
-      result.errors.push(`${file.name}: ${(e.message || e).substring(0, 100)}`);
+      result.errors.push(`${file.name}: 所有 URL 均下载失败（尝试了 down.php 和 /file/ 两种路径）`);
     }
   }
   

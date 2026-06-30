@@ -1697,7 +1697,7 @@ frontend.get('/admin/restore', async (c) => {
     <p><strong>使用说明：</strong></p>
     <ol>
       <li><strong>第一步：恢复数据库</strong> - 上传原项目的 SQL 备份文件，系统自动跳过 MySQL 专有语法</li>
-      <li><strong>第二步：恢复文件</strong> - 输入原站点地址（如 <code>http://dl.802213.xyz/</code>），系统从 <code>pre_file</code> 表读取所有文件，自动到 <code>{原站点}/file/{hash}</code> 批量下载到当前存储</li>
+      <li><strong>第二步：恢复文件</strong> - 输入原站点地址（如 <code>http://dl.802213.xyz/</code>），系统从 <code>pre_file</code> 表读取所有文件，自动尝试 <code>{原站点}/down.php/{hash}.{ext}</code> 和 <code>{原站点}/file/{hash}</code> 两种路径下载到当前存储</li>
     </ol>
   </div>
 </div>
@@ -1725,7 +1725,7 @@ frontend.get('/admin/restore', async (c) => {
     <div class="form-group">
       <label>原站点 URL</label>
       <input type="text" name="source_url" id="sourceUrl" class="form-control" placeholder="http://dl.802213.xyz/" value="http://" required/>
-      <p class="help-block">例如 <code>http://dl.802213.xyz/</code>，系统会从 <code>{原站点}/file/{hash}</code> 下载所有文件到存储</p>
+      <p class="help-block">例如 <code>http://dl.802213.xyz/</code>，系统会自动尝试 <code>down.php/{hash}.{ext}</code> 和 <code>/file/{hash}</code> 两种路径下载</p>
     </div>
     <button type="button" class="btn btn-success" onclick="restoreFromSource()"><i class="fa fa-cloud-download"></i> 开始批量下载</button>
     <button type="button" class="btn btn-danger" onclick="cancelCurrentTask()" id="cancelBtn" style="display:none;"><i class="fa fa-stop"></i> 取消下载</button>
