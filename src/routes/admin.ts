@@ -131,49 +131,4 @@ adminAjax.post('/saveSetting', async (c) => {
   return jsonResult(c, { code: 0, msg: '保存成功' });
 });
 
-// 修复文件大小：从存储后端获取真实大小并更新数据库
-adminAjax.post('/repairFileSize', async (c) => {
-  const db = getDB(c);
-  const stor = getStorOrThrow(c);
-  const body = await c.req.parseBody<Record<string, string>>();
-  const maxId = parseInt(body['max_id'] || '0');
-
-  // 一次最多处理 50 个
-  const { results: files } = await db.prepare(
-    `SELECT id, hash, size FROM pre_file WHERE size = 0 ${maxId > 0 ? 'AND id < ?' : ''} ORDER BY id DESC LIMIT 50`
-  ).bind(...(maxId > 0 ? [maxId] : [])).all<{ id: number; hash: string; size: number }>();
-
-  if (!files || files.length === 0) {
-    return jsonResult(c, { code: 0, msg: '没有需要修复的文件', done: true });
-  }
-
-  let fixed = 0;
-  let failed = 0;
-  let minId = maxId;
-  for (const file of files) {
-    try {
-      const info = await stor.getinfo(file.hash);
-      if (info && info.length > 0) {
-        await db.prepare('UPDATE pre_file SET size = ? WHERE id = ?').bind(info.length, file.id).run();
-        fixed++;
-      } else {
-        failed++;
-      }
-    } catch {
-      failed++;
-    }
-    if (file.id < minId) minId = file.id;
-  }
-
-  return jsonResult(c, {
-    code: 0,
-    msg: `修复完成：成功 ${fixed} 个，失败 ${failed} 个${failed > 0 ? '（文件可能已被删除或不存在于存储中）' : ''}`,
-    total: files.length,
-    fixed,
-    failed,
-    last_id: minId,
-    done: fixed + failed < 50, // 少于50个说明已全部处理完毕
-  });
-});
-
 export default adminAjax;

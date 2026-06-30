@@ -792,11 +792,6 @@ frontend.get('/admin', async (c) => {
         <li class="list-group-item"><b>彩虹外链网盘</b></li>
         <li class="list-group-item">Workers 移植版 v1.0</li>
         <li class="list-group-item">${new Date().getFullYear()} © CAIHONG</li>
-        <li class="list-group-item">
-          <button type="button" class="btn btn-warning btn-sm btn-block" onclick="repairFileSize()">
-            <i class="fa fa-wrench"></i> 修复已存在的0字节文件大小
-          </button>
-        </li>
       </ul>
     </div>
   </div>
@@ -815,42 +810,6 @@ $.ajax({
     $('#count4').html(data.count4);
   }
 });
-function repairFileSize() {
-  if (!confirm('此操作将从云存储查询真实文件大小并更新数据库，仅修复 size=0 的文件。\n\n继续吗？')) return;
-  var btn = event.target;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在修复...';
-  var maxId = 0;
-  function doRepair() {
-    $.ajax({
-      type: 'POST',
-      url: '/admin/ajax/repairFileSize',
-      data: { max_id: maxId },
-      dataType: 'json',
-      success: function(data) {
-        if (data.done) {
-          btn.innerHTML = '<i class="fa fa-check"></i> 修复完成';
-          layer.msg(data.msg, {icon: 1});
-          setTimeout(function() { btn.disabled = false; btn.innerHTML = '<i class="fa fa-wrench"></i> 修复已存在的0字节文件大小'; }, 2000);
-          // 刷新统计
-          $.ajax({ type: 'GET', url: 'ajax/getcount', dataType: 'json', success: function(d) {
-            $('#count1').html(d.count1);
-          }});
-        } else {
-          maxId = data.last_id;
-          layer.msg(data.msg + '，继续处理下一批...', {icon: 1, time: 1000});
-          doRepair(); // 继续处理下一批
-        }
-      },
-      error: function() {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa fa-wrench"></i> 修复已存在的0字节文件大小';
-        layer.alert('请求失败，请重试', {icon: 2});
-      }
-    });
-  }
-  doRepair();
-}
 </script>`;
 
   return c.html(adminLayout('后台首页', body, siteUrlStr, 'index', true, config.title));
@@ -1697,7 +1656,7 @@ frontend.get('/admin/restore', async (c) => {
     <p><strong>使用说明：</strong></p>
     <ol>
       <li><strong>第一步：恢复数据库</strong> - 上传原项目的 SQL 备份文件，系统自动跳过 MySQL 专有语法</li>
-      <li><strong>第二步：恢复文件</strong> - 输入原站点地址（如 <code>http://dl.802213.xyz/</code>），系统从 <code>pre_file</code> 表读取所有文件，自动尝试 <code>{原站点}/down.php/{hash}.{ext}</code> 和 <code>{原站点}/file/{hash}</code> 两种路径下载到当前存储</li>
+      <li><strong>第二步：恢复文件</strong> - 输入原站点地址（如 <code>http://dl.802213.xyz/</code>），系统从 <code>pre_file</code> 表读取所有文件，自动到 <code>{原站点}/file/{hash}</code> 批量下载到当前存储</li>
     </ol>
   </div>
 </div>
@@ -1725,16 +1684,7 @@ frontend.get('/admin/restore', async (c) => {
     <div class="form-group">
       <label>原站点 URL</label>
       <input type="text" name="source_url" id="sourceUrl" class="form-control" placeholder="http://dl.802213.xyz/" value="http://" required/>
-      <p class="help-block">例如 <code>http://dl.802213.xyz/</code></p>
-    </div>
-    <div class="form-group">
-      <label>文件存储文件夹名</label>
-      <input type="text" name="folder" id="sourceFolder" class="form-control" placeholder="file" value="file"/>
-      <p class="help-block">
-        原 PHP 项目 <code>Local</code> 存储的实际文件路径为 <code>{站点根目录}/file/{hash}</code>。
-        系统会按 <code>{URL}/{folder}/{hash}</code> 的方式下载到对象存储。
-        如果你的原项目把文件放在其他目录，请填对应文件夹名；不确定就保持默认 <code>file</code>。
-      </p>
+      <p class="help-block">例如 <code>http://dl.802213.xyz/</code>，系统会从 <code>{原站点}/file/{hash}</code> 下载所有文件到存储</p>
     </div>
     <button type="button" class="btn btn-success" onclick="restoreFromSource()"><i class="fa fa-cloud-download"></i> 开始批量下载</button>
     <button type="button" class="btn btn-danger" onclick="cancelCurrentTask()" id="cancelBtn" style="display:none;"><i class="fa fa-stop"></i> 取消下载</button>
@@ -1790,7 +1740,6 @@ function restoreSql(){
 
 function restoreFromSource(){
   var url = document.getElementById('sourceUrl').value.trim();
-  var folder = document.getElementById('sourceFolder').value.trim() || 'file';
   if(!url || url === 'http://' || url === 'https://'){
     layer.alert('请输入原站点 URL', {icon: 2});
     return;
@@ -1798,12 +1747,11 @@ function restoreFromSource(){
 
   var progress = document.getElementById('sourceProgress');
   progress.style.display = 'block';
-  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在启动下载任务...<br/>URL: ' + url + '<br/>文件夹: ' + folder + '</div>';
+  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在启动下载任务...</div>';
   document.getElementById('cancelBtn').style.display = 'inline-block';
 
   var fd = new FormData();
   fd.append('source_url', url);
-  fd.append('folder', folder);
 
   var xhr = new XMLHttpRequest();
   xhr.open('POST', '/admin/api/restore/files-from-source', true);

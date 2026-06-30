@@ -290,14 +290,12 @@ export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string,
  * @param stor 目标存储
  * @param sourceBaseUrl 原站点 URL（如 http://dl.802213.xyz/）
  * @param taskId 任务 ID
- * @param folder 文件夹名（如 file），对应 PHP 项目的 file/ 目录；留空则自动尝试多种路径
  */
 export async function restoreFilesFromSource(
   db: any,
   stor: IStorage,
   sourceBaseUrl: string,
-  taskId: string,
-  folder: string = 'file'
+  taskId: string
 ): Promise<{ fileCount: number; success: number; failed: number; errors: string[]; totalSize: number }> {
   const task = restoreTasks.get(taskId);
   
@@ -307,19 +305,16 @@ export async function restoreFilesFromSource(
     baseUrl = 'http://' + baseUrl;
   }
   baseUrl = baseUrl.replace(/\/+$/, '');
-
-  // 标准化文件夹名（去除首尾 /）
-  const folderPath = (folder || 'file').replace(/^\/+|\/+$/g, '');
-
+  
   // 查询所有文件
-  const { results: files } = await db.prepare('SELECT id, name, hash, type, size FROM pre_file').all();
+  const { results: files } = await db.prepare('SELECT id, name, hash, size FROM pre_file').all();
   const fileList = (files as any[]) || [];
   
   if (task) {
     task.stage = 'files';
     task.total = fileList.length;
     task.status = 'running';
-    task.message = `开始从 ${baseUrl} 下载 ${fileList.length} 个文件 (文件夹: ${folderPath || '(无)'})`;
+    task.message = `开始从 ${baseUrl} 下载 ${fileList.length} 个文件`;
   }
   
   const result: { fileCount: number; success: number; failed: number; errors: string[]; totalSize: number } = {
@@ -334,29 +329,7 @@ export async function restoreFilesFromSource(
     if (task && task.status === 'cancelled') break;
     
     const file = fileList[i];
-    const fileExt = file.type || '';
-    const hasExt = fileExt && fileExt !== 'null';
-    
-    // 按用户要求的方式拼接下载 URL：
-    //   1. {baseUrl}/{folder}/{hash}             —— 原 PHP Local 存储的实际命名
-    //   2. {baseUrl}/{folder}/{hash}.{ext}       —— 部分云存储会带扩展名
-    //   3. {baseUrl}/down.php/{hash}.{ext}       —— 走 PHP 下载脚本（直链 302）
-    //   4. {baseUrl}/down.php/{hash}             —— 备选
-    const downloadUrls: string[] = [];
-    if (folderPath) {
-      downloadUrls.push(`${baseUrl}/${folderPath}/${file.hash}`);
-      if (hasExt) {
-        downloadUrls.push(`${baseUrl}/${folderPath}/${file.hash}.${fileExt}`);
-      }
-    } else {
-      // 没有指定文件夹时，直接放在根目录
-      downloadUrls.push(`${baseUrl}/${file.hash}`);
-      if (hasExt) {
-        downloadUrls.push(`${baseUrl}/${file.hash}.${fileExt}`);
-      }
-    }
-    downloadUrls.push(`${baseUrl}/down.php/${file.hash}${hasExt ? '.' + fileExt : ''}`);
-    downloadUrls.push(`${baseUrl}/down.php/${file.hash}`);
+    const downloadUrl = `${baseUrl}/file/${file.hash}`;
     
     if (task) {
       task.processed = i;
@@ -365,29 +338,30 @@ export async function restoreFilesFromSource(
     }
     
     const startTime = Date.now();
-    let downloaded = false;
-    for (const downloadUrl of downloadUrls) {
+    try {
+      // 下载文件
+      const res = await fetch(downloadUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 RestoreBot' }
+      });
+      
+      if (!res.ok) {
+        result.failed++;
+        result.errors.push(`${file.name}: HTTP ${res.status}`);
+        continue;
+      }
+      
+      const data = await res.arrayBuffer();
+      const elapsed = (Date.now() - startTime) / 1000;
+      const speed = data.byteLength / elapsed;
+      
+      // 上传到目标存储
+      const key = `file/${file.hash}`;
       try {
-        const res = await fetch(downloadUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0 RestoreBot' },
-          redirect: 'follow',
-        });
-        
-        if (!res.ok) continue;
-        
-        const data = await res.arrayBuffer();
-        if (data.byteLength === 0) continue;
-        
-        const elapsed = (Date.now() - startTime) / 1000;
-        const speed = elapsed > 0 ? data.byteLength / elapsed : 0;
-        
-        // 上传到目标存储 - 注意：只传 hash，hashToKey 会自动添加 file/ 前缀
         // @ts-ignore
-        const ok = await stor.upload(file.hash, data);
+        const ok = await stor.upload(key, data);
         if (ok) {
           result.success++;
           result.totalSize += data.byteLength;
-          downloaded = true;
           if (task) {
             task.success = result.success;
             task.failed = result.failed;
@@ -395,18 +369,15 @@ export async function restoreFilesFromSource(
           }
         } else {
           result.failed++;
-          result.errors.push(`${file.name}: 上传到存储失败 (URL: ${downloadUrl})`);
-          downloaded = true; // 已尝试过，不再尝试其他 URL
+          result.errors.push(`${file.name}: 上传到存储失败`);
         }
-        break; // 找到一个可用的 URL 后退出循环
       } catch (e: any) {
-        continue; // 尝试下一个 URL
+        result.failed++;
+        result.errors.push(`${file.name}: 上传失败 ${(e.message || e).substring(0, 100)}`);
       }
-    }
-    
-    if (!downloaded) {
+    } catch (e: any) {
       result.failed++;
-      result.errors.push(`${file.name}: 所有 URL 均下载失败（hash: ${file.hash}，尝试了 ${downloadUrls.length} 个路径）`);
+      result.errors.push(`${file.name}: ${(e.message || e).substring(0, 100)}`);
     }
   }
   
@@ -415,7 +386,7 @@ export async function restoreFilesFromSource(
     task.success = result.success;
     task.failed = result.failed;
     task.currentItem = '';
-    task.message = `下载完成: 成功 ${result.success}, 失败 ${result.failed}, 总大小 ${formatSize(result.totalSize)}`;
+    task.message = `下载完成: 成功 ${result.success}, 失败 ${result.failed}`;
   }
   
   return result;

@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStorOrThrow, getConf } from '../middleware';
+import { getDB, getStorOrThrow } from '../middleware';
 import { getFileByHash, touchFile } from '../db';
 import { fileOutput } from '../services/upload';
 
@@ -12,7 +12,6 @@ const download = new Hono<AppEnv>();
 download.get('/*', async (c) => {
   const db = getDB(c);
   const stor = getStorOrThrow(c);
-  const config = getConf(c);
 
   const path = c.req.path.replace(/^\/down\.php\//, '');
   const parts = path.split('&');
@@ -60,24 +59,6 @@ download.get('/*', async (c) => {
 
   await touchFile(db, row.id);
 
-  // 直接链接下载模式：跳转到直链（不经本站服务器中转）
-  if (config.downfile_type === 1) {
-    // 优先使用配置的下载域名
-    if (config.downfile_domain) {
-      const protocol = config.downfile_protocol === 1 ? 'https' : 'http';
-      const downUrl = `${protocol}://${config.downfile_domain.replace(/\/+$/, '')}/${row.hash}.${row.type || 'file'}`;
-      return c.redirect(downUrl, 302);
-    }
-    // 否则尝试使用存储后端生成的直链
-    if (typeof stor.getDownUrl === 'function') {
-      const directUrl = await stor.getDownUrl(row.hash, row.name, row.type);
-      if (directUrl) {
-        return c.redirect(directUrl, 302);
-      }
-    }
-  }
-
-  // 网站中转模式：通过本站服务器代理下载
   return fileOutput(c, stor, hash, row.type, row.size, row.name, true);
 });
 

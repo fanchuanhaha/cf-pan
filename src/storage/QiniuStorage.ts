@@ -309,26 +309,6 @@ export class QiniuStorage implements IStorage {
     }
   }
 
-  /** 获取前端直传参数（直接链接上传模式） */
-  async getUploadParam(name: string, filename: string, maxFileSize?: number): Promise<{ url: string; post: Record<string, string> } | null> {
-    try {
-      const region = await this.ensureRegion();
-      const token = await this.makeUploadToken();
-      const key = this.hashToKey(name);
-      // 优先用 cdnUpHosts，与 upload 方法行为一致
-      const uploadHost = region.cdnUpHosts[0] || region.srcUpHosts[0];
-      return {
-        url: `https://${uploadHost}/`,
-        post: {
-          token,
-          key,
-        },
-      };
-    } catch {
-      return null;
-    }
-  }
-
   /** 测试连接：与 PHP 一致——只测上传+删除，不测读（避免私有读 Bucket 误判） */
   static async testConnection(config: QiniuConfig): Promise<{ ok: boolean; message: string }> {
     try {
