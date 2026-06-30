@@ -185,7 +185,9 @@ export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string,
   const result: { success: number; failed: number; errors: string[] } = { success: 0, failed: 0, errors: [] };
   
   // 分割 SQL 语句（按分号分割，但忽略引号内的分号）
-  const statements = splitSqlStatements(sqlContent);
+  const rawStatements = splitSqlStatements(sqlContent);
+  // 预处理：移除每条语句开头的 MySQL 注释（-- 和 /* */），使 startsWith 检查能正确匹配
+  const statements = rawStatements.map(s => stripLeadingComments(s.trim())).filter(s => s.length > 0);
   
   for (let i = 0; i < statements.length; i++) {
     const stmt = statements[i].trim();
@@ -196,88 +198,96 @@ export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string,
       task.message = `正在执行 SQL 语句 ${i + 1}/${statements.length}`;
     }
     
+    const upperStmt = stmt.toUpperCase();
+    
+    // 跳过 MySQL 专有且 D1 不支持的语句
+    if (
+      upperStmt.startsWith('SET ') ||
+      upperStmt.startsWith('START TRANSACTION') ||
+      upperStmt.startsWith('BEGIN') ||
+      upperStmt.startsWith('COMMIT') ||
+      upperStmt.startsWith('ROLLBACK') ||
+      upperStmt.startsWith('LOCK ') ||
+      upperStmt.startsWith('UNLOCK ') ||
+      upperStmt.startsWith('USE ') ||
+      upperStmt.startsWith('DROP DATABASE') ||
+      upperStmt.startsWith('CREATE DATABASE') ||
+      upperStmt.startsWith('/*!') ||  // MySQL 条件注释
+      upperStmt.startsWith('DELIMITER') ||
+      /^!\d+/.test(upperStmt)  // MySQL 版本特定语句
+    ) {
+      result.success++;
+      continue;
+    }
+    
+    // CREATE TABLE - 跳过（D1 已有结构）
+    if (upperStmt.startsWith('CREATE TABLE') || upperStmt.startsWith('CREATE INDEX') || upperStmt.startsWith('CREATE UNIQUE INDEX')) {
+      result.success++;
+      continue;
+    }
+    
+    // DROP TABLE - 跳过（D1 已有结构）
+    if (upperStmt.startsWith('DROP TABLE') || upperStmt.startsWith('DROP INDEX')) {
+      result.success++;
+      continue;
+    }
+    
+    // ALTER TABLE - 跳过（D1 schema 已固定）
+    if (upperStmt.startsWith('ALTER TABLE')) {
+      result.success++;
+      continue;
+    }
+    
+    // DELETE - 跳过（避免误删现有数据）
+    if (upperStmt.startsWith('DELETE ')) {
+      result.success++;
+      continue;
+    }
+    
     try {
-      const stmt = statements[i].trim();
-      if (!stmt) continue;
-      
-      // 更新任务进度
-      if (task) {
-        task.processed = i;
-        task.message = `正在执行 SQL 语句 ${i + 1}/${statements.length}`;
-      }
-      
-      const upperStmt = stmt.toUpperCase();
-      
-      // 跳过 MySQL 专有且 D1 不支持的语句
-      if (
-        upperStmt.startsWith('SET ') ||
-        upperStmt.startsWith('START TRANSACTION') ||
-        upperStmt.startsWith('BEGIN') ||
-        upperStmt.startsWith('COMMIT') ||
-        upperStmt.startsWith('ROLLBACK') ||
-        upperStmt.startsWith('LOCK ') ||
-        upperStmt.startsWith('UNLOCK ') ||
-        upperStmt.startsWith('USE ') ||
-        upperStmt.startsWith('DROP DATABASE') ||
-        upperStmt.startsWith('CREATE DATABASE') ||
-        upperStmt.startsWith('/*!') ||  // MySQL 条件注释
-        upperStmt.startsWith('DELIMITER') ||
-        /^!\d+/.test(upperStmt)  // MySQL 版本特定语句
-      ) {
+      // INSERT 语句：用 INSERT OR REPLACE 避免唯一冲突
+      if (upperStmt.startsWith('INSERT INTO')) {
+        const converted = convertTableName(stmt).replace(/^INSERT\s+INTO/i, 'INSERT OR REPLACE INTO');
+        // @ts-ignore - D1 动态类型
+        const stmt_obj = db.prepare(converted);
+        // @ts-ignore - D1 动态类型
+        await stmt_obj.run();
         result.success++;
-        continue;
-      }
-      
-      // CREATE TABLE - 跳过（D1 已有结构）
-      if (upperStmt.startsWith('CREATE TABLE') || upperStmt.startsWith('CREATE INDEX') || upperStmt.startsWith('CREATE UNIQUE INDEX')) {
-        result.success++;
-        continue;
-      }
-      
-      // DROP TABLE - 跳过（D1 已有结构）
-      if (upperStmt.startsWith('DROP TABLE') || upperStmt.startsWith('DROP INDEX')) {
-        result.success++;
-        continue;
-      }
-      
-      // ALTER TABLE - 跳过（D1 schema 已固定）
-      if (upperStmt.startsWith('ALTER TABLE')) {
-        result.success++;
-        continue;
-      }
-      
-      // DELETE - 跳过（避免误删现有数据）
-      if (upperStmt.startsWith('DELETE ')) {
-        result.success++;
-        continue;
-      }
-      
-      try {
-        // INSERT 语句：用 INSERT OR REPLACE 避免唯一冲突
-        if (upperStmt.startsWith('INSERT INTO')) {
-          const converted = convertTableName(stmt).replace(/^INSERT\s+INTO/i, 'INSERT OR REPLACE INTO');
-          // @ts-ignore - D1 动态类型
-          const stmt_obj = db.prepare(converted);
-          // @ts-ignore - D1 动态类型
-          await stmt_obj.run();
+      } else {
+        // 其他 MySQL 专有语句（不支持的）跳过，不报错
+        if (
+          upperStmt.startsWith('OPTIMIZE ') ||
+          upperStmt.startsWith('REPAIR ') ||
+          upperStmt.startsWith('CHECK ') ||
+          upperStmt.startsWith('FLUSH ') ||
+          upperStmt.startsWith('GRANT ') ||
+          upperStmt.startsWith('REVOKE ') ||
+          upperStmt.startsWith('SHOW ') ||
+          upperStmt.startsWith('DESCRIBE ') ||
+          upperStmt.startsWith('TRUNCATE ') ||
+          upperStmt.startsWith('RENAME ') ||
+          upperStmt.startsWith('LOAD ') ||
+          upperStmt.startsWith('CREATE TRIGGER') ||
+          upperStmt.startsWith('CREATE PROCEDURE') ||
+          upperStmt.startsWith('CREATE FUNCTION') ||
+          upperStmt.startsWith('CREATE EVENT') ||
+          upperStmt.startsWith('CREATE VIEW')
+        ) {
           result.success++;
-        } else {
-          // 其他语句：尝试 prepare + run
-          // @ts-ignore - D1 动态类型
-          const stmt_obj = db.prepare(stmt);
-          // @ts-ignore - D1 动态类型
-          await stmt_obj.run();
-          result.success++;
+          continue;
         }
-      } catch (e: any) {
-        // 单条失败不影响整体
-        result.failed++;
-        const errMsg = (e.message || String(e)).substring(0, 150);
-        result.errors.push(`语句 ${i + 1}: ${errMsg}`);
+        // 其他语句：尝试 prepare + run
+        // @ts-ignore - D1 动态类型
+        const stmt_obj = db.prepare(stmt);
+        // @ts-ignore - D1 动态类型
+        await stmt_obj.run();
+        result.success++;
       }
     } catch (e: any) {
+      // 单条失败不影响整体
       result.failed++;
-      result.errors.push(`语句 ${i + 1}: ${(e.message || e).substring(0, 200)}`);
+      const errMsg = (e.message || String(e)).substring(0, 150);
+      result.errors.push(`语句 ${i + 1}: ${errMsg}`);
     }
   }
   
@@ -354,11 +364,10 @@ export async function restoreFilesFromSource(
       const elapsed = (Date.now() - startTime) / 1000;
       const speed = data.byteLength / elapsed;
       
-      // 上传到目标存储
-      const key = `file/${file.hash}`;
+      // 上传到目标存储（只需传 hash，hashToKey 会加上 file/ 前缀）
       try {
         // @ts-ignore
-        const ok = await stor.upload(key, data);
+        const ok = await stor.upload(file.hash, data);
         if (ok) {
           result.success++;
           result.totalSize += data.byteLength;
@@ -390,6 +399,32 @@ export async function restoreFilesFromSource(
   }
   
   return result;
+}
+
+/**
+ * 移除 SQL 语句开头的 MySQL 注释（-- 行注释和 /* 块注释），使类型判断能正确匹配
+ */
+function stripLeadingComments(sql: string): string {
+  let result = sql;
+  while (true) {
+    const trimmed = result.trimStart();
+    // 跳过 -- 行注释
+    if (trimmed.startsWith('--')) {
+      const idx = trimmed.indexOf('\n');
+      if (idx === -1) return '';
+      result = trimmed.substring(idx + 1);
+      continue;
+    }
+    // 跳过 /* 块注释（含 /*! 条件注释） */
+    if (trimmed.startsWith('/*')) {
+      const idx = trimmed.indexOf('*/');
+      if (idx === -1) return '';
+      result = trimmed.substring(idx + 2);
+      continue;
+    }
+    break;
+  }
+  return result.trimStart();
 }
 
 /**
