@@ -297,6 +297,8 @@ adminApi.post('/restore/files-from-source', async (c) => {
   try {
     const body = await c.req.parseBody() as Record<string, string>;
     const sourceUrl = (body['source_url'] || '').trim();
+    // 文件夹名，默认 file （对应原 PHP 项目的 file/ 目录）
+    const folder = (body['folder'] || 'file').trim();
     
     if (!sourceUrl) {
       return jsonError(c, '请提供原站点 URL');
@@ -305,7 +307,7 @@ adminApi.post('/restore/files-from-source', async (c) => {
     // 异步执行批量下载
     c.executionCtx.waitUntil((async () => {
       try {
-        const result = await restoreFilesFromSource(db, stor, sourceUrl, taskId);
+        const result = await restoreFilesFromSource(db, stor, sourceUrl, taskId, folder);
         const task = getRestoreStatus(taskId);
         if (task) {
           task.status = 'completed';

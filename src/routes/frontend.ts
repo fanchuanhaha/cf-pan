@@ -1725,7 +1725,16 @@ frontend.get('/admin/restore', async (c) => {
     <div class="form-group">
       <label>原站点 URL</label>
       <input type="text" name="source_url" id="sourceUrl" class="form-control" placeholder="http://dl.802213.xyz/" value="http://" required/>
-      <p class="help-block">例如 <code>http://dl.802213.xyz/</code>，系统会自动尝试 <code>down.php/{hash}.{ext}</code> 和 <code>/file/{hash}</code> 两种路径下载</p>
+      <p class="help-block">例如 <code>http://dl.802213.xyz/</code></p>
+    </div>
+    <div class="form-group">
+      <label>文件存储文件夹名</label>
+      <input type="text" name="folder" id="sourceFolder" class="form-control" placeholder="file" value="file"/>
+      <p class="help-block">
+        原 PHP 项目 <code>Local</code> 存储的实际文件路径为 <code>{站点根目录}/file/{hash}</code>。
+        系统会按 <code>{URL}/{folder}/{hash}</code> 的方式下载到对象存储。
+        如果你的原项目把文件放在其他目录，请填对应文件夹名；不确定就保持默认 <code>file</code>。
+      </p>
     </div>
     <button type="button" class="btn btn-success" onclick="restoreFromSource()"><i class="fa fa-cloud-download"></i> 开始批量下载</button>
     <button type="button" class="btn btn-danger" onclick="cancelCurrentTask()" id="cancelBtn" style="display:none;"><i class="fa fa-stop"></i> 取消下载</button>
@@ -1781,6 +1790,7 @@ function restoreSql(){
 
 function restoreFromSource(){
   var url = document.getElementById('sourceUrl').value.trim();
+  var folder = document.getElementById('sourceFolder').value.trim() || 'file';
   if(!url || url === 'http://' || url === 'https://'){
     layer.alert('请输入原站点 URL', {icon: 2});
     return;
@@ -1788,11 +1798,12 @@ function restoreFromSource(){
 
   var progress = document.getElementById('sourceProgress');
   progress.style.display = 'block';
-  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在启动下载任务...</div>';
+  progress.innerHTML = '<div class="alert alert-info"><i class="fa fa-spinner fa-spin"></i> 正在启动下载任务...<br/>URL: ' + url + '<br/>文件夹: ' + folder + '</div>';
   document.getElementById('cancelBtn').style.display = 'inline-block';
 
   var fd = new FormData();
   fd.append('source_url', url);
+  fd.append('folder', folder);
 
   var xhr = new XMLHttpRequest();
   xhr.open('POST', '/admin/api/restore/files-from-source', true);
