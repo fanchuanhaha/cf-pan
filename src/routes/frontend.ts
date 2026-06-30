@@ -792,6 +792,11 @@ frontend.get('/admin', async (c) => {
         <li class="list-group-item"><b>彩虹外链网盘</b></li>
         <li class="list-group-item">Workers 移植版 v1.0</li>
         <li class="list-group-item">${new Date().getFullYear()} © CAIHONG</li>
+        <li class="list-group-item">
+          <button type="button" class="btn btn-warning btn-sm btn-block" onclick="repairFileSize()">
+            <i class="fa fa-wrench"></i> 修复已存在的0字节文件大小
+          </button>
+        </li>
       </ul>
     </div>
   </div>
@@ -810,6 +815,42 @@ $.ajax({
     $('#count4').html(data.count4);
   }
 });
+function repairFileSize() {
+  if (!confirm('此操作将从云存储查询真实文件大小并更新数据库，仅修复 size=0 的文件。\n\n继续吗？')) return;
+  var btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在修复...';
+  var maxId = 0;
+  function doRepair() {
+    $.ajax({
+      type: 'POST',
+      url: '/admin/ajax/repairFileSize',
+      data: { max_id: maxId },
+      dataType: 'json',
+      success: function(data) {
+        if (data.done) {
+          btn.innerHTML = '<i class="fa fa-check"></i> 修复完成';
+          layer.msg(data.msg, {icon: 1});
+          setTimeout(function() { btn.disabled = false; btn.innerHTML = '<i class="fa fa-wrench"></i> 修复已存在的0字节文件大小'; }, 2000);
+          // 刷新统计
+          $.ajax({ type: 'GET', url: 'ajax/getcount', dataType: 'json', success: function(d) {
+            $('#count1').html(d.count1);
+          }});
+        } else {
+          maxId = data.last_id;
+          layer.msg(data.msg + '，继续处理下一批...', {icon: 1, time: 1000});
+          doRepair(); // 继续处理下一批
+        }
+      },
+      error: function() {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa fa-wrench"></i> 修复已存在的0字节文件大小';
+        layer.alert('请求失败，请重试', {icon: 2});
+      }
+    });
+  }
+  doRepair();
+}
 </script>`;
 
   return c.html(adminLayout('后台首页', body, siteUrlStr, 'index', true, config.title));

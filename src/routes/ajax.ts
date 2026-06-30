@@ -92,6 +92,26 @@ async function handlePreUpload(c: any) {
     });
   }
 
+  // 直接链接上传模式（uploadfile_type == 1）：前端直传云存储，不经本站服务器
+  if (config.uploadfile_type === 1) {
+    try {
+      const stor = getStorOrThrow(c);
+      if (typeof stor.getUploadParam === 'function') {
+        const param = await stor.getUploadParam(hash, name, limitSize > 0 ? limitSize * 1024 * 1024 : undefined);
+        if (param) {
+          return jsonResult(c, {
+            code: 0, third: true, hash,
+            url: param.url,
+            post: param.post,
+          });
+        }
+      }
+    } catch (e: any) {
+      // 降级为网站中转
+      console?.warn?.('直传模式获取上传参数失败，降级为中转模式:', e?.message);
+    }
+  }
+
   // Workers 没有本地磁盘，强制 chunks=1 让前端一次发送整个文件
   const chunkSize = 8 * 1024 * 1024;
   const chunks = 1;
@@ -131,7 +151,8 @@ async function handleUploadPart(c: any) {
   const realName = sanitizeFileName(String(body['name'] || file.name || 'file'));
   const ext = getFileExt(realName);
   const arrayBuf = await file.arrayBuffer();
-  const realSize = arrayBuf.byteLength || parseInt(String(body['size'] || '0')) || file.size;
+  // 用实际数据长度作为文件大小，避免前端/环境差异导致 size 为 0
+  const realSize = arrayBuf.byteLength || parseInt(String(body['size'] || '0')) || 0;
 
   const stor = getStorOrThrow(c);
   const success = await stor.upload(hash, arrayBuf, getMimeType(ext));
@@ -175,15 +196,13 @@ async function handleUploadPart(c: any) {
   });
 }
 
-// 完成上传
+// 完成上传（含直传模式的入库）
 async function handleCompleteUpload(c: any) {
-  const db = getDB(c);
-  const config = getConf(c);
-  const stor = getStorOrThrow(c);
-  const ip = getClientIP(c);
   const body = await c.req.parseBody() as Record<string, string>;
   const hash = String(body['hash'] || '');
   const csrfToken = String(body['csrf_token'] || '');
+  const name = String(body['name'] || '').trim();
+  const sizeStr = String(body['size'] || '0');
 
   // 验证 cookie 中的 token
   const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
@@ -191,40 +210,60 @@ async function handleCompleteUpload(c: any) {
     return jsonError(c, 'CSRF TOKEN ERROR');
   }
 
-  // 确认文件在存储中存在
-  const exists = await stor.exists(hash);
-  if (!exists) return jsonError(c, '文件上传失败：存储中未找到文件，请刷新重试');
+  if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
 
-  // 去重
-  const existing = await getFileByHash(db, hash);
-  if (existing) {
+  const db = getDB(c);
+  const config = getConf(c);
+  const ip = getClientIP(c);
+
+  // 检查是否已存在
+  let file = await getFileByHash(db, hash);
+  if (file) {
     return jsonResult(c, {
-      code: 1, msg: '本站已存在该文件', exists: 1, hash,
-      name: existing.name, size: existing.size, type: existing.type, id: existing.id,
+      code: 1, msg: '文件上传成功！', hash, name: file.name, size: file.size, type: file.type, id: file.id,
     });
   }
 
-  // 从存储获取实际文件信息（与 PHP complete_upload 一致：从 session 取，回调没有 session 则从存储取）
-  let fileSize = parseInt(String(body['size'] || '0'));
-  let fileType = '';
-  const fileName = String(body['name'] || 'file').replace(/[\/\\:*"<>|?]/g, '');
-  const ext = getFileExt(fileName);
+  // 直传模式：文件已在云存储中，只需记录到数据库
+  if (name) {
+    const realName = sanitizeFileName(name);
+    const ext = getFileExt(realName);
+    const realSize = parseInt(sizeStr) || 0;
 
-  try {
-    const info = await stor.getinfo(hash);
-    if (info) {
-      fileSize = info.length || fileSize;
-      fileType = info.content_type || '';
+    // 验证文件是否确实已上传到存储
+    const stor = getStorOrThrow(c);
+    const exists = await stor.exists(hash);
+    if (!exists) {
+      return jsonError(c, '文件上传失败，存储中未找到该文件');
     }
-  } catch { /* getinfo 失败不阻塞 */ }
 
-  const id = await insertFile(db, {
-    name: fileName, type: ext, size: fileSize, hash, ip, hide: 0, pwd: null, uid: 0,
-  });
+    // 尝试从存储获取实际文件大小
+    let fileSize = realSize;
+    try {
+      const info = await stor.getinfo(hash);
+      if (info && info.length > 0) fileSize = info.length;
+    } catch {
+      // 用前端提供的 size
+    }
 
-  return jsonResult(c, {
-    code: 1, msg: '文件上传成功！', exists: 0, hash, name: fileName, size: fileSize, type: ext, id,
-  });
+    const id = await insertFile(db, {
+      name: realName,
+      type: ext,
+      size: fileSize,
+      hash,
+      ip,
+      hide: 0,
+      pwd: null,
+      uid: 0,
+    });
+
+    return jsonResult(c, {
+      code: 1, msg: '文件上传成功！', hash, name: realName, size: fileSize, type: ext, id,
+    });
+  }
+
+  // 如果既没有 name 也没有 DB 记录，返回文件不存在
+  return jsonError(c, '文件不存在');
 }
 
 // 删除文件
