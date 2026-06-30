@@ -214,19 +214,35 @@ export class QiniuStorage implements IStorage {
     } as unknown as R2ObjectBody;
   }
 
+  /**
+   * 私有下载签名（与 PHP Auth::privateDownloadUrl 完全一致）
+   * 格式：<baseUrl>?e=<deadline>&token=<accessKey>:<base64url(hmac_sha1)>
+   */
+  private async privateDownloadUrl(baseUrl: string, expires: number = 315360000): Promise<string> {
+    const deadline = Math.floor(Date.now() / 1000) + expires;
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const urlWithDeadline = `${baseUrl}${separator}e=${deadline}`;
+    // PHP: sign() = hmac_sha1($data, $secretKey) → base64url → $accessKey . ':' . $result
+    const sig = await this.hmacSha1Raw(this.cfg.secretKey, urlWithDeadline);
+    const token = this.cfg.accessKey + ':' + this.toBase64Url(sig);
+    return `${urlWithDeadline}&token=${token}`;
+  }
+
   async downfile(name: string, range?: [number, number]): Promise<Response | null> {
     const key = this.hashToKey(name);
     const region = await this.ensureRegion();
-    // 优先用用户填的 domain；否则用 iovipHost
+    // 优先用用户填的 domain；否则用 iovipHost（与 PHP getDownUrl 逻辑一致）
     const urlBase = (this.cfg.domain && this.cfg.domain.trim())
       ? this.cfg.domain.replace(/\/+$/, '').replace(/^https?:\/\//, '')
       : region.iovipHost;
-    const url = `https://${urlBase}/${key}`;
+    const baseUrl = `https://${urlBase}/${key}`;
+    // 必须签名（与 PHP downfile → getDownUrl → privateDownloadUrl 一致）
+    const signedUrl = await this.privateDownloadUrl(baseUrl);
     const headers: Record<string, string> = {};
     if (range) {
       headers['Range'] = `bytes=${range[0]}-${range[1]}`;
     }
-    const res = await fetch(url, { headers });
+    const res = await fetch(signedUrl, { headers });
     if (!res.ok) return null;
     return res;
   }
@@ -296,17 +312,20 @@ export class QiniuStorage implements IStorage {
     }
   }
 
-  async getDownUrl(name: string, filename: string, contentType?: string): Promise<string | null> {
+  async getDownUrl(name: string, filename?: string, contentType?: string): Promise<string | null> {
     const key = this.hashToKey(name);
-    if (this.cfg.domain && this.cfg.domain.trim()) {
-      return this.cfg.domain.replace(/\/+$/, '') + '/' + key;
+    const region = await this.ensureRegion();
+    // 优先用用户填的 domain；否则用 iovipHost（与 PHP getDownUrl 逻辑一致）
+    const urlBase = (this.cfg.domain && this.cfg.domain.trim())
+      ? this.cfg.domain.replace(/\/+$/, '').replace(/^https?:\/\//, '')
+      : region.iovipHost;
+    let url = `https://${urlBase}/${key}`;
+    // 添加文件名参数（与 PHP getDownUrl 一致）
+    if (filename) {
+      url += `?attname=${encodeURIComponent(filename)}`;
     }
-    try {
-      const region = await this.ensureRegion();
-      return `https://${region.iovipHost}/${key}`;
-    } catch {
-      return null;
-    }
+    // 始终使用签名（与 PHP privateDownloadUrl 一致）
+    return await this.privateDownloadUrl(url);
   }
 
   /** 测试连接：与 PHP 一致——只测上传+删除，不测读（避免私有读 Bucket 误判） */
