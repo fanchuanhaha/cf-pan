@@ -324,6 +324,8 @@ export async function restoreFilesFromSource(
   // 查询所有文件
   const { results: files } = await db.prepare('SELECT id, name, hash, size FROM pre_file').all();
   const fileList = (files as any[]) || [];
+
+  console.log(`[restoreFilesFromSource] taskId=${taskId} baseUrl=${baseUrl} folder=${cleanFolder} fileCount=${fileList.length}`);
   
   if (task) {
     task.stage = 'files';

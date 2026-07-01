@@ -15,30 +15,48 @@ const adminAjax = new Hono<AppEnv>();
 adminAjax.use('*', async (c, next) => {
   const config = getConf(c);
   const token = c.req.header('cookie')?.match(/admin_token=([^;]+)/)?.[1];
-  if (!token) return jsonError(c, 'Unauthorized');
+  if (!token) {
+    console.log('[admin/ajax] auth: no token in cookie');
+    return jsonError(c, 'Unauthorized');
+  }
   const valid = await verifyAdminToken(token, config.admin_user, config.admin_pwd, config.syskey);
-  if (!valid) return jsonError(c, 'Unauthorized');
+  if (!valid) {
+    console.log('[admin/ajax] auth: invalid token');
+    return jsonError(c, 'Unauthorized');
+  }
+  console.log('[admin/ajax] auth: ok');
   await next();
 });
 
 // 统计面板
 adminAjax.get('/getcount', async (c) => {
   const db = getDB(c);
+  const config = getConf(c);
   const today = new Date().toISOString().substring(0, 10) + ' 00:00:00';
   const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10) + ' 00:00:00';
 
-  const [total, todayCount, yesterdayCount, userCount] = await Promise.all([
-    db.prepare('SELECT count(*) as cnt FROM pre_file').first<{ cnt: number }>(),
-    db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ?").bind(today).first<{ cnt: number }>(),
-    db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ? AND addtime < ?").bind(yesterday, today).first<{ cnt: number }>(),
-    db.prepare('SELECT count(*) as cnt FROM pre_user').first<{ cnt: number }>(),
-  ]);
+  let total = 0, todayCount = 0, yesterdayCount = 0;
+  try {
+    const [totalR, todayR, yesterdayR] = await Promise.all([
+      db.prepare('SELECT count(*) as cnt FROM pre_file').first<{ cnt: number }>(),
+      db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ?").bind(today).first<{ cnt: number }>(),
+      db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ? AND addtime < ?").bind(yesterday, today).first<{ cnt: number }>(),
+    ]);
+    total = totalR?.cnt ?? 0;
+    todayCount = todayR?.cnt ?? 0;
+    yesterdayCount = yesterdayR?.cnt ?? 0;
+  } catch (e: any) {
+    console.error('[admin/getcount] query failed:', e);
+  }
+
+  console.log(`[admin/getcount] total=${total} today=${todayCount} yesterday=${yesterdayCount} storage=${config.storage}`);
 
   return jsonResult(c, {
-    count1: total?.cnt ?? 0,
-    count2: todayCount?.cnt ?? 0,
-    count3: yesterdayCount?.cnt ?? 0,
-    count4: userCount?.cnt ?? 0,
+    code: 0,
+    count1: total,
+    count2: todayCount,
+    count3: yesterdayCount,
+    count4: config.storage.toUpperCase(),
   });
 });
 

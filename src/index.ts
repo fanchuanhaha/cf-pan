@@ -35,9 +35,12 @@ app.route('/install', installRoutes);
 
 // 存储就绪检查中间件（仅对需要存储的路由生效）
 const requireStorage = async (c: any, next: any) => {
-  if (!isStorageReady(c)) {
-    // 未安装或存储未配置
+  const ready = isStorageReady(c);
+  const path = c.req.path || c.req.url;
+  if (!ready) {
     const config = c.var.config;
+    console.log(`[requireStorage] NOT ready for ${path}, installed=${config?.installed}, storage=${config?.storage}`);
+    // 未安装或存储未配置
     if (config.installed !== 1) {
       return c.redirect('/install');
     }

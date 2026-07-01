@@ -21,6 +21,13 @@ import type { AppConfig } from '../config';
 
 const adminApi = new Hono<AppEnv>();
 
+// 日志中间件：记录所有 admin/api 请求
+adminApi.use('*', async (c, next) => {
+  const path = c.req.path || c.req.url;
+  console.log(`[admin-api] ${c.req.method} ${path} storageOk=${c.var.storageOk} stor=${!!c.var.stor}`);
+  await next();
+});
+
 // ===================== 存储迁移 =====================
 
 /** 开始迁移任务 */
@@ -290,20 +297,41 @@ adminApi.post('/restore/files', async (c) => {
 /** 步骤2（新版）：输入原站点 URL，从原站点批量下载文件到当前存储 */
 adminApi.post('/restore/files-from-source', async (c) => {
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
   const taskId = 'rst_src_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   createRestoreTask(taskId);
-  
+
   try {
-    const body = await c.req.parseBody() as Record<string, string>;
-    const sourceUrl = (body['source_url'] || '').trim();
-    // 文件夹名，默认 file （对应原 PHP 项目的 file/ 目录）
-    const folder = (body['folder'] || 'file').trim();
-    
+    const stor = getStorOrThrow(c);
+
+    // 使用 formData() 替代 parseBody()，在 Workers 环境下更可靠
+    let sourceUrl = '';
+    let folder = 'file';
+    try {
+      const formData = await c.req.formData();
+      sourceUrl = (formData.get('source_url')?.toString() || '').trim();
+      folder = (formData.get('folder')?.toString() || 'file').trim();
+      console.log(`[restore/files-from-source] taskId=${taskId} sourceUrl="${sourceUrl}" folder="${folder}" method=formData`);
+    } catch (parseErr: any) {
+      console.error(`[restore/files-from-source] formData parse failed: ${parseErr.message}, trying parseBody...`);
+      // 回退：尝试 parseBody（application/x-www-form-urlencoded 等）
+      try {
+        const body = await c.req.parseBody() as Record<string, string>;
+        sourceUrl = (body['source_url'] || '').trim();
+        folder = (body['folder'] || 'file').trim();
+        console.log(`[restore/files-from-source] taskId=${taskId} sourceUrl="${sourceUrl}" folder="${folder}" method=parseBody`);
+      } catch (parseBodyErr: any) {
+        console.error(`[restore/files-from-source] parseBody also failed: ${parseBodyErr.message}`);
+        return jsonError(c, '无法解析请求参数: ' + (parseErr.message || parseBodyErr.message));
+      }
+    }
+
     if (!sourceUrl) {
       return jsonError(c, '请提供原站点 URL');
     }
-    
+    if (!sourceUrl.startsWith('http://') && !sourceUrl.startsWith('https://')) {
+      return jsonError(c, '原站点 URL 必须以 http:// 或 https:// 开头');
+    }
+
     // 异步执行批量下载
     c.executionCtx.waitUntil((async () => {
       try {
@@ -313,7 +341,9 @@ adminApi.post('/restore/files-from-source', async (c) => {
           task.status = 'completed';
           task.stage = 'done';
         }
+        console.log(`[restore/files-from-source] taskId=${taskId} done: success=${result.success} failed=${result.failed}`);
       } catch (e: any) {
+        console.error(`[restore/files-from-source] taskId=${taskId} failed:`, e?.message || e);
         const task = getRestoreStatus(taskId);
         if (task) {
           task.status = 'failed';
@@ -321,15 +351,23 @@ adminApi.post('/restore/files-from-source', async (c) => {
         }
       }
     })());
-    
+
     return jsonResult(c, {
       code: 0,
       msg: '任务已启动，请轮询 /admin/api/restore/status?taskId=' + taskId,
       data: { taskId }
     });
   } catch (e: any) {
-    console.error('Restore from source error:', e);
-    return jsonError(c, '启动失败: ' + (e.message || e));
+    console.error('[restore/files-from-source] start failed:', e?.message || e);
+    // 确保返回 JSON，即使 jsonError 内部出错也兜底
+    try {
+      return jsonError(c, '启动失败: ' + (e.message || '未知错误'));
+    } catch {
+      return new Response(JSON.stringify({ code: -1, msg: '启动失败: ' + String(e) }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+      });
+    }
   }
 });
 

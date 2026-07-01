@@ -804,10 +804,18 @@ $.ajax({
   url: 'ajax/getcount',
   dataType: 'json',
   success: function(data) {
-    $('#count1').html(data.count1);
-    $('#count2').html(data.count2);
-    $('#count3').html(data.count3);
-    $('#count4').html(data.count4);
+    if (data && data.code === 0) {
+      $('#count1').html(data.count1);
+      $('#count2').html(data.count2);
+      $('#count3').html(data.count3);
+      $('#count4').html(data.count4);
+      console.log('[getcount]', data);
+    } else {
+      console.warn('[getcount] unexpected response', data);
+    }
+  },
+  error: function(xhr, status, err) {
+    console.error('[getcount] request failed', status, err, xhr && xhr.responseText);
   }
 });
 </script>`;
@@ -1950,28 +1958,40 @@ frontend.get('/admin/ajax/getcount', async (c) => {
   const db = getDB(c);
   const config = getConf(c);
 
-  // 文件总数：直接用 count(*) 统计（包含所有 block=0 的文件）
-  let total = await getFileTotal(db);
-  // 防御：如果总数为 0 但文件表存在，尝试再查一次（排除缓存问题）
-  if (total === 0) {
-    try {
-      const r = await db.prepare('SELECT COUNT(*) as c FROM pre_file').first<{ c: number }>();
-      total = r?.c ?? 0;
-    } catch (e) {
-      total = 0;
-    }
+  // 文件总数：直接用 count(*) 统计
+  let total = 0;
+  let totalSql = '';
+  try {
+    const r = await db.prepare('SELECT COUNT(*) as c FROM pre_file').first<{ c: number }>();
+    total = r?.c ?? 0;
+    totalSql = `count=${total}`;
+  } catch (e: any) {
+    console.error('[getcount] pre_file count failed:', e);
+    totalSql = `error=${e.message || e}`;
   }
 
-  // 今日上传数（基于本地时间，与 addtime 存储格式一致）
+  // 同时用 SELECT * 抽样第一条验证 D1 实际有数据
+  let sample: any = null;
+  try {
+    sample = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
+  } catch (e) {}
+
+  // 今日上传数（基于本地时间）
   const now = new Date();
   const todayStr = now.getFullYear() + '-' +
     String(now.getMonth() + 1).padStart(2, '0') + '-' +
     String(now.getDate()).padStart(2, '0');
-  // addtime 格式: 'YYYY-MM-DD HH:MM:SS' (UTC)
-  // 使用 UTC 时间的今天 00:00:00 作为分界
   const todayUTC = todayStr + ' 00:00:00';
-  const tomorrowUTC = new Date(now.getTime() + 86400000).toISOString().substring(0, 10) + ' 00:00:00';
-  const yesterdayUTC = new Date(now.getTime() - 86400000).toISOString().substring(0, 10) + ' 00:00:00';
+  const tomorrowDate = new Date(now.getTime() + 86400000);
+  const tomorrowStr = tomorrowDate.getUTCFullYear() + '-' +
+    String(tomorrowDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(tomorrowDate.getUTCDate()).padStart(2, '0');
+  const tomorrowUTC = tomorrowStr + ' 00:00:00';
+  const yesterdayDate = new Date(now.getTime() - 86400000);
+  const yesterdayStr = yesterdayDate.getUTCFullYear() + '-' +
+    String(yesterdayDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(yesterdayDate.getUTCDate()).padStart(2, '0');
+  const yesterdayUTC = yesterdayStr + ' 00:00:00';
 
   let todayCount = 0;
   let yCount = 0;
@@ -1980,14 +2000,16 @@ frontend.get('/admin/ajax/getcount', async (c) => {
       'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
     ).bind(todayUTC, tomorrowUTC).first<{ c: number }>();
     todayCount = todayR?.c ?? 0;
+  } catch (e) {}
 
+  try {
     const yR = await db.prepare(
       'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
     ).bind(yesterdayUTC, todayUTC).first<{ c: number }>();
     yCount = yR?.c ?? 0;
-  } catch (e) {
-    // ignore
-  }
+  } catch (e) {}
+
+  console.log(`[getcount] ${totalSql} today=${todayCount} yesterday=${yCount} sample=${sample ? sample.id + ':' + sample.name : 'none'} storage=${config.storage}`);
 
   return c.json({
     code: 0,
@@ -1995,6 +2017,7 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     count2: todayCount,
     count3: yCount,
     count4: config.storage.toUpperCase(),
+    debug: { totalSql, today: todayUTC, tomorrow: tomorrowUTC, sample },
   });
 });
 
