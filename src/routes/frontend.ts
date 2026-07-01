@@ -1950,11 +1950,44 @@ frontend.get('/admin/ajax/getcount', async (c) => {
   const db = getDB(c);
   const config = getConf(c);
 
-  const total = await getFileTotal(db);
-  const today = new Date().toISOString().substring(0, 10) + ' 00:00:00';
-  const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10) + ' 00:00:00';
-  const todayCount = await getFileCountByDateRange(db, today);
-  const yCount = await getFileCountByDateRange(db, yesterday, today);
+  // 文件总数：直接用 count(*) 统计（包含所有 block=0 的文件）
+  let total = await getFileTotal(db);
+  // 防御：如果总数为 0 但文件表存在，尝试再查一次（排除缓存问题）
+  if (total === 0) {
+    try {
+      const r = await db.prepare('SELECT COUNT(*) as c FROM pre_file').first<{ c: number }>();
+      total = r?.c ?? 0;
+    } catch (e) {
+      total = 0;
+    }
+  }
+
+  // 今日上传数（基于本地时间，与 addtime 存储格式一致）
+  const now = new Date();
+  const todayStr = now.getFullYear() + '-' +
+    String(now.getMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0');
+  // addtime 格式: 'YYYY-MM-DD HH:MM:SS' (UTC)
+  // 使用 UTC 时间的今天 00:00:00 作为分界
+  const todayUTC = todayStr + ' 00:00:00';
+  const tomorrowUTC = new Date(now.getTime() + 86400000).toISOString().substring(0, 10) + ' 00:00:00';
+  const yesterdayUTC = new Date(now.getTime() - 86400000).toISOString().substring(0, 10) + ' 00:00:00';
+
+  let todayCount = 0;
+  let yCount = 0;
+  try {
+    const todayR = await db.prepare(
+      'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
+    ).bind(todayUTC, tomorrowUTC).first<{ c: number }>();
+    todayCount = todayR?.c ?? 0;
+
+    const yR = await db.prepare(
+      'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
+    ).bind(yesterdayUTC, todayUTC).first<{ c: number }>();
+    yCount = yR?.c ?? 0;
+  } catch (e) {
+    // ignore
+  }
 
   return c.json({
     code: 0,

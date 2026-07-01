@@ -300,12 +300,14 @@ export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string,
  * @param stor 目标存储
  * @param sourceBaseUrl 原站点 URL（如 http://dl.802213.xyz/）
  * @param taskId 任务 ID
+ * @param folder 原站点的存储目录（默认 'file'，对应原 PHP 项目的 file/ 目录）
  */
 export async function restoreFilesFromSource(
   db: any,
   stor: IStorage,
   sourceBaseUrl: string,
-  taskId: string
+  taskId: string,
+  folder: string = 'file'
 ): Promise<{ fileCount: number; success: number; failed: number; errors: string[]; totalSize: number }> {
   const task = restoreTasks.get(taskId);
   
@@ -315,6 +317,9 @@ export async function restoreFilesFromSource(
     baseUrl = 'http://' + baseUrl;
   }
   baseUrl = baseUrl.replace(/\/+$/, '');
+  
+  // 标准化 folder（去掉首尾斜杠和 file/ 前缀，确保最终拼接路径干净）
+  const cleanFolder = (folder || 'file').replace(/^\/+|\/+$/g, '');
   
   // 查询所有文件
   const { results: files } = await db.prepare('SELECT id, name, hash, size FROM pre_file').all();
@@ -339,7 +344,8 @@ export async function restoreFilesFromSource(
     if (task && task.status === 'cancelled') break;
     
     const file = fileList[i];
-    const downloadUrl = `${baseUrl}/file/${file.hash}`;
+    // 从原站点下载的 URL：{原站点}/{folder}/{hash}
+    const downloadUrl = `${baseUrl}/${cleanFolder}/${file.hash}`;
     
     if (task) {
       task.processed = i;
@@ -357,36 +363,82 @@ export async function restoreFilesFromSource(
       if (!res.ok) {
         result.failed++;
         result.errors.push(`${file.name}: HTTP ${res.status}`);
+        if (task) {
+          task.processed = i + 1;
+          task.failed = result.failed;
+        }
         continue;
       }
       
-      const data = await res.arrayBuffer();
+      // 流式读取以便实时更新下载进度
+      const contentLength = parseInt(res.headers.get('Content-Length') || '0');
+      const reader = res.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+      let lastUpdate = 0;
+      
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.byteLength;
+          // 每 200ms 更新一次进度
+          const now = Date.now();
+          if (now - lastUpdate > 200 && task) {
+            lastUpdate = now;
+            const speed = received / Math.max(1, (now - startTime) / 1000);
+            task.processed = i + received / Math.max(1, contentLength);
+            task.message = `正在下载 (${i + 1}/${fileList.length}): ${file.name} - ${formatSize(received)}${contentLength ? ` / ${formatSize(contentLength)}` : ''} (${formatSize(speed)}/s)`;
+          }
+        }
+        // 合并 chunks
+        const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+        const data = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          data.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        var buf = data.buffer;
+      } else {
+        var buf = await res.arrayBuffer();
+      }
+      
+      const data = buf;
       const elapsed = (Date.now() - startTime) / 1000;
       const speed = data.byteLength / elapsed;
       
       // 上传到目标存储（只需传 hash，hashToKey 会加上 file/ 前缀）
       try {
+        if (task) {
+          task.message = `正在上传到存储 (${i + 1}/${fileList.length}): ${file.name} (${formatSize(data.byteLength)})`;
+        }
         // @ts-ignore
         const ok = await stor.upload(file.hash, data);
         if (ok) {
           result.success++;
           result.totalSize += data.byteLength;
           if (task) {
+            task.processed = i + 1;
             task.success = result.success;
             task.failed = result.failed;
-            task.message = `已下载 ${i + 1}/${fileList.length}: ${file.name} (${formatSize(data.byteLength)} / ${formatSize(speed)}/s)`;
+            task.message = `已完成 ${i + 1}/${fileList.length}: ${file.name} (${formatSize(data.byteLength)} / ${formatSize(speed)}/s)`;
           }
         } else {
           result.failed++;
           result.errors.push(`${file.name}: 上传到存储失败`);
+          if (task) task.failed = result.failed;
         }
       } catch (e: any) {
         result.failed++;
         result.errors.push(`${file.name}: 上传失败 ${(e.message || e).substring(0, 100)}`);
+        if (task) task.failed = result.failed;
       }
     } catch (e: any) {
       result.failed++;
       result.errors.push(`${file.name}: ${(e.message || e).substring(0, 100)}`);
+      if (task) task.failed = result.failed;
     }
   }
   
