@@ -1952,72 +1952,133 @@ frontend.post('/admin/ajax/set', async (c) => {
   return c.json({ code: 0, msg: '设置保存成功' });
 });
 
-/** 仪表盘统计 */
-frontend.get('/admin/ajax/getcount', async (c) => {
-  if (!await checkAdmin(c)) return c.json({ code: -1 });
+/** 调试：测试 DB 连通性和计数 */
+frontend.get('/admin/ajax/checkdb', async (c) => {
+  if (!await checkAdmin(c)) return c.json({ code: -1, msg: 'auth failed' });
   const db = getDB(c);
   const config = getConf(c);
 
-  // 文件总数：直接用 count(*) 统计
-  let total = 0;
-  let totalSql = '';
+  const result = {
+    ok: true,
+    storage: config.storage,
+    storageOk: c.var.storageOk,
+    storExists: !!c.var.stor,
+    installed: config.installed,
+    queries: {} as Record<string, any>,
+  };
+
+  // 1. raw COUNT
   try {
     const r = await db.prepare('SELECT COUNT(*) as c FROM pre_file').first<{ c: number }>();
-    total = r?.c ?? 0;
-    totalSql = `count=${total}`;
+    result.queries['count_raw'] = { ok: true, value: r?.c ?? null, raw: JSON.stringify(r) };
   } catch (e: any) {
-    console.error('[getcount] pre_file count failed:', e);
-    totalSql = `error=${e.message || e}`;
+    result.queries['count_raw'] = { ok: false, error: e?.message || String(e) };
   }
 
-  // 同时用 SELECT * 抽样第一条验证 D1 实际有数据
+  // 2. count with WHERE 1=1 (matching fileList)
+  try {
+    const r = await db.prepare('SELECT COUNT(*) as c FROM pre_file WHERE 1=1').first<{ c: number }>();
+    result.queries['count_where'] = { ok: true, value: r?.c ?? null, raw: JSON.stringify(r) };
+  } catch (e: any) {
+    result.queries['count_where'] = { ok: false, error: e?.message || String(e) };
+  }
+
+  // 3. sample 1 row
+  try {
+    const row = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
+    result.queries['sample'] = { ok: true, row };
+  } catch (e: any) {
+    result.queries['sample'] = { ok: false, error: e?.message || String(e) };
+  }
+
+  // 4. table list
+  try {
+    const tables = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+    result.queries['tables'] = { ok: true, names: (tables.results || []).map((r: any) => r.name) };
+  } catch (e: any) {
+    result.queries['tables'] = { ok: false, error: e?.message || String(e) };
+  }
+
+  console.log(`[checkdb]`, JSON.stringify(result));
+  return c.json({ code: 0, data: result });
+});
+
+/** 仪表盘统计 */
+frontend.get('/admin/ajax/getcount', async (c) => {
+  // auth
+  if (!await checkAdmin(c)) {
+    console.warn('[getcount] auth failed');
+    return c.json({ code: -1 });
+  }
+  const db = getDB(c);
+  const config = getConf(c);
+
+  // 文件总数（用 getFileTotal 确保与其它地方一致）
+  let total = 0;
+  try {
+    total = await getFileTotal(db);
+  } catch (e: any) {
+    console.error('[getcount] getFileTotal failed:', e?.message || e);
+  }
+
+  // 抽样第一条验证
   let sample: any = null;
   try {
     sample = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
-  } catch (e) {}
+  } catch (e: any) {
+    console.error('[getcount] sample failed:', e?.message || e);
+  }
 
-  // 今日上传数（基于本地时间）
-  const now = new Date();
-  const todayStr = now.getFullYear() + '-' +
-    String(now.getMonth() + 1).padStart(2, '0') + '-' +
-    String(now.getDate()).padStart(2, '0');
-  const todayUTC = todayStr + ' 00:00:00';
-  const tomorrowDate = new Date(now.getTime() + 86400000);
-  const tomorrowStr = tomorrowDate.getUTCFullYear() + '-' +
-    String(tomorrowDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
-    String(tomorrowDate.getUTCDate()).padStart(2, '0');
-  const tomorrowUTC = tomorrowStr + ' 00:00:00';
-  const yesterdayDate = new Date(now.getTime() - 86400000);
-  const yesterdayStr = yesterdayDate.getUTCFullYear() + '-' +
-    String(yesterdayDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
-    String(yesterdayDate.getUTCDate()).padStart(2, '0');
-  const yesterdayUTC = yesterdayStr + ' 00:00:00';
+  // 日期边界（全部使用 UTC，因为 Workers 运行在 UTC 时区）
+  const isoNow = new Date().toISOString(); // e.g. "2026-07-01T15:30:00.000Z"
+  const todayStr = isoNow.substring(0, 10);
+  const todayBoundary = todayStr + ' 00:00:00';
+
+  // 明天：加 1 天的 UTC 日期
+  const tomorrowDate = new Date(Date.now() + 86400000);
+  const tomorrowBoundary = tomorrowDate.toISOString().substring(0, 10) + ' 00:00:00';
+
+  // 昨天：减 1 天的 UTC 日期
+  const yesterdayDate = new Date(Date.now() - 86400000);
+  const yesterdayBoundary = yesterdayDate.toISOString().substring(0, 10) + ' 00:00:00';
 
   let todayCount = 0;
   let yCount = 0;
+
   try {
     const todayR = await db.prepare(
       'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
-    ).bind(todayUTC, tomorrowUTC).first<{ c: number }>();
+    ).bind(todayBoundary, tomorrowBoundary).first<{ c: number }>();
     todayCount = todayR?.c ?? 0;
-  } catch (e) {}
+  } catch (e: any) {
+    console.error('[getcount] today query failed:', e?.message || e);
+  }
 
   try {
     const yR = await db.prepare(
       'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
-    ).bind(yesterdayUTC, todayUTC).first<{ c: number }>();
+    ).bind(yesterdayBoundary, todayBoundary).first<{ c: number }>();
     yCount = yR?.c ?? 0;
-  } catch (e) {}
+  } catch (e: any) {
+    console.error('[getcount] yesterday query failed:', e?.message || e);
+  }
 
-  console.log(`[getcount] ${totalSql} today=${todayCount} yesterday=${yCount} sample=${sample ? sample.id + ':' + sample.name : 'none'} storage=${config.storage}`);
+  const count1 = total;
+  const count2 = todayCount;
+  const count3 = yCount;
+  const count4 = config.storage.toUpperCase();
+
+  console.log(`[getcount] total=${count1} today=${count2} yesterday=${count3} storage=${count4} sample=${sample ? sample.id + ':' + sample.name : 'none'} todayBoundary=${todayBoundary} tomorrow=${tomorrowBoundary} yesterday=${yesterdayBoundary}`);
 
   return c.json({
     code: 0,
-    count1: total,
-    count2: todayCount,
-    count3: yCount,
-    count4: config.storage.toUpperCase(),
-    debug: { totalSql, today: todayUTC, tomorrow: tomorrowUTC, sample },
+    count1, count2, count3, count4,
+    debug: {
+      today: todayBoundary,
+      tomorrow: tomorrowBoundary,
+      yesterday: yesterdayBoundary,
+      sample: sample ? { id: sample.id, name: sample.name, hash: sample.hash, addtime: sample.addtime } : null,
+    },
   });
 });
 
