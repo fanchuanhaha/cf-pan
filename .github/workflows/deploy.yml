@@ -156,8 +156,8 @@ jobs:
       # ==================== 从 Secrets 自动配置 ====================
       # 如果设置了 ADMIN_PWD，则自动写入配置到 D1 并标记为已安装
       # 这样部署后直接可用，无需手动访问 /install/ 页面
+      # 注意：GitHub Actions 不支持在 if: 中使用 secrets，改用 shell 级别判断
       - name: Auto-configure from Secrets (跳过安装向导)
-        if: ${{ secrets.ADMIN_PWD != '' && secrets.ADMIN_PWD != '' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -171,6 +171,16 @@ jobs:
           QINIU_DOMAIN: ${{ secrets.QINIU_DOMAIN || '' }}
           QINIU_FOLDER: ${{ secrets.QINIU_FOLDER || 'file' }}
         run: |
+          # 如果没有设置 ADMIN_PWD，则跳过自动配置
+          if [ -z "$ADMIN_PWD" ]; then
+            echo "ℹ️  未检测到 ADMIN_PWD，跳过自动配置。"
+            echo "   如需自动配置，请在 GitHub Secrets 中添加 ADMIN_PWD。"
+            echo "   也可以部署后手动访问 /install/ 完成配置。"
+            exit 0
+          fi
+
+          echo "检测到 ADMIN_PWD，开始自动配置..."
+
           # SQL 值转义函数：将单引号替换为两个单引号
           sql_escape() {
             echo "$1" | sed "s/'/''/g"
