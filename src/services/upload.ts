@@ -6,6 +6,7 @@ import type { IStorage } from '../storage/IStorage';
 import { getFileExt } from '../utils/mime';
 import { getClientIP, htmlspecialchars } from '../utils/response';
 import type { Context } from 'hono';
+import type { D1Like } from '../middleware';
 
 /** 从文件名中移除非法字符 */
 export function sanitizeFileName(name: string): string {
@@ -88,7 +89,7 @@ export async function fileOutput(
 
 /** 检验上传参数 + 入库 */
 export async function handleUploadComplete(
-  db: D1Database,
+  db: D1Like,
   stor: IStorage,
   input: {
     name: string;
@@ -115,7 +116,7 @@ export async function handleUploadComplete(
     return { code: -1, msg: '文件上传失败' };
   }
 
-  const { id } = await insertFile(db, {
+  const id = await insertFile(db, {
     name: input.name,
     type: input.ext,
     size: input.size,

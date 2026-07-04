@@ -2,17 +2,16 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getDBSession, getStorOrThrow, getConf } from '../middleware';
+import { getDB, getStorOrThrow, getConf } from '../middleware';
 import { getFileByHash, insertFile } from '../db';
 import { isBlocked, sanitizeFileName } from '../services/upload';
 import { getFileExt, getMimeType } from '../utils/mime';
-import { jsonResult, jsonError, html, getClientIP, setD1BookmarkCookie } from '../utils/response';
+import { jsonResult, jsonError, html, getClientIP } from '../utils/response';
 
 const api = new Hono<AppEnv>();
 
 api.post('/', async (c) => {
   const db = getDB(c);
-  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const config = getConf(c);
 
@@ -75,7 +74,7 @@ api.post('/', async (c) => {
   );
 
   // 秒传
-  const existing = await getFileByHash(db, hash, session);
+  const existing = await getFileByHash(db, hash);
   if (existing) {
     return formatResponse(c, format, {
       code: 0, msg: '本站已存在该文件', exists: 1, hash, name, size, type: ext, id: existing.id,
@@ -85,13 +84,11 @@ api.post('/', async (c) => {
   const ok = await stor.upload(hash, fileBody, getMimeType(ext));
   if (!ok) return formatResponse(c, format, { code: -1, msg: '文件上传失败' });
 
-  const { id, bookmark } = await insertFile(db, {
+  const id = await insertFile(db, {
     name, type: ext, size, hash,
     ip: getClientIP(c),
     hide: 0, pwd: null, uid: 0,
   });
-  // 把 D1 会话书签写回 Cookie，使后续 admin 读取能 read-after-write 看到本次写入
-  setD1BookmarkCookie(c, bookmark);
 
   return formatResponse(c, format, {
     code: 0, msg: '文件上传成功！', exists: 0, hash, name, size, type: ext, id,

@@ -1,6 +1,5 @@
 // 彩虹外链网盘 - HTTP 响应工具
 import type { Context } from 'hono';
-import { D1_BOOKMARK_COOKIE, D1_BOOKMARK_MAX_AGE } from '../middleware';
 
 /** JSON 成功响应 */
 export function jsonOk(c: Context, data: Record<string, unknown>, status: 200 | 201 = 200): Response {
@@ -64,14 +63,4 @@ export function htmlspecialchars(str: string): string {
     '"': '&quot;', "'": '&#039;',
   };
   return str.replace(/[&<>"']/g, c => map[c] || c);
-}
-
-/**
- * 将 D1 会话 bookmark 写入 Cookie（Cloudflare read-after-write 一致性）
- * 写入时使用 append，避免覆盖其他路由的 Set-Cookie（upload_csrf / admin_token 等）。
- */
-export function setD1BookmarkCookie(c: Context, bookmark: string | null | undefined): void {
-  if (!bookmark) return;
-  const cookieValue = `${D1_BOOKMARK_COOKIE}=${encodeURIComponent(bookmark)}; Path=/; Max-Age=${D1_BOOKMARK_MAX_AGE}; SameSite=Lax; HttpOnly`;
-  c.header('Set-Cookie', cookieValue, { append: true });
 }

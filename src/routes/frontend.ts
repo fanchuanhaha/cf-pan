@@ -9,7 +9,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getDBSession, getConf, getStor, getStorOrThrow } from '../middleware';
+import { getDB, getConf, getStor, getStorOrThrow } from '../middleware';
 import { updateConfig, clearConfigCache } from '../config';
 import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileTotal, getFileCountByDateRange } from '../db';
 import { verifyAdminToken, signAdminToken } from '../auth/admin';
@@ -2011,14 +2011,12 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     return c.json({ code: -1 });
   }
   const db = getDB(c);
-  // 使用 D1 会话（带 bookmark），避免读副本滞后导致"上传成功但后台仍为 0"
-  const session = getDBSession(c);
   const config = getConf(c);
 
   // 文件总数（用 getFileTotal 确保与其它地方一致）
   let total = 0;
   try {
-    total = await getFileTotal(db, session);
+    total = await getFileTotal(db);
   } catch (e: any) {
     console.error('[getcount] getFileTotal failed:', e?.message || e);
   }
@@ -2026,7 +2024,7 @@ frontend.get('/admin/ajax/getcount', async (c) => {
   // 抽样第一条验证
   let sample: any = null;
   try {
-    sample = await session.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
+    sample = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
   } catch (e: any) {
     console.error('[getcount] sample failed:', e?.message || e);
   }
@@ -2048,7 +2046,7 @@ frontend.get('/admin/ajax/getcount', async (c) => {
   let yCount = 0;
 
   try {
-    const todayR = await session.prepare(
+    const todayR = await db.prepare(
       'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
     ).bind(todayBoundary, tomorrowBoundary).first<{ c: number }>();
     todayCount = todayR?.c ?? 0;
@@ -2057,7 +2055,7 @@ frontend.get('/admin/ajax/getcount', async (c) => {
   }
 
   try {
-    const yR = await session.prepare(
+    const yR = await db.prepare(
       'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
     ).bind(yesterdayBoundary, todayBoundary).first<{ c: number }>();
     yCount = yR?.c ?? 0;
@@ -2088,7 +2086,6 @@ frontend.get('/admin/ajax/getcount', async (c) => {
 frontend.post('/admin/ajax/fileList', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
-  const session = getDBSession(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const offset = parseInt(String(body['offset'] || '0'));
   const limit = parseInt(String(body['limit'] || '15'));
@@ -2106,8 +2103,8 @@ frontend.post('/admin/ajax/fileList', async (c) => {
     params.push(`%${search}%`);
   }
 
-  const total = (await session.prepare(`SELECT count(*) as c FROM pre_file WHERE ${where.join(' AND ')}`).bind(...params).first<{ c: number }>())?.c || 0;
-  const { results } = await session.prepare(
+  const total = (await db.prepare(`SELECT count(*) as c FROM pre_file WHERE ${where.join(' AND ')}`).bind(...params).first<{ c: number }>())?.c || 0;
+  const { results } = await db.prepare(
     `SELECT * FROM pre_file WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ? OFFSET ?`
   ).bind(...params, limit, offset).all<any>();
 
@@ -2126,9 +2123,8 @@ frontend.post('/admin/ajax/fileList', async (c) => {
 frontend.get('/admin/ajax/getFileInfo', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
-  const session = getDBSession(c);
   const id = parseInt(c.req.query('id') || '0');
-  const row = await getFileById(db, id, session);
+  const row = await getFileById(db, id);
   if (!row) return c.json({ code: -1, msg: '文件不存在' });
   return c.json({ ...row, code: 0, size2: sizeFormat(row.size) });
 });
@@ -2156,20 +2152,18 @@ frontend.post('/admin/ajax/saveFileInfo', async (c) => {
 frontend.get('/admin/ajax/setBlock', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
-  const session = getDBSession(c);
   const id = parseInt(c.req.query('id') || '0');
   const status = parseInt(c.req.query('status') || '0');
-  await setFileBlock(db, id, status, session);
+  await setFileBlock(db, id, status);
   return c.json({ code: 0, msg: '修改成功' });
 });
 
 frontend.get('/admin/ajax/delFile', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
-  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const id = parseInt(c.req.query('id') || '0');
-  const row = await getFileById(db, id, session);
+  const row = await getFileById(db, id);
   if (!row) return c.json({ code: -1, msg: '文件不存在' });
   try {
     await stor.delete(row.hash);
@@ -2181,7 +2175,6 @@ frontend.get('/admin/ajax/delFile', async (c) => {
 frontend.post('/admin/ajax/operation', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
-  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const status = parseInt(String(body['status'] || '0'));
@@ -2197,15 +2190,15 @@ frontend.post('/admin/ajax/operation', async (c) => {
   let count = 0;
   for (const id of ids) {
     if (status === 0) {
-      const row = await getFileById(db, id, session);
+      const row = await getFileById(db, id);
       if (row) {
         try { await stor.delete(row.hash); } catch {}
         await deleteFile(db, id);
       }
     } else if (status === 1) {
-      await setFileBlock(db, id, 1, session);
+      await setFileBlock(db, id, 1);
     } else if (status === 2) {
-      await setFileBlock(db, id, 0, session);
+      await setFileBlock(db, id, 0);
     }
     count++;
   }

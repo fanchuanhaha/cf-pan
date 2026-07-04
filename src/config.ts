@@ -1,4 +1,5 @@
 // 彩虹外链网盘 - 配置管理（D1 读取，内存缓存）
+import type { D1Like } from './middleware';
 
 interface D1Result {
   k: string;
@@ -169,7 +170,7 @@ const defaults: AppConfig = {
 let cached: AppConfig | null = null;
 
 /** 从 D1 加载配置 */
-export async function loadConfig(db: D1Database): Promise<AppConfig> {
+export async function loadConfig(db: D1Like): Promise<AppConfig> {
   // 不使用缓存，每次都从数据库加载最新配置（确保配置修改后立即生效）
   const { results } = await db.prepare('SELECT k, v FROM pre_config').all<D1Result>();
   const config = { ...defaults };
@@ -190,7 +191,7 @@ export async function loadConfig(db: D1Database): Promise<AppConfig> {
 }
 
 /** 更新单条配置 */
-export async function updateConfig(db: D1Database, k: string, v: string): Promise<void> {
+export async function updateConfig(db: D1Like, k: string, v: string): Promise<void> {
   await db.prepare(
     'INSERT INTO pre_config (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v'
   ).bind(k, v).run();

@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getDBSession, getStorOrThrow, getConf } from '../middleware';
+import { getDB, getStorOrThrow, getConf } from '../middleware';
 import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock } from '../db';
 import { updateConfig, clearConfigCache } from '../config';
 import { verifyAdminToken } from '../auth/admin';
@@ -31,8 +31,6 @@ adminAjax.use('*', async (c, next) => {
 // 统计面板
 adminAjax.get('/getcount', async (c) => {
   const db = getDB(c);
-  // 使用 D1 会话（带 bookmark），避免读副本滞后导致"上传成功但后台仍为 0"
-  const session = getDBSession(c);
   const config = getConf(c);
   const today = new Date().toISOString().substring(0, 10) + ' 00:00:00';
   const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10) + ' 00:00:00';
@@ -40,9 +38,9 @@ adminAjax.get('/getcount', async (c) => {
   let total = 0, todayCount = 0, yesterdayCount = 0;
   try {
     const [totalR, todayR, yesterdayR] = await Promise.all([
-      session.prepare('SELECT count(*) as cnt FROM pre_file').first<{ cnt: number }>(),
-      session.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ?").bind(today).first<{ cnt: number }>(),
-      session.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ? AND addtime < ?").bind(yesterday, today).first<{ cnt: number }>(),
+      db.prepare('SELECT count(*) as cnt FROM pre_file').first<{ cnt: number }>(),
+      db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ?").bind(today).first<{ cnt: number }>(),
+      db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ? AND addtime < ?").bind(yesterday, today).first<{ cnt: number }>(),
     ]);
     total = totalR?.cnt ?? 0;
     todayCount = todayR?.cnt ?? 0;
@@ -65,7 +63,6 @@ adminAjax.get('/getcount', async (c) => {
 // 文件列表
 adminAjax.post('/fileList', async (c) => {
   const db = getDB(c);
-  const session = getDBSession(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const type = body['type'] || 'name';
   const kw = body['kw'] || '';
@@ -76,7 +73,7 @@ adminAjax.post('/fileList', async (c) => {
 
   const { total, rows } = await getFileList(db, {
     search: kw, type, dstatus, offset, limit, orderby,
-  }, session);
+  });
 
   const rowsWithIcon = rows.map(row => ({
     ...row,
@@ -92,23 +89,21 @@ adminAjax.post('/fileList', async (c) => {
 // 封禁/解封文件
 adminAjax.get('/setBlock', async (c) => {
   const db = getDB(c);
-  const session = getDBSession(c);
   const id = parseInt(c.req.query('id') || '0');
   const status = parseInt(c.req.query('status') || '0');
   if (!id) return jsonError(c, '参数错误');
-  await setFileBlock(db, id, status, session);
+  await setFileBlock(db, id, status);
   return jsonResult(c, { code: 0, msg: '修改成功！' });
 });
 
 // 删除文件
 adminAjax.get('/delFile', async (c) => {
   const db = getDB(c);
-  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const id = parseInt(c.req.query('id') || '0');
   if (!id) return jsonError(c, '参数错误');
 
-  const row = await getFileById(db, id, session);
+  const row = await getFileById(db, id);
   if (!row) return jsonError(c, '当前文件不存在！');
 
   await stor.delete(row.hash);
@@ -120,7 +115,6 @@ adminAjax.get('/delFile', async (c) => {
 // 批量操作
 adminAjax.post('/operation', async (c) => {
   const db = getDB(c);
-  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const status = parseInt(body['status'] || '0');
@@ -129,13 +123,13 @@ adminAjax.post('/operation', async (c) => {
 
   let count = 0;
   for (const id of ids) {
-    const row = await getFileById(db, id, session);
+    const row = await getFileById(db, id);
     if (!row) continue;
     if (status === 0) {
       await stor.delete(row.hash);
       await dbDeleteFile(db, id);
     } else if (status === 1 || status === 2) {
-      await setFileBlock(db, id, status, session);
+      await setFileBlock(db, id, status);
     }
     count++;
   }

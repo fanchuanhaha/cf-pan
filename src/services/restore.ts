@@ -2,6 +2,7 @@
 // 从原 PHP 项目恢复数据：SQL 文件 + 站点目录压缩包
 
 import type { IStorage } from '../storage/IStorage';
+import type { D1Like } from '../middleware';
 
 export type RestoreStage = 'download' | 'extract' | 'database' | 'files' | 'done';
 
@@ -175,7 +176,7 @@ export async function extractZip(data: ArrayBuffer, taskId: string): Promise<Arr
 /**
  * 从原 PHP 项目的 SQL 文件恢复数据库
  */
-export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string, taskId: string): Promise<{ success: number; failed: number; errors: string[] }> {
+export async function restoreDatabaseFromSql(db: D1Like, sqlContent: string, taskId: string): Promise<{ success: number; failed: number; errors: string[] }> {
   const task = restoreTasks.get(taskId);
   if (task) {
     task.stage = 'database';

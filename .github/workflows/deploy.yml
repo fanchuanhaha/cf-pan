@@ -61,64 +61,35 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           echo "检查并创建 D1 数据库..."
+          DATABASE_LIST=$(npx wrangler d1 list --config wrangler.spa.toml --json 2>/dev/null || echo "[]")
+          EXISTING_DB=$(echo "$DATABASE_LIST" | jq -r '.[] | select(.name=="pan-db") | .uuid')
 
-          # 容错地获取 D1 列表：
-          #   - wrangler 4.x 的 --json 输出格式在不同小版本之间存在差异，
-          #     有时会输出非 JSON 文本（warning、版本信息、空提示），
-          #     此时 || echo "[]" 不会触发（wrangler 仍以 0 退出）。
-          #   - 因此必须先用 jq 校验输出是否为合法 JSON，否则一律按空数组处理。
-          set +e
-          DATABASE_LIST=$(npx wrangler d1 list --config wrangler.spa.toml --json 2>/dev/null)
-          LIST_EXIT=$?
-          set -e
-
-          echo "wrangler d1 list 退出码: $LIST_EXIT"
-          if [ $LIST_EXIT -ne 0 ] || [ -z "$DATABASE_LIST" ]; then
-            echo "⚠️  d1 list 无输出或命令失败，使用空数组"
-            DATABASE_LIST="[]"
-          elif ! echo "$DATABASE_LIST" | jq -e . >/dev/null 2>&1; then
-            echo "⚠️  d1 list 输出非合法 JSON，使用空数组"
-            echo "原始输出前 200 字节: $(printf '%s' "$DATABASE_LIST" | head -c 200)"
-            DATABASE_LIST="[]"
-          fi
-
-          EXISTING_DB=$(echo "$DATABASE_LIST" | jq -r '.[]? | select(.name=="pan-db") | .uuid // .id // empty' 2>/dev/null)
-
-          if [ -n "$EXISTING_DB" ] && [ "$EXISTING_DB" != "null" ]; then
+          if [ -n "$EXISTING_DB" ]; then
             echo "✅ 找到现有 D1 数据库: $EXISTING_DB"
             DATABASE_ID=$EXISTING_DB
           else
-            echo "未找到现有 D1 数据库，尝试创建..."
-            set +e
+            echo "创建新的 D1 数据库..."
             CREATE_OUTPUT=$(npx wrangler d1 create pan-db --config wrangler.spa.toml 2>&1)
-            CREATE_EXIT=$?
-            set -e
 
-            if [ $CREATE_EXIT -eq 0 ] && echo "$CREATE_OUTPUT" | grep -q "Successfully created DB"; then
+            if echo "$CREATE_OUTPUT" | grep -q "Successfully created DB"; then
               DATABASE_ID=$(echo "$CREATE_OUTPUT" | grep -oP "database_id = \"\K[^\"]+")
               if [ -z "$DATABASE_ID" ]; then
                 DATABASE_ID=$(echo "$CREATE_OUTPUT" | grep -oP "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
               fi
               echo "✅ 数据库创建成功: $DATABASE_ID"
             else
-              echo "⚠️  d1 create 失败或返回异常，回退到再次 list"
-              set +e
-              LIST2=$(npx wrangler d1 list --config wrangler.spa.toml --json 2>/dev/null)
-              set -e
-              if [ -n "$LIST2" ] && echo "$LIST2" | jq -e . >/dev/null 2>&1; then
-                DATABASE_ID=$(echo "$LIST2" | jq -r '.[]? | select(.name=="pan-db") | .uuid // .id // empty' 2>/dev/null)
-              fi
-              if [ -z "$DATABASE_ID" ] || [ "$DATABASE_ID" = "null" ]; then
+              LIST_OUTPUT=$(npx wrangler d1 list --config wrangler.spa.toml --json 2>/dev/null || echo "[]")
+              DATABASE_ID=$(echo "$LIST_OUTPUT" | jq -r '.[] | select(.name=="pan-db") | .uuid')
+
+              if [ -z "$DATABASE_ID" ]; then
                 echo "❌ 无法创建或找到 D1 数据库"
-                echo "CREATE_OUTPUT: $CREATE_OUTPUT"
                 exit 1
               fi
             fi
           fi
 
           echo "更新 wrangler.spa.toml 中的数据库 ID..."
-          # 兼容 database_id = "..." 和 [[d1_databases]] 块下的 database_id
-          sed -i -E "s/(database_id = \")[^\"]+(\")/\1$DATABASE_ID\2/g" wrangler.spa.toml
+          sed -i -E "s/(database_id = \")[^\"]+(\"\s*$)/\1$DATABASE_ID\2/" wrangler.spa.toml
 
           if grep -q "$DATABASE_ID" wrangler.spa.toml; then
             echo "✅ wrangler.spa.toml 更新成功"
