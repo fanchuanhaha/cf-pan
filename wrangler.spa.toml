@@ -21,14 +21,10 @@ SITE_URL = ""
 # bucket_name = "pan-files"
 
 # D1 数据库绑定 - 替换为实际的 database_id
-# 修复后台显示 0 文件的 Bug：开启 read replication 后，
-# 写后立即从读副本查询会看不到新数据（最终一致性问题）
-# 显式关闭读副本，让所有读都走主库；如需极致性能再单独评估
 [[d1_databases]]
 binding = "DB"
 database_name = "pan-db"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-read_replication = { enabled = false }
 
 # Static Assets 配置 - 托管前端静态资源
 [assets]

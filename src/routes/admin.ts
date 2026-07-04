@@ -2,20 +2,12 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStorOrThrow, getConf, getDBSession, flushDBSession } from '../middleware';
-import { getFileById, deleteFile as dbDeleteFile, setFileBlock } from '../db';
+import { getDB, getDBSession, getStorOrThrow, getConf } from '../middleware';
+import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock } from '../db';
 import { updateConfig, clearConfigCache } from '../config';
 import { verifyAdminToken } from '../auth/admin';
 import { typeToIcon, isView, getViewType, sizeFormat } from '../utils/mime';
 import { jsonResult, jsonError } from '../utils/response';
-
-/** 给响应添加防缓存头，避免 Cloudflare 边缘缓存后台数据 */
-function setNoCache(c: any) {
-  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
-  c.header('Pragma', 'no-cache');
-  c.header('Expires', '0');
-  c.header('Vary', 'Cookie');
-}
 
 const adminAjax = new Hono<AppEnv>();
 
@@ -38,7 +30,8 @@ adminAjax.use('*', async (c, next) => {
 
 // 统计面板
 adminAjax.get('/getcount', async (c) => {
-  // 使用 D1 Session 强制走主库读，避免读副本延迟导致统计为 0
+  const db = getDB(c);
+  // 使用 D1 会话（带 bookmark），避免读副本滞后导致"上传成功但后台仍为 0"
   const session = getDBSession(c);
   const config = getConf(c);
   const today = new Date().toISOString().substring(0, 10) + ' 00:00:00';
@@ -60,9 +53,6 @@ adminAjax.get('/getcount', async (c) => {
 
   console.log(`[admin/getcount] total=${total} today=${todayCount} yesterday=${yesterdayCount} storage=${config.storage}`);
 
-  setNoCache(c);
-  flushDBSession(c);
-
   return jsonResult(c, {
     code: 0,
     count1: total,
@@ -74,7 +64,7 @@ adminAjax.get('/getcount', async (c) => {
 
 // 文件列表
 adminAjax.post('/fileList', async (c) => {
-  // 使用 D1 Session 走主库，保证读到最新记录
+  const db = getDB(c);
   const session = getDBSession(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const type = body['type'] || 'name';
@@ -84,43 +74,11 @@ adminAjax.post('/fileList', async (c) => {
   const limit = parseInt(body['limit'] ?? '15');
   const orderby = body['orderby'] || 'id';
 
-  // 直接用 session 查询，绕开 getFileList 内部使用的 db
-  let where = '1=1';
-  const params: unknown[] = [];
+  const { total, rows } = await getFileList(db, {
+    search: kw, type, dstatus, offset, limit, orderby,
+  }, session);
 
-  if (dstatus >= 0) {
-    where += ' AND block = ?';
-    params.push(dstatus);
-  }
-  if (kw) {
-    if (type === 'name') {
-      where += ' AND name LIKE ?';
-      params.push(`%${kw}%`);
-    } else if (type === 'hash') {
-      where += ' AND hash = ?';
-      params.push(kw);
-    }
-  }
-
-  const order = orderby === 'count' ? 'count DESC' : 'id DESC';
-
-  let total = 0;
-  const rows: any[] = [];
-  try {
-    const countResult = await session.prepare(
-      `SELECT count(*) as cnt FROM pre_file WHERE ${where}`
-    ).bind(...params).first<{ cnt: number }>();
-    total = countResult?.cnt ?? 0;
-
-    const rowsResult = await session.prepare(
-      `SELECT * FROM pre_file WHERE ${where} ORDER BY ${order} LIMIT ? OFFSET ?`
-    ).bind(...params, limit, offset).all();
-    rows.push(...(rowsResult.results || []));
-  } catch (e: any) {
-    console.error('[admin/fileList] query failed:', e);
-  }
-
-  const rowsWithIcon = rows.map((row: any) => ({
+  const rowsWithIcon = rows.map(row => ({
     ...row,
     icon: typeToIcon(row.type),
     view: isView(row.type),
@@ -128,37 +86,33 @@ adminAjax.post('/fileList', async (c) => {
     size2: sizeFormat(row.size),
   }));
 
-  setNoCache(c);
-  flushDBSession(c);
-
   return jsonResult(c, { total, rows: rowsWithIcon });
 });
 
 // 封禁/解封文件
 adminAjax.get('/setBlock', async (c) => {
   const db = getDB(c);
+  const session = getDBSession(c);
   const id = parseInt(c.req.query('id') || '0');
   const status = parseInt(c.req.query('status') || '0');
   if (!id) return jsonError(c, '参数错误');
-  await setFileBlock(db, id, status);
-  setNoCache(c);
+  await setFileBlock(db, id, status, session);
   return jsonResult(c, { code: 0, msg: '修改成功！' });
 });
 
 // 删除文件
 adminAjax.get('/delFile', async (c) => {
   const db = getDB(c);
+  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const id = parseInt(c.req.query('id') || '0');
   if (!id) return jsonError(c, '参数错误');
 
-  const row = await getFileById(db, id);
+  const row = await getFileById(db, id, session);
   if (!row) return jsonError(c, '当前文件不存在！');
 
   await stor.delete(row.hash);
   const ok = await dbDeleteFile(db, id);
-  setNoCache(c);
-  flushDBSession(c);
   if (ok) return jsonResult(c, { code: 0, msg: '删除文件成功！' });
   return jsonError(c, '删除文件失败');
 });
@@ -166,6 +120,7 @@ adminAjax.get('/delFile', async (c) => {
 // 批量操作
 adminAjax.post('/operation', async (c) => {
   const db = getDB(c);
+  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const status = parseInt(body['status'] || '0');
@@ -174,19 +129,17 @@ adminAjax.post('/operation', async (c) => {
 
   let count = 0;
   for (const id of ids) {
-    const row = await getFileById(db, id);
+    const row = await getFileById(db, id, session);
     if (!row) continue;
     if (status === 0) {
       await stor.delete(row.hash);
       await dbDeleteFile(db, id);
     } else if (status === 1 || status === 2) {
-      await setFileBlock(db, id, status);
+      await setFileBlock(db, id, status, session);
     }
     count++;
   }
   const opName = status === 0 ? '删除' : (status === 1 ? '封禁' : '解封');
-  setNoCache(c);
-  flushDBSession(c);
   return jsonResult(c, { code: 0, msg: `成功${opName}${count}个文件` });
 });
 
@@ -199,7 +152,6 @@ adminAjax.post('/saveSetting', async (c) => {
     await updateConfig(db, k, v);
   }
   clearConfigCache();
-  setNoCache(c);
   return jsonResult(c, { code: 0, msg: '保存成功' });
 });
 

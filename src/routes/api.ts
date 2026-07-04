@@ -2,14 +2,17 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getStorOrThrow, getConf, getDBSession, flushDBSession } from '../middleware';
+import { getDB, getDBSession, getStorOrThrow, getConf } from '../middleware';
+import { getFileByHash, insertFile } from '../db';
 import { isBlocked, sanitizeFileName } from '../services/upload';
 import { getFileExt, getMimeType } from '../utils/mime';
-import { jsonResult, jsonError, html, getClientIP } from '../utils/response';
+import { jsonResult, jsonError, html, getClientIP, setD1BookmarkCookie } from '../utils/response';
 
 const api = new Hono<AppEnv>();
 
 api.post('/', async (c) => {
+  const db = getDB(c);
+  const session = getDBSession(c);
   const stor = getStorOrThrow(c);
   const config = getConf(c);
 
@@ -71,13 +74,9 @@ api.post('/', async (c) => {
     Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
   );
 
-  // 秒传 —— 使用 D1 Session 走主库，避免读副本延迟
-  const session = getDBSession(c);
-  const existing = await session.prepare(
-    'SELECT * FROM pre_file WHERE hash = ? LIMIT 1'
-  ).bind(hash).first() as any;
+  // 秒传
+  const existing = await getFileByHash(db, hash, session);
   if (existing) {
-    flushDBSession(c);
     return formatResponse(c, format, {
       code: 0, msg: '本站已存在该文件', exists: 1, hash, name, size, type: ext, id: existing.id,
     });
@@ -86,22 +85,13 @@ api.post('/', async (c) => {
   const ok = await stor.upload(hash, fileBody, getMimeType(ext));
   if (!ok) return formatResponse(c, format, { code: -1, msg: '文件上传失败' });
 
-  // 插入文件记录 —— 走 session
-  let id = 0;
-  try {
-    const result = await session.prepare(
-      `INSERT INTO pre_file (name, type, size, hash, addtime, ip, hide, pwd, uid)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(name, ext, size, hash, new Date().toISOString().replace('T', ' ').substring(0, 19), getClientIP(c), 0, null, 0).run();
-    id = result.meta.last_row_id;
-  } catch (e: any) {
-    console.error('[api/upload] insert failed:', e);
-    return formatResponse(c, format, { code: -1, msg: '文件信息入库失败' });
-  }
-
-  // 把 session 的 bookmark 回写到 cookie，使后台立刻看到这条记录
-  flushDBSession(c);
-  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  const { id, bookmark } = await insertFile(db, {
+    name, type: ext, size, hash,
+    ip: getClientIP(c),
+    hide: 0, pwd: null, uid: 0,
+  });
+  // 把 D1 会话书签写回 Cookie，使后续 admin 读取能 read-after-write 看到本次写入
+  setD1BookmarkCookie(c, bookmark);
 
   return formatResponse(c, format, {
     code: 0, msg: '文件上传成功！', exists: 0, hash, name, size, type: ext, id,

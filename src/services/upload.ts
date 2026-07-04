@@ -115,7 +115,7 @@ export async function handleUploadComplete(
     return { code: -1, msg: '文件上传失败' };
   }
 
-  const id = await insertFile(db, {
+  const { id } = await insertFile(db, {
     name: input.name,
     type: input.ext,
     size: input.size,
