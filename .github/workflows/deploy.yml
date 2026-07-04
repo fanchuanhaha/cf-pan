@@ -13,13 +13,15 @@
 #     ADMIN_USER               管理员账号 (默认: admin)
 #     ADMIN_PWD                管理员密码 (必填才会启用自动配置)
 #     SITE_TITLE               站点名称 (默认: 彩虹外链网盘)
-#     STORAGE_TYPE             存储类型 (默认: qiniu)
+#     STORAGE_TYPE             存储类型 (默认: r2)
 #                             可选: r2 / s3 / github / webdav / upyun / qiniu
-#     QINIU_AK                 七牛云 AccessKey
-#     QINIU_SK                 七牛云 SecretKey
-#     QINIU_BUCKET             七牛云存储空间名称
-#     QINIU_DOMAIN             七牛云绑定域名 (例如 https://dlp.wn5.top)
-#     QINIU_FOLDER             七牛云存储子目录 (默认: file)
+#                               默认 r2，不需要额外配置
+#                               设为 qiniu 时需要填写以下 QINIU_* 项
+#     QINIU_AK                 七牛云 AccessKey (仅 STORAGE_TYPE=qiniu 时生效)
+#     QINIU_SK                 七牛云 SecretKey (同上)
+#     QINIU_BUCKET             七牛云存储空间名称 (同上)
+#     QINIU_DOMAIN             七牛云绑定域名 (同上，例如 https://dlp.wn5.top)
+#     QINIU_FOLDER             七牛云存储子目录 (默认: file，同上)
 #
 #   3. 在 Actions 页面手动运行 "Deploy to Cloudflare Workers"，或
 #      推送 main 分支自动触发
@@ -164,7 +166,7 @@ jobs:
           ADMIN_USER: ${{ secrets.ADMIN_USER || 'admin' }}
           ADMIN_PWD: ${{ secrets.ADMIN_PWD }}
           SITE_TITLE: ${{ secrets.SITE_TITLE || '彩虹外链网盘' }}
-          STORAGE_TYPE: ${{ secrets.STORAGE_TYPE || 'qiniu' }}
+          STORAGE_TYPE: ${{ secrets.STORAGE_TYPE || 'r2' }}
           QINIU_AK: ${{ secrets.QINIU_AK || '' }}
           QINIU_SK: ${{ secrets.QINIU_SK || '' }}
           QINIU_BUCKET: ${{ secrets.QINIU_BUCKET || '' }}

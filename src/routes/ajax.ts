@@ -2,8 +2,8 @@
 
 import { Hono } from 'hono';
 import type { AppEnv, AppVariables } from '../middleware';
-import { getDB, getStorOrThrow, getConf } from '../middleware';
-import { getFileByHash, insertFile, deleteFile, getFileById, getTodayUploadCount, now } from '../db';
+import { getDB, getStorOrThrow, getConf, getDBSession, flushDBSession } from '../middleware';
+import { deleteFile, getFileByHash, getFileById, getTodayUploadCount, now } from '../db';
 import { isBlocked, sanitizeFileName } from '../services/upload';
 import { getFileExt, getMimeType, isView as isViewExt } from '../utils/mime';
 import { jsonError, jsonResult, generateCsrfToken, getClientIP } from '../utils/response';
@@ -83,10 +83,14 @@ async function handlePreUpload(c: any) {
     return jsonError(c, '你今天上传文件的数量已超过限制');
   }
 
-  // 秒传检测
-  const existing = await getFileByHash(db, hash);
+  // 秒传检测 —— 使用 D1 Session 走主库，避免刚上传完成的文件被误判为不存在
+  const session = getDBSession(c);
+  const existing = await session.prepare(
+    'SELECT * FROM pre_file WHERE hash = ? LIMIT 1'
+  ).bind(hash).first();
   if (existing) {
     delete csrfTokens[ip];
+    flushDBSession(c);
     return jsonResult(c, {
       code: 1, msg: '本站已存在该文件', exists: 1, hash, name, size, type: ext, id: existing.id,
     });
@@ -96,6 +100,9 @@ async function handlePreUpload(c: any) {
   const chunkSize = 8 * 1024 * 1024;
   const chunks = 1;
 
+  flushDBSession(c);
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
   return jsonResult(c, {
     code: 0, third: false, hash,
     chunksize: chunkSize, chunks,
@@ -104,7 +111,9 @@ async function handlePreUpload(c: any) {
 
 // 文件分片上传
 async function handleUploadPart(c: any) {
-  const db = getDB(c);
+  // 使用 D1 Session：保证后续读秒传记录能看到本次请求刚写入的记录
+  // 也保证本次请求的 INSERT 立即对同一 session 可见，并允许把 bookmark 传回客户端
+  const session = getDBSession(c);
   const config = getConf(c);
   const ip = getClientIP(c);
 
@@ -137,18 +146,31 @@ async function handleUploadPart(c: any) {
   const success = await stor.upload(hash, arrayBuf, getMimeType(ext));
   if (!success) return jsonError(c, '文件上传失败');
 
-  // 入库（去重）
-  const existing = await getFileByHash(db, hash);
+  // 入库（去重）—— 走 session，保证读写一致
+  const existing = await session.prepare(
+    'SELECT * FROM pre_file WHERE hash = ? LIMIT 1'
+  ).bind(hash).first();
   if (existing) {
     delete csrfTokens[ip];
+    // 命中秒传：把 bookmark 回写到 cookie，使后台能立刻看到这条记录
+    flushDBSession(c);
     return jsonResult(c, {
       code: 1, msg: '本站已存在该文件', exists: 1, hash, name: existing.name, size: existing.size, type: existing.type, id: existing.id,
     });
   }
 
-  const id = await insertFile(db, {
-    name: realName, type: ext, size: realSize, hash, ip, hide: 0, pwd: null, uid: 0,
-  });
+  // 插入文件记录 —— 走 session，并使用 D1 Batch 保证原子性
+  let id = 0;
+  try {
+    const result = await session.prepare(
+      `INSERT INTO pre_file (name, type, size, hash, addtime, ip, hide, pwd, uid)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(realName, ext, realSize, hash, now(), ip, 0, null, 0).run();
+    id = result.meta.last_row_id;
+  } catch (e: any) {
+    console.error('[upload_part] insert failed:', e);
+    return jsonError(c, '文件信息入库失败，请稍后再试');
+  }
 
   // 鉴黄
   if (config.green_check > 0) {
@@ -156,7 +178,7 @@ async function handleUploadPart(c: any) {
     if (typeImage.includes(ext.toLowerCase())) {
       const checkResult = await checkImage(hash, ext, c.env);
       if (!checkResult.safe) {
-        await db.prepare('UPDATE pre_file SET block = 1 WHERE id = ?').bind(id).run();
+        await session.prepare('UPDATE pre_file SET block = 1 WHERE id = ?').bind(id).run();
       }
     }
   }
@@ -165,11 +187,16 @@ async function handleUploadPart(c: any) {
   if (config.videoreview === 1) {
     const typeVideo = config.type_video.split('|').map(s => s.toLowerCase());
     if (typeVideo.includes(ext.toLowerCase())) {
-      await db.prepare('UPDATE pre_file SET block = 2 WHERE id = ?').bind(id).run();
+      await session.prepare('UPDATE pre_file SET block = 2 WHERE id = ?').bind(id).run();
     }
   }
 
   delete csrfTokens[ip];
+  // 把 session 的 bookmark 写回 cookie，让后台的 getcount/fileList 立刻读到本次写入
+  flushDBSession(c);
+  // 响应禁止被 Cloudflare 边缘缓存
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
   return jsonResult(c, {
     code: 1, msg: '文件上传成功！', exists: 0, hash, name: realName, size: realSize, type: ext, id,
   });
