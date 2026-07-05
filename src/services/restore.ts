@@ -17,6 +17,10 @@ export interface RestoreProgress {
   startTime: number;
   endTime?: number;
   message?: string;
+  /** 当前文件已下载字节（用于二级进度条，仅在单文件下载阶段有值） */
+  currentFileReceived?: number;
+  /** 当前文件总字节（用于二级进度条，仅在单文件下载阶段有值） */
+  currentFileTotal?: number;
 }
 
 const restoreTasks: Map<string, RestoreProgress> = new Map();
@@ -397,7 +401,11 @@ export async function restoreFilesFromSource(
           if (now - lastUpdate > 200 && task) {
             lastUpdate = now;
             const speed = received / Math.max(1, (now - startTime) / 1000);
-            task.processed = i + received / Math.max(1, contentLength);
+            // processed 只表示文件计数（i+1 = 当前正在处理的文件数），不要混入字节级小数
+            // 当前文件字节级进度放在 currentFileReceived/currentFileTotal
+            task.processed = i + 1;
+            task.currentFileReceived = received;
+            task.currentFileTotal = contentLength;
             task.message = `正在下载 (${i + 1}/${fileList.length}): ${file.name} - ${formatSize(received)}${contentLength ? ` / ${formatSize(contentLength)}` : ''} (${formatSize(speed)}/s)`;
           }
         }

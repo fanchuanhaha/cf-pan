@@ -1710,6 +1710,14 @@ frontend.get('/admin/restore', async (c) => {
 var currentTaskId = null;
 var pollTimer = null;
 
+function formatSize(bytes) {
+  if (!bytes || bytes < 0) return '0 B';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
 function restoreSql(){
   var form = document.getElementById('sqlFormUpload');
   var fd = new FormData(form);
@@ -1802,14 +1810,34 @@ function pollDownloadProgress(){
           return;
         }
         var s = res.data;
-        var pct = s.total > 0 ? ((s.processed / s.total) * 100).toFixed(1) : '0';
+        // processed 始终为整数文件计数
+        var processedInt = parseInt(s.processed, 10) || 0;
+        // 总体进度：当前文件按字节级加权（让进度条更平滑）
+        var curRecv = parseInt(s.currentFileReceived, 10) || 0;
+        var curTotal = parseInt(s.currentFileTotal, 10) || 0;
+        var frac = 0;
+        if (curTotal > 0 && curRecv > 0) {
+          frac = Math.min(1, curRecv / curTotal);
+        }
+        var overallDone = processedInt > 0 ? (processedInt - 1 + frac) : 0;
+        var pct = s.total > 0 ? ((overallDone / s.total) * 100).toFixed(1) : '0';
+
+        var subBar = '';
+        if (curTotal > 0) {
+          var subPct = (frac * 100).toFixed(1);
+          subBar = '<tr><th>当前文件下载</th><td>'
+            + '<div class="progress" style="margin:0;height:18px;"><div class="progress-bar progress-bar-info progress-bar-striped active" style="width:' + subPct + '%;line-height:18px;">' + subPct + '%</div></div>'
+            + '<small class="text-muted">' + formatSize(curRecv) + ' / ' + formatSize(curTotal) + '</small>'
+            + '</td></tr>';
+        }
 
         var html = '<div class="alert alert-info">'
           + '<h4 style="margin-top:0"><i class="fa fa-cloud-download"></i> 文件下载进度</h4>'
           + '<div class="progress" style="margin-bottom:10px;height:22px;"><div class="progress-bar progress-bar-success progress-bar-striped active" style="width:' + pct + '%;line-height:22px;">' + pct + '%</div></div>'
           + '<table class="table table-condensed" style="margin-bottom:5px;">'
-          + '<tr><th style="width:140px">总文件 / 已下载</th><td><strong>' + s.processed + ' / ' + s.total + '</strong></td></tr>'
-          + '<tr><th>成功 / 失败</th><td><span class="text-success">' + (s.success || 0) + '</span> / <span class="text-danger">' + (s.failed || 0) + '</span></td></tr>';
+          + '<tr><th style="width:140px">总文件 / 已下载</th><td><strong>' + processedInt + ' / ' + s.total + '</strong></td></tr>'
+          + '<tr><th>成功 / 失败</th><td><span class="text-success">' + (s.success || 0) + '</span> / <span class="text-danger">' + (s.failed || 0) + '</span></td></tr>'
+          + subBar;
         if(s.currentItem){
           html += '<tr><th>当前下载文件</th><td><i class="fa fa-file"></i> ' + s.currentItem + '</td></tr>';
         }
