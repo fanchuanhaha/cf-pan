@@ -28,38 +28,9 @@ adminAjax.use('*', async (c, next) => {
   await next();
 });
 
-// 统计面板
-adminAjax.get('/getcount', async (c) => {
-  const db = getDB(c);
-  const config = getConf(c);
-  const today = new Date().toISOString().substring(0, 10) + ' 00:00:00';
-  const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10) + ' 00:00:00';
-
-  let total = 0, todayCount = 0, yesterdayCount = 0;
-  try {
-    const [totalR, todayR, yesterdayR] = await Promise.all([
-      db.prepare('SELECT count(*) as cnt FROM pre_file').first<{ cnt: number }>(),
-      db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ?").bind(today).first<{ cnt: number }>(),
-      db.prepare("SELECT count(*) as cnt FROM pre_file WHERE addtime >= ? AND addtime < ?").bind(yesterday, today).first<{ cnt: number }>(),
-    ]);
-    total = totalR?.cnt ?? 0;
-    todayCount = todayR?.cnt ?? 0;
-    yesterdayCount = yesterdayR?.cnt ?? 0;
-  } catch (e: any) {
-    console.error('[admin/getcount] query failed:', e);
-  }
-
-  console.log(`[admin/getcount] total=${total} today=${todayCount} yesterday=${yesterdayCount} storage=${config.storage}`);
-
-  return jsonResult(c, {
-    code: 0,
-    count1: total,
-    count2: todayCount,
-    count3: yesterdayCount,
-    count4: config.storage.toUpperCase(),
-  });
-});
-
+// 注意：/getcount 端点已在 frontend.ts 中实现（路径 /admin/ajax/getcount）。
+// 由于 frontendRoutes 比 adminAjaxRoutes 先注册，Hono 的 trie/smart router
+// 会优先匹配第一个注册的处理器，因此这里不再重复实现。
 // 文件列表
 adminAjax.post('/fileList', async (c) => {
   const db = getDB(c);

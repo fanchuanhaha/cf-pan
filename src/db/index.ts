@@ -1,5 +1,4 @@
 // 彩虹外链网盘 - D1 数据库封装
-import type { D1Like } from '../middleware';
 
 export interface FileRow {
   id: number;
@@ -37,7 +36,7 @@ export function now(): string {
 }
 
 /** 插入文件记录 */
-export async function insertFile(db: D1Like, data: {
+export async function insertFile(db: D1Database, data: {
   name: string; type: string; size: number; hash: string;
   ip: string; hide: number; pwd: string | null; uid: number;
 }): Promise<number> {
@@ -50,25 +49,25 @@ export async function insertFile(db: D1Like, data: {
 }
 
 /** 根据 hash 查询文件 */
-export async function getFileByHash(db: D1Like, hash: string): Promise<FileRow | null> {
+export async function getFileByHash(db: D1Database, hash: string): Promise<FileRow | null> {
   return db.prepare(
     `SELECT * FROM pre_file WHERE hash = ? LIMIT 1`
   ).bind(hash).first<FileRow>();
 }
 
 /** 根据 id 查询文件 */
-export async function getFileById(db: D1Like, id: number): Promise<FileRow | null> {
+export async function getFileById(db: D1Database, id: number): Promise<FileRow | null> {
   return db.prepare('SELECT * FROM pre_file WHERE id = ? LIMIT 1').bind(id).first<FileRow>();
 }
 
 /** 删除文件 */
-export async function deleteFile(db: D1Like, id: number): Promise<boolean> {
+export async function deleteFile(db: D1Database, id: number): Promise<boolean> {
   const result = await db.prepare('DELETE FROM pre_file WHERE id = ?').bind(id).run();
   return result.meta.changes > 0;
 }
 
 /** 更新文件信息 */
-export async function updateFile(db: D1Like, data: {
+export async function updateFile(db: D1Database, data: {
   id: number; name: string; type: string; hide: number; pwd: string | null;
 }): Promise<void> {
   await db.prepare(
@@ -77,13 +76,13 @@ export async function updateFile(db: D1Like, data: {
 }
 
 /** 获取所有文件总数 */
-export async function getFileTotal(db: D1Like): Promise<number> {
+export async function getFileTotal(db: D1Database): Promise<number> {
   const r = await db.prepare('SELECT count(*) as c FROM pre_file').first<{ c: number }>();
   return r?.c ?? 0;
 }
 
 /** 获取指定日期范围文件数 */
-export async function getFileCountByDateRange(db: D1Like, from: string, to?: string): Promise<number> {
+export async function getFileCountByDateRange(db: D1Database, from: string, to?: string): Promise<number> {
   if (to) {
     const r = await db.prepare(
       'SELECT count(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
@@ -97,7 +96,7 @@ export async function getFileCountByDateRange(db: D1Like, from: string, to?: str
 }
 
 /** 分页查询所有文件（无附加条件，仪表盘使用） */
-export async function getFileListAll(db: D1Like, options: {
+export async function getFileListAll(db: D1Database, options: {
   offset: number; limit: number; orderby?: string;
 }): Promise<{ total: number; rows: FileRow[] }> {
   const order = options.orderby === 'count' ? 'count DESC' : 'id DESC';
@@ -109,7 +108,7 @@ export async function getFileListAll(db: D1Like, options: {
 }
 
 /** 获取所有文件（用于迁移） */
-export async function getAllFiles(db: D1Like): Promise<FileRow[]> {
+export async function getAllFiles(db: D1Database): Promise<FileRow[]> {
   const { results } = await db.prepare(
     `SELECT * FROM pre_file`
   ).all<FileRow>();
@@ -117,19 +116,19 @@ export async function getAllFiles(db: D1Like): Promise<FileRow[]> {
 }
 
 /** 更新文件计数与最后访问时间 */
-export async function touchFile(db: D1Like, id: number): Promise<void> {
+export async function touchFile(db: D1Database, id: number): Promise<void> {
   await db.prepare(
     `UPDATE pre_file SET lasttime = ?, count = count + 1 WHERE id = ?`
   ).bind(now(), id).run();
 }
 
 /** 更新文件 block 状态 */
-export async function setFileBlock(db: D1Like, id: number, block: number): Promise<void> {
+export async function setFileBlock(db: D1Database, id: number, block: number): Promise<void> {
   await db.prepare('UPDATE pre_file SET block = ? WHERE id = ?').bind(block, id).run();
 }
 
 /** 查询用户当日上传数 */
-export async function getTodayUploadCount(db: D1Like, ip: string, uid: number): Promise<number> {
+export async function getTodayUploadCount(db: D1Database, ip: string, uid: number): Promise<number> {
   const today = new Date().toISOString().substring(0, 10) + ' 00:00:00';
   let count: number;
   if (uid > 0) {
@@ -147,7 +146,7 @@ export async function getTodayUploadCount(db: D1Like, ip: string, uid: number): 
 }
 
 /** 分页查询文件列表 */
-export async function getFileList(db: D1Like, options: {
+export async function getFileList(db: D1Database, options: {
   search?: string; type?: string; dstatus?: number;
   offset: number; limit: number; orderby?: string;
 }): Promise<{ total: number; rows: FileRow[] }> {
@@ -181,12 +180,12 @@ export async function getFileList(db: D1Like, options: {
 }
 
 /** 查询用户 */
-export async function getUserById(db: D1Like, uid: number): Promise<UserRow | null> {
+export async function getUserById(db: D1Database, uid: number): Promise<UserRow | null> {
   return db.prepare('SELECT * FROM pre_user WHERE uid = ? LIMIT 1').bind(uid).first<UserRow>();
 }
 
 /** 更新用户登录信息 */
-export async function updateUserLogin(db: D1Like, uid: number, ip: string): Promise<void> {
+export async function updateUserLogin(db: D1Database, uid: number, ip: string): Promise<void> {
   await db.prepare(
     'UPDATE pre_user SET loginip = ?, lasttime = ? WHERE uid = ?'
   ).bind(ip, now(), uid).run();

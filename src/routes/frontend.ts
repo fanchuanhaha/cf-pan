@@ -2005,81 +2005,95 @@ frontend.get('/admin/ajax/checkdb', async (c) => {
 
 /** 仪表盘统计 */
 frontend.get('/admin/ajax/getcount', async (c) => {
-  // auth
-  if (!await checkAdmin(c)) {
-    console.warn('[getcount] auth failed');
-    return c.json({ code: -1 });
-  }
-  const db = getDB(c);
-  const config = getConf(c);
-
-  // 文件总数（用 getFileTotal 确保与其它地方一致）
-  let total = 0;
+  // 整个处理器包一层 try-catch，避免任何异常导致前端停留在 0
   try {
-    total = await getFileTotal(db);
+    // auth
+    if (!await checkAdmin(c)) {
+      console.warn('[getcount] auth failed');
+      return c.json({ code: -1, msg: 'auth failed' });
+    }
+    const db = getDB(c);
+    const config = getConf(c);
+
+    // 文件总数（用 getFileTotal 确保与其它地方一致）
+    let total = 0;
+    try {
+      total = await getFileTotal(db);
+    } catch (e: any) {
+      console.error('[getcount] getFileTotal failed:', e?.message || e);
+    }
+
+    // 抽样第一条验证
+    let sample: any = null;
+    try {
+      sample = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
+    } catch (e: any) {
+      console.error('[getcount] sample failed:', e?.message || e);
+    }
+
+    // 日期边界（全部使用 UTC，因为 Workers 运行在 UTC 时区）
+    const isoNow = new Date().toISOString(); // e.g. "2026-07-01T15:30:00.000Z"
+    const todayStr = isoNow.substring(0, 10);
+    const todayBoundary = todayStr + ' 00:00:00';
+
+    // 明天：加 1 天的 UTC 日期
+    const tomorrowDate = new Date(Date.now() + 86400000);
+    const tomorrowBoundary = tomorrowDate.toISOString().substring(0, 10) + ' 00:00:00';
+
+    // 昨天：减 1 天的 UTC 日期
+    const yesterdayDate = new Date(Date.now() - 86400000);
+    const yesterdayBoundary = yesterdayDate.toISOString().substring(0, 10) + ' 00:00:00';
+
+    let todayCount = 0;
+    let yCount = 0;
+
+    try {
+      const todayR = await db.prepare(
+        'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
+      ).bind(todayBoundary, tomorrowBoundary).first<{ c: number }>();
+      todayCount = todayR?.c ?? 0;
+    } catch (e: any) {
+      console.error('[getcount] today query failed:', e?.message || e);
+    }
+
+    try {
+      const yR = await db.prepare(
+        'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
+      ).bind(yesterdayBoundary, todayBoundary).first<{ c: number }>();
+      yCount = yR?.c ?? 0;
+    } catch (e: any) {
+      console.error('[getcount] yesterday query failed:', e?.message || e);
+    }
+
+    const count1 = total;
+    const count2 = todayCount;
+    const count3 = yCount;
+    const count4 = config.storage.toUpperCase();
+
+    console.log(`[getcount] total=${count1} today=${count2} yesterday=${count3} storage=${count4} sample=${sample ? sample.id + ':' + sample.name : 'none'} todayBoundary=${todayBoundary} tomorrow=${tomorrowBoundary} yesterday=${yesterdayBoundary}`);
+
+    return c.json({
+      code: 0,
+      count1, count2, count3, count4,
+      debug: {
+        today: todayBoundary,
+        tomorrow: tomorrowBoundary,
+        yesterday: yesterdayBoundary,
+        sample: sample ? { id: sample.id, name: sample.name, hash: sample.hash, addtime: sample.addtime } : null,
+      },
+    });
   } catch (e: any) {
-    console.error('[getcount] getFileTotal failed:', e?.message || e);
+    console.error('[getcount] unhandled exception:', e?.message || e, e?.stack);
+    // 兜底：仍然返回 code:0 以保证前端不会停在 0，至少给一个空值
+    return c.json({
+      code: 0,
+      count1: 0,
+      count2: 0,
+      count3: 0,
+      count4: 'UNKNOWN',
+      error: e?.message || String(e),
+    });
   }
-
-  // 抽样第一条验证
-  let sample: any = null;
-  try {
-    sample = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
-  } catch (e: any) {
-    console.error('[getcount] sample failed:', e?.message || e);
-  }
-
-  // 日期边界（全部使用 UTC，因为 Workers 运行在 UTC 时区）
-  const isoNow = new Date().toISOString(); // e.g. "2026-07-01T15:30:00.000Z"
-  const todayStr = isoNow.substring(0, 10);
-  const todayBoundary = todayStr + ' 00:00:00';
-
-  // 明天：加 1 天的 UTC 日期
-  const tomorrowDate = new Date(Date.now() + 86400000);
-  const tomorrowBoundary = tomorrowDate.toISOString().substring(0, 10) + ' 00:00:00';
-
-  // 昨天：减 1 天的 UTC 日期
-  const yesterdayDate = new Date(Date.now() - 86400000);
-  const yesterdayBoundary = yesterdayDate.toISOString().substring(0, 10) + ' 00:00:00';
-
-  let todayCount = 0;
-  let yCount = 0;
-
-  try {
-    const todayR = await db.prepare(
-      'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
-    ).bind(todayBoundary, tomorrowBoundary).first<{ c: number }>();
-    todayCount = todayR?.c ?? 0;
-  } catch (e: any) {
-    console.error('[getcount] today query failed:', e?.message || e);
-  }
-
-  try {
-    const yR = await db.prepare(
-      'SELECT COUNT(*) as c FROM pre_file WHERE addtime >= ? AND addtime < ?'
-    ).bind(yesterdayBoundary, todayBoundary).first<{ c: number }>();
-    yCount = yR?.c ?? 0;
-  } catch (e: any) {
-    console.error('[getcount] yesterday query failed:', e?.message || e);
-  }
-
-  const count1 = total;
-  const count2 = todayCount;
-  const count3 = yCount;
-  const count4 = config.storage.toUpperCase();
-
-  console.log(`[getcount] total=${count1} today=${count2} yesterday=${count3} storage=${count4} sample=${sample ? sample.id + ':' + sample.name : 'none'} todayBoundary=${todayBoundary} tomorrow=${tomorrowBoundary} yesterday=${yesterdayBoundary}`);
-
-  return c.json({
-    code: 0,
-    count1, count2, count3, count4,
-    debug: {
-      today: todayBoundary,
-      tomorrow: tomorrowBoundary,
-      yesterday: yesterdayBoundary,
-      sample: sample ? { id: sample.id, name: sample.name, hash: sample.hash, addtime: sample.addtime } : null,
-    },
-  });
 });
 
 /** 文件管理列表 */
