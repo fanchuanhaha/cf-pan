@@ -11,7 +11,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
 import { getDB, getConf, getStor, getStorOrThrow } from '../middleware';
 import { updateConfig, clearConfigCache } from '../config';
-import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileTotal, getFileCountByDateRange } from '../db';
+import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileCountByDateRange } from '../db';
 import { verifyAdminToken, signAdminToken } from '../auth/admin';
 import { getViewType, sizeFormat, typeToIcon } from '../utils/mime';
 import { htmlspecialchars, generateCsrfToken } from '../utils/response';
@@ -2015,12 +2015,13 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     const db = getDB(c);
     const config = getConf(c);
 
-    // 文件总数（用 getFileTotal 确保与其它地方一致）
+    // 文件总数：按 max(id) 取最新一条 id 作为显示值
     let total = 0;
     try {
-      total = await getFileTotal(db);
+      const r = await db.prepare('SELECT MAX(id) as c FROM pre_file').first<{ c: number }>();
+      total = r?.c ?? 0;
     } catch (e: any) {
-      console.error('[getcount] getFileTotal failed:', e?.message || e);
+      console.error('[getcount] getFileTotal(max id) failed:', e?.message || e);
     }
 
     // 抽样第一条验证
