@@ -57,7 +57,16 @@ export function getStor(c: Context<AppEnv>): IStorage | null {
 /** 快速获取 stor，如果未就绪则抛错 */
 export function getStorOrThrow(c: Context<AppEnv>): IStorage {
   if (!c.var.stor) {
-    throw new Error('Storage not configured');
+    const storageType = c.var.config?.storage || '(未设置)';
+    const installed = c.var.config?.installed;
+    // 给出更具体的错误信息，便于排查是哪种情况导致的 storage 不可用
+    let detail = `storage="${storageType}"`;
+    if (installed === 1) {
+      detail += '（系统已 installed=1，但当前 storage 类型不可用，常见原因：曾通过 SQL 恢复覆盖了 pre_config 表的 storage 字段为 PHP 项目的 "local"，请到后台【系统设置】重新选择并保存存储类型）';
+    } else {
+      detail += '（系统尚未安装，请在安装向导中选择并配置存储后端）';
+    }
+    throw new Error('Storage not configured: ' + detail);
   }
   return c.var.stor;
 }

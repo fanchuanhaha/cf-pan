@@ -225,21 +225,28 @@ export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string,
       result.success++;
       continue;
     }
-    
+
     // DROP TABLE - 跳过（D1 已有结构）
     if (upperStmt.startsWith('DROP TABLE') || upperStmt.startsWith('DROP INDEX')) {
       result.success++;
       continue;
     }
-    
+
     // ALTER TABLE - 跳过（D1 schema 已固定）
     if (upperStmt.startsWith('ALTER TABLE')) {
       result.success++;
       continue;
     }
-    
+
     // DELETE - 跳过（避免误删现有数据）
     if (upperStmt.startsWith('DELETE ')) {
+      result.success++;
+      continue;
+    }
+
+    // pre_config - 跳过（系统配置，CF Workers 与原 PHP 项目的 key 不同；
+    // 原 PHP 项目的 storage='local' 等会污染当前系统的存储配置导致后续文件恢复失败）
+    if (/^INSERT\s+INTO\s+[`"]?pre_config[`"]?/i.test(stmt)) {
       result.success++;
       continue;
     }

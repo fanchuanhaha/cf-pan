@@ -1689,6 +1689,11 @@ frontend.get('/admin/restore', async (c) => {
 <div class="panel-heading"><h3 class="panel-title">第二步：从原站点下载文件到当前存储</h3></div>
 <div class="panel-body">
   <form id="sourceForm">
+    <div class="alert alert-info" style="margin-bottom:15px;">
+      <i class="fa fa-info-circle"></i> 本步骤会将文件从原站点下载并上传到当前 CF Workers 系统的存储后端。
+      <strong>请先在【系统设置】中配置好存储后端（R2 / S3 / GitHub / WebDAV / 又拍云 / 七牛云），否则会提示 "Storage not configured"。</strong>
+      原 PHP 项目的 storage='local' 在本系统不支持，系统设置里也请勿再选择 local。
+    </div>
     <div class="form-group">
       <label>原站点 URL</label>
       <input type="text" name="source_url" id="sourceUrl" class="form-control" placeholder="http://dl.802213.xyz/" value="http://" required/>
