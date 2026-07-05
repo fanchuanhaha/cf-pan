@@ -801,7 +801,7 @@ frontend.get('/admin', async (c) => {
 <script>
 $.ajax({
   type: 'GET',
-  url: 'ajax/getcount',
+  url: '/admin/ajax/getcount',
   dataType: 'json',
   success: function(data) {
     if (data && data.code === 0) {
@@ -910,7 +910,7 @@ $(function(){
   var pageNumber = \$_GET['pageNumber'] ? parseInt(\$_GET['pageNumber']) : 1;
   var pageSize = \$_GET['pageSize'] ? parseInt(\$_GET['pageSize']) : 15;
   $('#listTable').bootstrapTable({
-    url: 'ajax/fileList',
+    url: '/admin/ajax/fileList',
     method: 'post',
     pageNumber: pageNumber,
     pageSize: pageSize,
