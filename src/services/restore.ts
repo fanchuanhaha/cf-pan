@@ -178,15 +178,22 @@ export async function extractZip(data: ArrayBuffer, taskId: string): Promise<Arr
 
 /**
  * 从原 PHP 项目的 SQL 文件恢复数据库
+ * @param skipPreConfig 跳过 pre_config 表（默认 true，避免原 PHP 项目的 storage='local' 污染当前系统配置）
  */
-export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string, taskId: string): Promise<{ success: number; failed: number; errors: string[] }> {
+export async function restoreDatabaseFromSql(
+  db: D1Database,
+  sqlContent: string,
+  taskId: string,
+  options: { skipPreConfig?: boolean } = {}
+): Promise<{ success: number; failed: number; errors: string[]; skippedPreConfig?: number }> {
+  const skipPreConfig = options.skipPreConfig !== false; // 默认 true
   const task = restoreTasks.get(taskId);
   if (task) {
     task.stage = 'database';
     task.message = '正在恢复数据库...';
   }
-  
-  const result: { success: number; failed: number; errors: string[] } = { success: 0, failed: 0, errors: [] };
+
+  const result: { success: number; failed: number; errors: string[]; skippedPreConfig?: number } = { success: 0, failed: 0, errors: [] };
   
   // 分割 SQL 语句（按分号分割，但忽略引号内的分号）
   const rawStatements = splitSqlStatements(sqlContent);
@@ -250,8 +257,9 @@ export async function restoreDatabaseFromSql(db: D1Database, sqlContent: string,
 
     // pre_config - 跳过（系统配置，CF Workers 与原 PHP 项目的 key 不同；
     // 原 PHP 项目的 storage='local' 等会污染当前系统的存储配置导致后续文件恢复失败）
-    if (/^INSERT\s+INTO\s+[`"]?pre_config[`"]?/i.test(stmt)) {
+    if (skipPreConfig && /^INSERT\s+INTO\s+[`"]?pre_config[`"]?/i.test(stmt)) {
       result.success++;
+      result.skippedPreConfig = (result.skippedPreConfig || 0) + 1;
       continue;
     }
     

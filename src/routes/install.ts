@@ -1,866 +1,908 @@
-// 彩虹外链网盘 - 安装向导路由
+// 彩虹外链网盘 - 安装/恢复向导路由
 // 首次部署/存储未配置时自动跳转到此页
+// 整合：全新安装 + 从原 PHP 备份恢复（不再有 /admin/restore）
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getConf } from '../middleware';
+import { getDB, getConf, getStorOrThrow } from '../middleware';
 import { isStorageConfigured } from '../storage/factory';
 import { updateConfig, clearConfigCache } from '../config';
 import { jsonResult, jsonError } from '../utils/response';
+import { extractFromSql, filterPreConfigForApply } from '../services/restorePreExtract';
+import {
+  createInstallSession,
+  getInstallSession,
+  updateInstallSession,
+} from '../services/restoreSession';
+import {
+  createRestoreTask,
+  getRestoreStatus,
+  cancelRestore,
+  restoreDatabaseFromSql,
+  restoreFilesFromSource,
+} from '../services/restore';
 
 const install = new Hono<AppEnv>();
 
-/** 安装页面 HTML（仿照原项目 header.php + footer.php 风格） */
-function installPage(errorMsg: string = '', selectedType: string = 'r2'): string {
+/* ---------------------------------------------------------------------- *
+ * 页面：单页多步骤安装向导
+ * step 状态由前端 JS 控制，步骤：
+ *   0 - 选择（全新安装 / 从备份恢复）
+ *   1F- 全新安装：填管理员 + 选存储
+ *   1R- 从备份恢复：上传 SQL
+ *   2R- 从备份恢复：勾选配置 + 选存储
+ *   3R- 从备份恢复：输入原站点地址（仅当有 pre_file 时）并显示进度
+ *   4 - 完成
+ * ---------------------------------------------------------------------- */
+function wizardPage(errorMsg: string = ''): string {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="renderer" content="webkit">
 <meta name="viewport" content="width=device-width,height=device-height,inital-scale=1.0,maximum-scale=1.0,user-scalable=no;">
-<meta name="apple-mobile-web-app-capable" content="yes">
 <title>彩虹外链网盘 - 安装向导</title>
 <link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
 <link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css">
-<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/css/bootstrap-material-design.min.css">
-<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/css/ripples.min.css">
-<link rel="icon" href="favicon.ico" type="image/x-icon">
-<!--[if lt IE 9]>
-<script src="https://s4.zstatic.net/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
-<script src="https://s4.zstatic.net/ajax/libs/respond.js/1.4.2/respond.min.js"></script>
-<![endif]-->
-<script src="https://s4.zstatic.net/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
 <style>
-.install-header { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); color: #fff; padding: 20px 0; margin-bottom: 20px; }
-.install-header h2 { margin: 0; font-weight: 400; }
-.install-header small { color: #f1f1f1; }
-.storage-tabs { display: flex; border-bottom: 2px solid #eee; margin-bottom: 25px; }
-.storage-tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; background: #f8f9fa; color: #666; border: 1px solid #e7e7e7; border-bottom: none; transition: all 0.2s; }
+body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height: 100vh; padding: 20px 0; }
+.wizard-container { max-width: 820px; margin: 0 auto; background: #fff; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); overflow: hidden; }
+.wizard-header { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); color: #fff; padding: 24px 30px; }
+.wizard-header h2 { margin: 0 0 6px 0; font-weight: 400; font-size: 22px; }
+.wizard-header small { color: rgba(255,255,255,0.85); }
+.wizard-body { padding: 30px; min-height: 400px; }
+.wizard-footer { padding: 16px 30px; border-top: 1px solid #eee; display: flex; justify-content: space-between; }
+.steps-indicator { display: flex; padding: 12px 30px; background: #f8f9fa; border-bottom: 1px solid #eee; }
+.step-pill { flex: 1; text-align: center; font-size: 12px; color: #999; padding: 6px 0; position: relative; }
+.step-pill .num { display: inline-block; width: 22px; height: 22px; line-height: 22px; border-radius: 50%; background: #ddd; color: #fff; margin-right: 6px; }
+.step-pill.active { color: #2e8bcc; font-weight: 600; }
+.step-pill.active .num { background: #2e8bcc; }
+.step-pill.done { color: #5cb85c; }
+.step-pill.done .num { background: #5cb85c; }
+.step { display: none; }
+.step.active { display: block; animation: fadeIn 0.3s; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.choose-card { border: 2px solid #e7e7e7; border-radius: 8px; padding: 24px; cursor: pointer; transition: all 0.2s; height: 100%; text-align: center; background: #fff; }
+.choose-card:hover { border-color: #2e8bcc; box-shadow: 0 4px 12px rgba(46,139,204,0.15); }
+.choose-card i { font-size: 48px; color: #2e8bcc; margin-bottom: 12px; }
+.choose-card h4 { margin: 8px 0; color: #333; }
+.choose-card p { color: #777; font-size: 13px; margin: 0; }
+.storage-tabs { display: flex; border-bottom: 2px solid #eee; margin-bottom: 20px; flex-wrap: wrap; }
+.storage-tab { padding: 10px 16px; cursor: pointer; background: #f8f9fa; color: #666; border: 1px solid #e7e7e7; border-bottom: none; transition: all 0.2s; font-size: 13px; }
 .storage-tab.active { background: #fff; color: #2e8bcc; font-weight: bold; border-bottom: 3px solid #2e8bcc; margin-bottom: -2px; }
-.storage-tab i { display: block; font-size: 24px; margin-bottom: 5px; }
 .storage-form { display: none; }
 .storage-form.active { display: block; }
 .required { color: #e44; }
-.btn-install { background: #2e8bcc; color: #fff; border: none; padding: 10px 30px; border-radius: 4px; font-size: 16px; cursor: pointer; width: 100%; }
+.btn-install { background: #2e8bcc; color: #fff; border: none; padding: 8px 24px; border-radius: 4px; cursor: pointer; }
 .btn-install:hover { background: #2976a8; color: #fff; }
 .btn-install:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-test { background: #5bc0de; }
-.btn-test:hover { background: #46b8da; }
+.btn-secondary { background: #6c757d; color: #fff; border: none; padding: 8px 24px; border-radius: 4px; cursor: pointer; }
+.config-list { max-height: 360px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; }
+.config-list table { margin: 0; }
+.config-list td { vertical-align: middle; font-size: 13px; }
+.config-list tr.selected { background: #f0f8ff; }
+.progress { margin-top: 8px; }
+.alert-warning { margin-top: 10px; }
 </style>
 </head>
 <body>
-<div class="install-header">
-<div class="container">
-  <h2><i class="fa fa-cloud"></i> 彩虹外链网盘 安装向导</h2>
-  <small>Cloudflare Workers + D1 + 多存储后端 一体化部署</small>
-</div>
-</div>
-<div class="container">
-<div class="well bs-component">
-  <div class="alert alert-info">
-    <i class="fa fa-info-circle"></i> 请选择并配置一种存储后端。所有配置项都保存在 D1 数据库，可随时通过后台修改。
-  </div>
-  ${errorMsg ? `<div class="alert alert-danger"><i class="fa fa-exclamation-circle"></i> ${errorMsg}</div>` : ''}
-
-  <div class="storage-tabs">
-    <button type="button" class="storage-tab ${selectedType === 'r2' ? 'active' : ''}" data-target="form-r2">
-      <i class="fa fa-database"></i>Cloudflare R2
-    </button>
-    <button type="button" class="storage-tab ${selectedType === 's3' ? 'active' : ''}" data-target="form-s3">
-      <i class="fa fa-cloud"></i>S3 兼容
-    </button>
-    <button type="button" class="storage-tab ${selectedType === 'github' ? 'active' : ''}" data-target="form-github">
-      <i class="fa fa-github"></i>GitHub API
-    </button>
-    <button type="button" class="storage-tab ${selectedType === 'webdav' ? 'active' : ''}" data-target="form-webdav">
-      <i class="fa fa-cloud"></i>WebDAV
-    </button>
-    <button type="button" class="storage-tab ${selectedType === 'upyun' ? 'active' : ''}" data-target="form-upyun">
-      <i class="fa fa-cloud-upload"></i>又拍云
-    </button>
-    <button type="button" class="storage-tab ${selectedType === 'qiniu' ? 'active' : ''}" data-target="form-qiniu">
-      <i class="fa fa-cloud-upload"></i>七牛云
-    </button>
+<div class="wizard-container">
+  <div class="wizard-header">
+    <h2><i class="fa fa-magic"></i> 彩虹外链网盘 - 安装向导</h2>
+    <small>单页多步骤：选择安装方式 → 配置存储 → 恢复数据（如有）</small>
   </div>
 
-  <form id="installForm" method="POST" action="/install/save">
-    <!-- 管理员账号 -->
-    <div class="form-group">
-      <label>管理员账号 <span class="required">*</span></label>
-      <input type="text" name="admin_user" class="form-control" value="admin" required>
-    </div>
-    <div class="form-group">
-      <label>管理员密码 <span class="required">*</span></label>
-      <input type="password" name="admin_pwd" class="form-control" placeholder="请设置一个强密码" required>
-    </div>
-    <div class="form-group">
-      <label>站点名称</label>
-      <input type="text" name="title" class="form-control" value="彩虹外链网盘">
-    </div>
+  <div class="steps-indicator" id="stepsIndicator">
+    <div class="step-pill active" data-step="0"><span class="num">1</span>选择</div>
+    <div class="step-pill" data-step="1"><span class="num">2</span>配置</div>
+    <div class="step-pill" data-step="2"><span class="num">3</span>恢复</div>
+    <div class="step-pill" data-step="3"><span class="num">4</span>完成</div>
+  </div>
 
-    <!-- 通用云存储设置 -->
-    <div class="form-group" id="cloud_stor" style="display:${selectedType !== 'r2' ? '' : 'none'};">
-       <label>文件上传方式</label>
-       <select class="form-control" name="uploadfile_type"><option value="0">网站中转</option><option value="1">直接链接</option></select>
-       <span class="help-block">直接链接：文件直接上传到云存储，不经过本站服务器。需要先在云存储设置跨域。</span>
-     </div>
-     <div class="form-group" id="cloud_stor2" style="display:${selectedType !== 'r2' ? '' : 'none'};">
-      <label>文件下载方式</label>
-      <select class="form-control" name="downfile_type"><option value="0">网站中转</option><option value="1">直接链接</option></select>
-    </div>
-    <div class="form-group" id="downfile_domain_form" style="display:none;">
-      <label>文件下载域名</label>
-      <div class="row">
-        <div class="col-xs-4 col-md-3" style="padding-right: 0px;">
-          <select class="form-control" name="downfile_protocol"><option value="0">http://</option><option value="1">https://</option></select>
+  <div class="wizard-body">
+    ${errorMsg ? `<div class="alert alert-danger"><i class="fa fa-exclamation-triangle"></i> ${errorMsg}</div>` : ''}
+
+    <!-- Step 0: 选择安装类型 -->
+    <div class="step active" id="step-0">
+      <h3 style="margin-top:0">请选择安装方式</h3>
+      <p class="text-muted">首次部署选择「全新安装」；如果是迁移原 PHP 站点的数据，选择「从备份恢复」。</p>
+      <div class="row" style="margin-top:24px">
+        <div class="col-md-6">
+          <div class="choose-card" onclick="goFreshInstall()">
+            <i class="fa fa-rocket"></i>
+            <h4>全新安装</h4>
+            <p>从零开始配置管理员账号、站点信息和存储后端</p>
+          </div>
         </div>
-        <div class="col-xs-8 col-md-9" style="padding-left: 0px;">
-          <input type="text" class="form-control" name="downfile_domain" placeholder="留空则使用云存储默认域名">
+        <div class="col-md-6">
+          <div class="choose-card" onclick="goRestore()">
+            <i class="fa fa-history"></i>
+            <h4>从备份恢复</h4>
+            <p>导入原 PHP 项目的 SQL 备份并从原站点下载文件</p>
+          </div>
         </div>
       </div>
-      <span class="help-block">填写Bucket绑定的域名，也可使用CDN域名</span>
     </div>
 
-    <!-- R2 表单 -->
-    <div class="storage-form ${selectedType === 'r2' ? 'active' : ''}" id="form-r2">
-      <h4 style="margin-top:20px"><i class="fa fa-database"></i> Cloudflare R2 配置</h4>
-      <div class="alert alert-info">
-        R2 存储桶需在 Cloudflare Dashboard 中手动创建。wrangler.toml 中已绑定 <code>FILE_R2</code>，此处只需确认即可。
-      </div>
-      <div class="form-group">
-        <label>存储桶名称</label>
-        <input type="text" class="form-control" value="pan-files" disabled>
-        <span class="help-block">名称在 wrangler.toml 中固定配置</span>
-      </div>
+    <!-- Step 1F: 全新安装表单 -->
+    <div class="step" id="step-1f">
+      <h3 style="margin-top:0">全新安装</h3>
+      <form id="formFresh">
+        <div class="row">
+          <div class="col-md-6">
+            <div class="form-group">
+              <label>管理员账号 <span class="required">*</span></label>
+              <input type="text" name="admin_user" class="form-control" value="admin" required>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="form-group">
+              <label>管理员密码 <span class="required">*</span></label>
+              <input type="password" name="admin_pwd" class="form-control" placeholder="请设置一个强密码" required>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>站点名称</label>
+          <input type="text" name="title" class="form-control" value="彩虹外链网盘">
+        </div>
+        <h4 style="margin-top:24px"><i class="fa fa-database"></i> 存储后端</h4>
+        <div class="storage-tabs" id="freshStorageTabs">
+          <button type="button" class="storage-tab active" data-target="fresh-form-r2">R2</button>
+          <button type="button" class="storage-tab" data-target="fresh-form-s3">S3</button>
+          <button type="button" class="storage-tab" data-target="fresh-form-github">GitHub</button>
+          <button type="button" class="storage-tab" data-target="fresh-form-webdav">WebDAV</button>
+          <button type="button" class="storage-tab" data-target="fresh-form-upyun">又拍云</button>
+          <button type="button" class="storage-tab" data-target="fresh-form-qiniu">七牛云</button>
+        </div>
+        ${renderStorageForms('fresh-')}
+        <input type="hidden" name="storage_type" id="fresh_storage_type" value="r2">
+        <div id="freshTestResult" style="display:none; margin-top:12px"></div>
+      </form>
     </div>
 
-    <!-- S3 表单 -->
-    <div class="storage-form ${selectedType === 's3' ? 'active' : ''}" id="form-s3">
-      <h4 style="margin-top:20px"><i class="fa fa-cloud"></i> S3 兼容存储配置</h4>
-      <div class="form-group">
-        <label>Endpoint (S3 API 地址) <span class="required">*</span></label>
-        <input type="text" name="s3_endpoint" class="form-control" placeholder="https://s3.amazonaws.com 或 https://oss-cn-hangzhou.aliyuncs.com">
-        <span class="help-block">支持 AWS S3 / 阿里云 OSS / 腾讯云 COS / MinIO 等</span>
-      </div>
-      <div class="form-group">
-        <label>Region <span class="required">*</span></label>
-        <input type="text" name="s3_region" class="form-control" placeholder="us-east-1 / cn-hangzhou / auto">
-      </div>
-      <div class="form-group">
-        <label>Bucket 名称 <span class="required">*</span></label>
-        <input type="text" name="s3_bucket" class="form-control" placeholder="my-bucket">
-      </div>
-      <div class="form-group">
-        <label>AccessKey ID <span class="required">*</span></label>
-        <input type="text" name="s3_ak" class="form-control">
-      </div>
-      <div class="form-group">
-        <label>SecretAccessKey <span class="required">*</span></label>
-        <input type="password" name="s3_sk" class="form-control">
-      </div>
+    <!-- Step 1R: 上传 SQL -->
+    <div class="step" id="step-1r">
+      <h3 style="margin-top:0">从备份恢复 - 上传 SQL</h3>
+      <p class="text-muted">上传原 PHP 项目导出的 <code>.sql</code> 文件。系统会先"预提取" <code>pre_config</code> 表供您选择，不会立刻写入 D1。</p>
+      <form id="formSqlUpload">
+        <div class="form-group">
+          <label>SQL 备份文件 <span class="required">*</span></label>
+          <input type="file" name="sql_file" accept=".sql" class="form-control" required>
+          <span class="help-block">支持 mysqldump 导出的 .sql（自动跳过 SET/CREATE TABLE 等 D1 不支持的语句）</span>
+        </div>
+        <button type="button" class="btn-install" onclick="uploadSql()">
+          <i class="fa fa-upload"></i> 上传并预提取
+        </button>
+        <div id="sqlUploadResult" style="display:none; margin-top:12px"></div>
+      </form>
     </div>
 
-    <!-- GitHub 表单 -->
-    <div class="storage-form ${selectedType === 'github' ? 'active' : ''}" id="form-github">
-      <h4 style="margin-top:20px"><i class="fa fa-github"></i> GitHub API 存储配置</h4>
-      <div class="alert alert-info">
-        适用于 Cloudflare API Token 无 R2 权限的场景。文件以 Git 提交方式存到 GitHub 仓库。
-        <br>需要 Token 具备 <code>repo</code> (完整仓库) 权限。
+    <!-- Step 2R: 勾选配置 + 选存储 -->
+    <div class="step" id="step-2r">
+      <h3 style="margin-top:0">从备份恢复 - 勾选配置 + 选择存储</h3>
+      <div id="configWarnings"></div>
+      <h4 style="margin-top:18px"><i class="fa fa-list"></i> SQL 中提取到的 <code>pre_config</code> 项</h4>
+      <p class="text-muted" style="font-size:13px">
+        默认全部勾选。点击行可切换；<code>storage</code> 永远不导入，必须在下方重新选择。
+        检测到 <code>storage=local</code> 时会给出警告。
+      </p>
+      <div id="configList" class="config-list"></div>
+      <div id="fileCountHint" class="text-muted" style="margin-top:8px"></div>
+
+      <h4 style="margin-top:24px"><i class="fa fa-database"></i> 选择新的存储后端</h4>
+      <div class="storage-tabs" id="restoreStorageTabs">
+        <button type="button" class="storage-tab active" data-target="restore-form-r2">R2</button>
+        <button type="button" class="storage-tab" data-target="restore-form-s3">S3</button>
+        <button type="button" class="storage-tab" data-target="restore-form-github">GitHub</button>
+        <button type="button" class="storage-tab" data-target="restore-form-webdav">WebDAV</button>
+        <button type="button" class="storage-tab" data-target="restore-form-upyun">又拍云</button>
+        <button type="button" class="storage-tab" data-target="restore-form-qiniu">七牛云</button>
       </div>
-      <div class="form-group">
-        <label>仓库 Owner (用户名或组织) <span class="required">*</span></label>
-        <input type="text" name="gh_owner" class="form-control" placeholder="octocat">
-      </div>
-      <div class="form-group">
-        <label>仓库名 <span class="required">*</span></label>
-        <input type="text" name="gh_repo" class="form-control" placeholder="my-pan-storage">
-        <span class="help-block">建议使用一个空的私有仓库</span>
-      </div>
-      <div class="form-group">
-        <label>Personal Access Token <span class="required">*</span></label>
-        <input type="password" name="gh_token" class="form-control" placeholder="ghp_xxxxxxxxxxxx">
-        <span class="help-block">需要 <code>repo</code> 权限。Token 仅保存在 D1 中，不会上传到任何地方。</span>
-      </div>
-      <div class="form-group">
-        <label>分支 (留空则使用默认分支)</label>
-        <input type="text" name="gh_ref" class="form-control" placeholder="main">
-      </div>
-      <div class="form-group">
-        <label>存储子目录 (可选)</label>
-        <input type="text" name="gh_folder" class="form-control" placeholder="留空则使用 file/">
-      </div>
-      <div class="form-group">
-        <label>API Base (自定义 GitHub 代理时填写)</label>
-        <input type="text" name="gh_api_base" class="form-control" value="https://api.github.com">
-      </div>
+      ${renderStorageForms('restore-')}
+      <input type="hidden" name="storage_type" id="restore_storage_type" value="r2">
+      <div id="restoreTestResult" style="display:none; margin-top:12px"></div>
     </div>
 
-    <!-- WebDAV 表单 -->
-    <div class="storage-form ${selectedType === 'webdav' ? 'active' : ''}" id="form-webdav">
-      <h4 style="margin-top:20px"><i class="fa fa-cloud"></i> WebDAV 存储配置</h4>
-      <div class="alert alert-info">
-        兼容坚果云 / 群晖 / Nextcloud / ownCloud / 通用 WebDAV 服务。通过 HTTP 协议 (Basic Auth) 操作远程存储。
-      </div>
-      <div class="form-group">
-        <label>WebDAV 服务地址 <span class="required">*</span></label>
-        <input type="text" name="webdav_endpoint" class="form-control" placeholder="https://dav.example.com/remote.php/webdav/">
-        <span class="help-block">必须以 <code>http://</code> 或 <code>https://</code> 开头，路径末尾可有可无 <code>/</code></span>
-      </div>
-      <div class="form-group">
-        <label>用户名 <span class="required">*</span></label>
-        <input type="text" name="webdav_user" class="form-control" placeholder="username">
-      </div>
-      <div class="form-group">
-        <label>密码 / 应用专用密码 <span class="required">*</span></label>
-        <input type="password" name="webdav_pass" class="form-control" placeholder="password">
-        <span class="help-block">坚果云 / 群晖等需使用"应用专用密码"，而非登录密码。密码仅保存在 D1 中。</span>
-      </div>
-      <div class="form-group">
-        <label>存储子目录 (可选)</label>
-        <input type="text" name="webdav_folder" class="form-control" value="file" placeholder="留空则使用 file/">
-        <span class="help-block">文件会保存到此子目录下（路径分隔用 <code>/</code>）</span>
-      </div>
-    </div>
-
-    <!-- 又拍云 表单 -->
-    <div class="storage-form ${selectedType === 'upyun' ? 'active' : ''}" id="form-upyun">
-      <h4 style="margin-top:20px"><i class="fa fa-cloud-upload"></i> 又拍云存储配置</h4>
-      <div class="alert alert-info">
-        又拍云对象存储。通过 HTTP Basic Auth（操作员 + 密码）调用 REST API。推荐使用 <code>https://v0.api.upyun.com</code>（自动路由）。
-      </div>
-      <div class="form-group">
-        <label>服务名 (Bucket) <span class="required">*</span></label>
-        <input type="text" name="upyun_bucket" class="form-control" placeholder="my-pan-storage">
-        <span class="help-block">即存储服务名，不是显示名</span>
-      </div>
-      <div class="form-group">
-        <label>操作员 (Operator) <span class="required">*</span></label>
-        <input type="text" name="upyun_operator" class="form-control" placeholder="operator">
-      </div>
-      <div class="form-group">
-        <label>操作员密码 <span class="required">*</span></label>
-        <input type="password" name="upyun_password" class="form-control" placeholder="password">
-        <span class="help-block">密码仅保存在 D1 中。如开启 2FA，需用"操作员密码"而非登录密码。</span>
-      </div>
-      <div class="form-group">
-        <label>API 端点 (可选)</label>
-        <input type="text" name="upyun_endpoint" class="form-control" value="https://v0.api.upyun.com">
-        <span class="help-block">默认 <code>https://v0.api.upyun.com</code>。可用 <code>http://v0.file.upyun.com</code> 走内网上传加速。</span>
-      </div>
-      <div class="form-group">
-        <label>加速域名 (可选)</label>
-        <input type="text" name="upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com">
-        <span class="help-block">填了则直链下载走此 CDN 域名；留空则使用 API 域名</span>
-      </div>
-      <div class="form-group">
-        <label>存储子目录 (可选)</label>
-        <input type="text" name="upyun_folder" class="form-control" value="file" placeholder="留空则使用 file/">
+    <!-- Step 3R: 输入原站点 + 文件下载进度 -->
+    <div class="step" id="step-3r">
+      <h3 style="margin-top:0">从备份恢复 - 输入原站点地址</h3>
+      <p class="text-muted">系统会从 <code>{原站点}/file/{hash}</code> 批量下载所有文件到刚配置的存储后端。</p>
+      <form id="formSource" onsubmit="event.preventDefault(); startFileDownload();">
+        <div class="form-group">
+          <label>原站点 URL <span class="required">*</span></label>
+          <input type="text" name="source_url" class="form-control" placeholder="http://dl.example.com/" required>
+          <span class="help-block">必须以 <code>http://</code> 或 <code>https://</code> 开头，末尾 <code>/</code> 可选</span>
+        </div>
+        <button type="submit" class="btn-install"><i class="fa fa-download"></i> 开始下载文件</button>
+      </form>
+      <div id="downloadProgress" style="display:none; margin-top:20px">
+        <h4>下载进度</h4>
+        <div>总文件 / 已下载: <span id="dpTotal">0 / 0</span></div>
+        <div class="progress"><div id="dpBarTotal" class="progress-bar progress-bar-info" style="width:0%">0%</div></div>
+        <div style="margin-top:8px">当前文件: <span id="dpCurrent">-</span></div>
+        <div class="progress"><div id="dpBarCurrent" class="progress-bar progress-bar-success" style="width:0%">0%</div></div>
+        <div>成功 / 失败: <span id="dpResult">0 / 0</span></div>
+        <div id="dpStatus" class="text-muted" style="margin-top:6px"></div>
       </div>
     </div>
 
-    <!-- 七牛云 表单 -->
-    <div class="storage-form ${selectedType === 'qiniu' ? 'active' : ''}" id="form-qiniu">
-      <h4 style="margin-top:20px"><i class="fa fa-cloud-upload"></i> 七牛云对象存储配置</h4>
-      <div class="alert alert-info">
-        七牛云对象存储 Kodo。使用 AK/SK 鉴权 + 上传令牌（UploadToken）实现文件上传。<br>
-        <strong>区域会自动从七牛云 API 查询，无需手动选择。</strong>
-      </div>
-      <div class="form-group">
-        <label>AccessKey (AK) <span class="required">*</span></label>
-        <input type="text" name="qiniu_ak" class="form-control" placeholder="AKxxxxxxxxxxxx">
-      </div>
-      <div class="form-group">
-        <label>SecretKey (SK) <span class="required">*</span></label>
-        <input type="password" name="qiniu_sk" class="form-control" placeholder="SKxxxxxxxxxxxx">
-        <span class="help-block">密钥仅保存在 D1 中。</span>
-      </div>
-      <div class="form-group">
-        <label>存储空间名称 (Bucket) <span class="required">*</span></label>
-        <input type="text" name="qiniu_bucket" class="form-control" placeholder="my-pan-bucket">
-      </div>
-      <div class="form-group">
-        <label>空间绑定域名</label>
-        <input type="text" name="qiniu_domain" class="form-control" placeholder="如 https://cdn.example.com">
-        <span class="help-block">填写Bucket绑定的域名，也可使用CDN域名。留空则使用七牛默认域名</span>
-      </div>
-      <div class="form-group">
-        <label>存储子目录 (可选)</label>
-        <input type="text" name="qiniu_folder" class="form-control" value="file" placeholder="留空则使用 file/">
+    <!-- Step 4: 完成 -->
+    <div class="step" id="step-4">
+      <div style="text-align:center; padding: 40px 0;">
+        <div style="font-size:64px; color:#5cb85c;"><i class="fa fa-check-circle"></i></div>
+        <h2 style="margin-top:12px">安装完成！</h2>
+        <p id="doneSummary" class="text-muted"></p>
+        <a href="/admin" class="btn-install" style="display:inline-block; text-decoration:none; margin-top:20px;">
+          <i class="fa fa-sign-in"></i> 进入管理后台
+        </a>
       </div>
     </div>
+  </div>
 
-    <input type="hidden" name="storage_type" id="storage_type" value="${selectedType}">
-
-    <div class="form-group" style="margin-top:30px">
-      <button type="button" id="btnTest" class="btn-install btn-test" style="margin-bottom:10px;"><i class="fa fa-plug"></i> 测试连接</button>
-      <button type="submit" class="btn-install"><i class="fa fa-check"></i> 完成安装</button>
-    </div>
-    <div id="testResult" style="margin-top:15px;display:none;"></div>
-  </form>
+  <div class="wizard-footer">
+    <button type="button" class="btn btn-default" id="btnPrev" onclick="prevStep()" style="display:none">
+      <i class="fa fa-arrow-left"></i> 上一步
+    </button>
+    <div></div>
+    <button type="button" class="btn-install" id="btnNext" onclick="nextStep()" style="display:none">
+      下一步 <i class="fa fa-arrow-right"></i>
+    </button>
+  </div>
 </div>
-</div>
-<footer class="footer text-center">
-<div class="container">
-<p class="text-muted">Copyright &copy; ${new Date().getFullYear()} <a href="/">彩虹外链网盘</a></p>
-</div>
-</footer>
-<script src="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/js/bootstrap.min.js"></script>
-<script src="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/material.min.js"></script>
-<script src="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/ripples.min.js"></script>
+
 <script>
-document.querySelectorAll('.storage-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.storage-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.storage-form').forEach(f => f.classList.remove('active'));
-    tab.classList.add('active');
-    const target = tab.dataset.target;
-    document.getElementById(target).classList.add('active');
-    document.getElementById('storage_type').value = tab.dataset.target.replace('form-', '');
-    document.getElementById('testResult').style.display = 'none';
+/* ==================== 状态 ==================== */
+const state = {
+  mode: '',             // 'fresh' | 'restore'
+  step: 0,
+  sessionId: '',        // 恢复流程的会话
+  selectedConfig: {},   // 勾选的 pre_config
+  preExtract: null,
+  fileTaskId: '',
+  filePollTimer: null,
+};
+
+/* ==================== 步骤导航 ==================== */
+function showStep(n) {
+  state.step = n;
+  document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+  const ids = ['step-0', 'step-1f', 'step-1r', 'step-2r', 'step-3r', 'step-4'];
+  document.getElementById(ids[n]).classList.add('active');
+
+  // 步骤指示器
+  const map = { 0: 0, 1: 1, 2: 1, 3: 2, 4: 3, 5: 3 };
+  document.querySelectorAll('.step-pill').forEach((el, i) => {
+    el.classList.remove('active', 'done');
+    if (i < map[n]) el.classList.add('done');
+    else if (i === map[n]) el.classList.add('active');
   });
-});
 
-document.getElementById('btnTest').addEventListener('click', async () => {
-  var btn = document.getElementById('btnTest');
-  var result = document.getElementById('testResult');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在测试...';
-  result.style.display = 'none';
-  result.className = '';
-  result.innerHTML = '';
+  // 按钮
+  const prev = document.getElementById('btnPrev');
+  const next = document.getElementById('btnNext');
+  prev.style.display = n === 0 || n === 5 ? 'none' : '';
+  if (n === 5) { next.style.display = 'none'; return; }
+  if (n === 0) { next.style.display = 'none'; return; }
+  next.style.display = '';
+  if (n === 1 && state.mode === 'fresh') {
+    next.innerHTML = '<i class="fa fa-check"></i> 完成安装';
+  } else if (n === 3) {
+    next.innerHTML = '<i class="fa fa-check"></i> 应用配置并完成';
+  } else {
+    next.innerHTML = '下一步 <i class="fa fa-arrow-right"></i>';
+  }
+}
 
+function prevStep() {
+  if (state.mode === 'fresh' && state.step === 1) showStep(0);
+  else if (state.mode === 'restore' && state.step === 1) showStep(0);
+  else if (state.mode === 'restore' && state.step === 2) showStep(1);
+  else if (state.mode === 'restore' && state.step === 3) showStep(2);
+  else if (state.step > 0) showStep(state.step - 1);
+}
+
+async function nextStep() {
+  if (state.step === 1 && state.mode === 'fresh') {
+    // 直接保存
+    await submitFresh();
+    return;
+  }
+  if (state.step === 3 && state.mode === 'restore') {
+    // 应用配置并完成
+    await applyConfigAndComplete();
+    return;
+  }
+  showStep(state.step + 1);
+}
+
+/* ==================== 全新安装 ==================== */
+function goFreshInstall() {
+  state.mode = 'fresh';
+  showStep(1);
+}
+
+async function submitFresh() {
+  const form = document.getElementById('formFresh');
+  const fd = new FormData(form);
+  const testRes = document.getElementById('freshTestResult');
+  testRes.style.display = 'block';
+  testRes.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在保存配置...';
   try {
-    var form = document.getElementById('installForm');
-    var fd = new FormData(form);
-    var res = await fetch('/install/test', { method: 'POST', body: fd });
-    var data = await res.json();
-    result.style.display = 'block';
-    if (data.ok) {
-      result.className = 'alert alert-info';
-      result.innerHTML = '<i class="fa fa-check-circle"></i> ' + data.msg;
+    const res = await fetch('/install/save', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json.code !== 0) throw new Error(json.msg || '保存失败');
+    testRes.className = 'alert alert-success';
+    testRes.innerHTML = '<i class="fa fa-check"></i> 配置已保存，正在跳转到完成页...';
+    setTimeout(() => {
+      document.getElementById('doneSummary').innerText = '管理员账号: ' + fd.get('admin_user') + '，存储: ' + fd.get('storage_type');
+      showStep(5);
+    }, 800);
+  } catch (e) {
+    testRes.className = 'alert alert-danger';
+    testRes.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+  }
+}
+
+/* ==================== 恢复流程 ==================== */
+function goRestore() {
+  state.mode = 'restore';
+  showStep(1);
+}
+
+async function uploadSql() {
+  const form = document.getElementById('formSqlUpload');
+  const fd = new FormData(form);
+  const result = document.getElementById('sqlUploadResult');
+  result.style.display = 'block';
+  result.className = 'alert alert-info';
+  result.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 上传并预提取中...';
+  try {
+    const res = await fetch('/install/api/sql-preview', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json.code !== 0) throw new Error(json.msg || '上传失败');
+    state.sessionId = json.data.sessionId;
+    state.preExtract = json.data.preExtract;
+    state.selectedConfig = {};
+    for (const k of Object.keys(state.preExtract.preConfig || {})) {
+      if (k === 'storage') continue;
+      state.selectedConfig[k] = state.preExtract.preConfig[k];
+    }
+    result.className = 'alert alert-success';
+    result.innerHTML = '<i class="fa fa-check"></i> 预提取完成，提取到 ' + Object.keys(state.preExtract.preConfig).length + ' 条配置，' + state.preExtract.fileCount + ' 个文件';
+    // 渲染 step 2r
+    renderConfigList();
+    renderWarnings();
+    document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
+    showStep(2);
+  } catch (e) {
+    result.className = 'alert alert-danger';
+    result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+  }
+}
+
+function renderWarnings() {
+  const box = document.getElementById('configWarnings');
+  if (!state.preExtract.warnings || state.preExtract.warnings.length === 0) {
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = state.preExtract.warnings.map(w =>
+    '<div class="alert alert-warning" style="padding:8px 12px; margin:4px 0; font-size:13px"><i class="fa fa-exclamation-triangle"></i> ' + w + '</div>'
+  ).join('');
+}
+
+function renderConfigList() {
+  const box = document.getElementById('configList');
+  const cfg = state.preExtract.preConfig || {};
+  const keys = Object.keys(cfg).sort();
+  if (keys.length === 0) {
+    box.innerHTML = '<div style="padding:20px; text-align:center; color:#999">SQL 中未检测到 pre_config 数据</div>';
+    return;
+  }
+  let html = '<table class="table table-condensed table-hover"><thead><tr><th style="width:40px">使用</th><th>键</th><th>值</th></tr></thead><tbody>';
+  for (const k of keys) {
+    const checked = k === 'storage' ? '' : 'checked';
+    const v = (cfg[k] || '').toString();
+    const display = v.length > 60 ? v.substring(0, 60) + '...' : v;
+    const skip = k === 'storage' ? '<span class="text-muted" style="font-size:12px">（不导入）</span>' : '';
+    html += '<tr class="' + (checked ? 'selected' : '') + '">' +
+      '<td><input type="checkbox" data-key="' + k + '" ' + checked + (k === 'storage' ? ' disabled' : '') + ' onchange="toggleConfig(this)"></td>' +
+      '<td><code>' + escapeHtml(k) + '</code></td>' +
+      '<td><span title="' + escapeHtml(v) + '">' + escapeHtml(display) + '</span> ' + skip + '</td>' +
+      '</tr>';
+  }
+  html += '</tbody></table>';
+  box.innerHTML = html;
+}
+
+function toggleConfig(cb) {
+  const k = cb.dataset.key;
+  const tr = cb.closest('tr');
+  if (cb.checked) {
+    state.selectedConfig[k] = state.preExtract.preConfig[k];
+    tr.classList.add('selected');
+  } else {
+    delete state.selectedConfig[k];
+    tr.classList.remove('selected');
+  }
+}
+
+async function setStorage(prefix) {
+  const form = document.getElementById('step-' + (prefix === 'fresh-' ? '1f' : '2r'));
+  const fd = new FormData();
+  fd.set('storage_type', document.getElementById(prefix + 'storage_type').value);
+  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
+    if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
+  });
+  return fd;
+}
+
+async function applyConfigAndComplete() {
+  const cfg = state.selectedConfig;
+  const fd = await setStorage('restore-');
+  fd.set('sessionId', state.sessionId);
+  fd.set('config_json', JSON.stringify(cfg));
+  const result = document.getElementById('restoreTestResult');
+  result.style.display = 'block';
+  result.className = 'alert alert-info';
+  result.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在应用配置、写入 D1...';
+  try {
+    const res = await fetch('/install/api/config-apply', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json.code !== 0) throw new Error(json.msg || '应用失败');
+    result.className = 'alert alert-success';
+    result.innerHTML = '<i class="fa fa-check"></i> 配置已应用';
+    // 是否需要下载文件？
+    if (state.preExtract.fileCount > 0) {
+      // 跳到 step 3r 输入原站点
+      showStep(3);
     } else {
-      result.className = 'alert alert-danger';
-      result.innerHTML = '<i class="fa fa-exclamation-circle"></i> ' + (data.msg || '测试失败');
+      // 没有文件，直接完成
+      const sum = document.getElementById('doneSummary');
+      sum.innerText = '存储: ' + document.getElementById('restore_storage_type').value + '，已应用 ' + Object.keys(cfg).length + ' 条配置';
+      showStep(5);
     }
   } catch (e) {
-    result.style.display = 'block';
     result.className = 'alert alert-danger';
-    result.innerHTML = '<i class="fa fa-exclamation-circle"></i> 网络错误: ' + e.message;
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa fa-plug"></i> 测试连接';
+    result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
   }
-});
-$.material.init();
-
-// 下载方式切换：显示/隐藏下载域名
-document.querySelector('select[name="downfile_type"]').addEventListener('change', function() {
-  document.getElementById('downfile_domain_form').style.display = this.value === '1' ? 'block' : 'none';
-});
-
-// 存储类型切换：显示/隐藏云存储通用设置
-var storageTypeInput = document.getElementById('storage_type');
-function toggleCloudStor(type) {
-  var show = type !== 'r2' && type !== '';
-  document.getElementById('cloud_stor').style.display = show ? '' : 'none';
-  document.getElementById('cloud_stor2').style.display = show ? '' : 'none';
 }
-storageTypeInput.addEventListener('change', function() { toggleCloudStor(this.value); });
-toggleCloudStor(storageTypeInput.value);
+
+async function startFileDownload() {
+  const form = document.getElementById('formSource');
+  const fd = new FormData(form);
+  fd.set('sessionId', state.sessionId);
+  const prog = document.getElementById('downloadProgress');
+  prog.style.display = 'block';
+  document.getElementById('dpStatus').innerText = '正在启动...';
+  try {
+    const res = await fetch('/install/api/files-from-source', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json.code !== 0) throw new Error(json.msg || '启动失败');
+    state.fileTaskId = json.data.taskId;
+    pollFileStatus();
+  } catch (e) {
+    document.getElementById('dpStatus').innerText = '启动失败: ' + e.message;
+    document.getElementById('dpStatus').className = 'text-danger';
+  }
+}
+
+function pollFileStatus() {
+  if (state.filePollTimer) clearInterval(state.filePollTimer);
+  state.filePollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/install/api/status?taskId=' + state.fileTaskId);
+      const json = await res.json();
+      if (json.code !== 0) {
+        document.getElementById('dpStatus').innerText = '查询失败: ' + json.msg;
+        clearInterval(state.filePollTimer);
+        return;
+      }
+      const s = json.data;
+      document.getElementById('dpTotal').innerText = s.processed + ' / ' + s.total;
+      document.getElementById('dpResult').innerText = s.success + ' / ' + s.failed;
+      const pct = s.total > 0 ? Math.floor(s.processed * 100 / s.total) : 0;
+      document.getElementById('dpBarTotal').style.width = pct + '%';
+      document.getElementById('dpBarTotal').innerText = pct + '%';
+      if (s.currentFileName) {
+        document.getElementById('dpCurrent').innerText = s.currentFileName;
+        const cpct = s.currentFileTotal > 0 ? Math.floor(s.currentFileReceived * 100 / s.currentFileTotal) : 0;
+        document.getElementById('dpBarCurrent').style.width = cpct + '%';
+        document.getElementById('dpBarCurrent').innerText = cpct + '%';
+      }
+      if (s.status === 'completed') {
+        clearInterval(state.filePollTimer);
+        document.getElementById('dpStatus').innerText = '下载完成 ✅';
+        const sum = document.getElementById('doneSummary');
+        sum.innerText = '文件下载完成: 成功 ' + s.success + '，失败 ' + s.failed;
+        setTimeout(() => showStep(5), 1200);
+      } else if (s.status === 'failed') {
+        clearInterval(state.filePollTimer);
+        document.getElementById('dpStatus').innerText = '下载失败: ' + (s.errors && s.errors[0] || '未知错误');
+      } else {
+        document.getElementById('dpStatus').innerText = s.message || ('正在下载 ' + s.processed + '/' + s.total);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, 1000);
+}
+
+/* ==================== 存储 Tab 切换 ==================== */
+function bindStorageTabs(prefix) {
+  const tabs = document.querySelectorAll('#' + (prefix === 'fresh-' ? 'fresh' : 'restore') + 'StorageTabs .storage-tab');
+  tabs.forEach(t => {
+    t.addEventListener('click', () => {
+      tabs.forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      const target = t.dataset.target;
+      const root = document.getElementById(target.split('-')[0] === 'fresh' ? 'step-1f' : 'step-2r');
+      root.querySelectorAll('.storage-form').forEach(f => f.classList.remove('active'));
+      document.getElementById(target).classList.add('active');
+      const hidden = document.getElementById(prefix + 'storage_type');
+      hidden.value = target.replace(prefix + 'form-', '');
+    });
+  });
+}
+bindStorageTabs('fresh-');
+bindStorageTabs('restore-');
+
+/* ==================== 工具 ==================== */
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 </script>
 </body>
 </html>`;
 }
 
-/** 安装向导首页（同时支持 /install 和 /install/） */
+/* ---------------------------------------------------------------------- *
+ * 6 个存储表单（共用代码：fresh- 前缀和 restore- 前缀同时渲染）
+ * ---------------------------------------------------------------------- */
+function renderStorageForms(prefix: string): string {
+  return `
+    <div class="storage-form active" id="${prefix}form-r2">
+      <div class="alert alert-info">R2 存储桶需在 Cloudflare Dashboard 中手动创建，wrangler.toml 中已绑定 <code>FILE_R2</code>。</div>
+    </div>
+    <div class="storage-form" id="${prefix}form-s3">
+      <div class="form-group"><label>Endpoint <span class="required">*</span></label>
+        <input type="text" name="${prefix}s3_endpoint" class="form-control" placeholder="https://s3.amazonaws.com"></div>
+      <div class="form-group"><label>Region <span class="required">*</span></label>
+        <input type="text" name="${prefix}s3_region" class="form-control" placeholder="us-east-1"></div>
+      <div class="form-group"><label>Bucket <span class="required">*</span></label>
+        <input type="text" name="${prefix}s3_bucket" class="form-control"></div>
+      <div class="form-group"><label>AccessKey ID <span class="required">*</span></label>
+        <input type="text" name="${prefix}s3_ak" class="form-control"></div>
+      <div class="form-group"><label>SecretAccessKey <span class="required">*</span></label>
+        <input type="password" name="${prefix}s3_sk" class="form-control"></div>
+    </div>
+    <div class="storage-form" id="${prefix}form-github">
+      <div class="alert alert-info">需要 Token 具备 <code>repo</code> 权限。</div>
+      <div class="form-group"><label>仓库 Owner <span class="required">*</span></label>
+        <input type="text" name="${prefix}gh_owner" class="form-control" placeholder="octocat"></div>
+      <div class="form-group"><label>仓库名 <span class="required">*</span></label>
+        <input type="text" name="${prefix}gh_repo" class="form-control"></div>
+      <div class="form-group"><label>Personal Access Token <span class="required">*</span></label>
+        <input type="password" name="${prefix}gh_token" class="form-control" placeholder="ghp_xxx"></div>
+      <div class="form-group"><label>分支（留空用默认）</label>
+        <input type="text" name="${prefix}gh_ref" class="form-control" placeholder="main"></div>
+      <div class="form-group"><label>API Base</label>
+        <input type="text" name="${prefix}gh_api_base" class="form-control" value="https://api.github.com"></div>
+    </div>
+    <div class="storage-form" id="${prefix}form-webdav">
+      <div class="form-group"><label>WebDAV 服务地址 <span class="required">*</span></label>
+        <input type="text" name="${prefix}webdav_endpoint" class="form-control" placeholder="https://dav.example.com/remote.php/webdav/"></div>
+      <div class="form-group"><label>用户名 <span class="required">*</span></label>
+        <input type="text" name="${prefix}webdav_user" class="form-control"></div>
+      <div class="form-group"><label>密码 <span class="required">*</span></label>
+        <input type="password" name="${prefix}webdav_pass" class="form-control"></div>
+      <div class="form-group"><label>存储子目录</label>
+        <input type="text" name="${prefix}webdav_folder" class="form-control" value="file"></div>
+    </div>
+    <div class="storage-form" id="${prefix}form-upyun">
+      <div class="form-group"><label>服务名 (Bucket) <span class="required">*</span></label>
+        <input type="text" name="${prefix}upyun_bucket" class="form-control"></div>
+      <div class="form-group"><label>操作员 <span class="required">*</span></label>
+        <input type="text" name="${prefix}upyun_operator" class="form-control"></div>
+      <div class="form-group"><label>操作员密码 <span class="required">*</span></label>
+        <input type="password" name="${prefix}upyun_password" class="form-control"></div>
+      <div class="form-group"><label>API 端点</label>
+        <input type="text" name="${prefix}upyun_endpoint" class="form-control" value="https://v0.api.upyun.com"></div>
+      <div class="form-group"><label>加速域名</label>
+        <input type="text" name="${prefix}upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com"></div>
+      <div class="form-group"><label>存储子目录</label>
+        <input type="text" name="${prefix}upyun_folder" class="form-control" value="file"></div>
+    </div>
+    <div class="storage-form" id="${prefix}form-qiniu">
+      <div class="form-group"><label>AccessKey (AK) <span class="required">*</span></label>
+        <input type="text" name="${prefix}qiniu_ak" class="form-control"></div>
+      <div class="form-group"><label>SecretKey (SK) <span class="required">*</span></label>
+        <input type="password" name="${prefix}qiniu_sk" class="form-control"></div>
+      <div class="form-group"><label>Bucket <span class="required">*</span></label>
+        <input type="text" name="${prefix}qiniu_bucket" class="form-control"></div>
+      <div class="form-group"><label>空间绑定域名</label>
+        <input type="text" name="${prefix}qiniu_domain" class="form-control" placeholder="https://cdn.example.com"></div>
+      <div class="form-group"><label>存储子目录</label>
+        <input type="text" name="${prefix}qiniu_folder" class="form-control" value="file"></div>
+    </div>
+  `;
+}
+
+/* ---------------------------------------------------------------------- *
+ * 路由
+ * ---------------------------------------------------------------------- */
+
+/** GET /install - 安装向导首页 */
 install.get('/', async (c) => {
-  const config = getConf(c);
-  // 已安装则跳到首页
-  if (config.installed === 1) {
-    return c.redirect('/');
-  }
-  return c.html(installPage());
+  return c.html(wizardPage());
 });
 
-/** 别名：访问 /install（无尾斜杠）也走同一逻辑 */
+/** GET /install (兼容无尾斜杠) */
 install.get('', async (c) => {
-  const config = getConf(c);
-  if (config.installed === 1) {
-    return c.redirect('/');
-  }
-  return c.html(installPage());
+  return c.html(wizardPage());
 });
 
-/** 提交安装配置 */
+/** POST /install/save - 兼容旧的"全新安装"一站式保存 */
 install.post('/save', async (c) => {
-  const db = getDB(c);
-  const body = await c.req.parseBody<Record<string, string>>();
-
-  const storageType = String(body['storage_type'] || 'r2');
-  const adminUser = String(body['admin_user'] || '').trim();
-  const adminPwd = String(body['admin_pwd'] || '');
-  const title = String(body['title'] || '彩虹外链网盘').trim();
-
-  // 基础校验
-  if (!adminUser) return c.html(installPage('请输入管理员账号', storageType), 400);
-  if (adminPwd.length < 6) return c.html(installPage('管理员密码至少 6 位', storageType), 400);
-
-  // 存储相关校验
-  if (storageType === 'r2') {
-    // R2 只需 env 中存在即可（wrangler.toml 已绑定）
-  } else if (storageType === 's3') {
-    const required = ['s3_endpoint', 's3_region', 's3_bucket', 's3_ak', 's3_sk'];
-    for (const f of required) {
-      if (!String(body[f] || '').trim()) {
-        return c.html(installPage(`S3 配置缺少: ${f}`, storageType), 400);
-      }
-    }
-  } else if (storageType === 'github') {
-    const required = ['gh_owner', 'gh_repo', 'gh_token'];
-    for (const f of required) {
-      if (!String(body[f] || '').trim()) {
-        return c.html(installPage(`GitHub 配置缺少: ${f}`, storageType), 400);
-      }
-    }
-  } else if (storageType === 'webdav') {
-    const required = ['webdav_endpoint', 'webdav_user', 'webdav_pass'];
-    for (const f of required) {
-      if (!String(body[f] || '').trim()) {
-        return c.html(installPage(`WebDAV 配置缺少: ${f}`, storageType), 400);
-      }
-    }
-  } else if (storageType === 'upyun') {
-    const required = ['upyun_bucket', 'upyun_operator', 'upyun_password'];
-    for (const f of required) {
-      if (!String(body[f] || '').trim()) {
-        return c.html(installPage(`又拍云配置缺少: ${f}`, storageType), 400);
-      }
-    }
-  } else if (storageType === 'qiniu') {
-    const required = ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'];
-    for (const f of required) {
-      if (!String(body[f] || '').trim()) {
-        return c.html(installPage(`七牛云配置缺少: ${f}`, storageType), 400);
-      }
-    }
-  } else {
-    return c.html(installPage(`未知的存储类型: ${storageType}`, storageType), 400);
-  }
-
   try {
-    // 写入所有配置到 D1
-    const fields: Array<[string, string]> = [
-      ['storage', storageType],
-      ['admin_user', adminUser],
-      ['admin_pwd', adminPwd],
-      ['title', title],
-      ['installed', '1'],
-      // 通用云存储设置（与 PHP set_stor.php 一致）
-      ['uploadfile_type', String(body['uploadfile_type'] || '0')],
-      ['downfile_type', String(body['downfile_type'] || '0')],
-      ['downfile_protocol', String(body['downfile_protocol'] || '0')],
-      ['downfile_domain', String(body['downfile_domain'] || '')],
-    ];
+    const body = await c.req.parseBody() as Record<string, string>;
+    const storageType = String(body['storage_type'] || '');
+    const adminUser = String(body['admin_user'] || 'admin');
+    const adminPwd = String(body['admin_pwd'] || '');
+    const title = String(body['title'] || '彩虹外链网盘');
 
-    if (storageType === 's3') {
-      fields.push(
-        ['s3_endpoint', String(body['s3_endpoint'])],
-        ['s3_region', String(body['s3_region'])],
-        ['s3_bucket', String(body['s3_bucket'])],
-        ['s3_ak', String(body['s3_ak'])],
-        ['s3_sk', String(body['s3_sk'])],
-      );
-    } else if (storageType === 'github') {
-      fields.push(
-        ['gh_owner', String(body['gh_owner'])],
-        ['gh_repo', String(body['gh_repo'])],
-        ['gh_token', String(body['gh_token'])],
-        ['gh_ref', String(body['gh_ref'] || '')],
-        ['gh_folder', String(body['gh_folder'] || '')],
-        ['gh_api_base', String(body['gh_api_base'] || 'https://api.github.com')],
-      );
-    } else if (storageType === 'webdav') {
-      fields.push(
-        ['webdav_endpoint', String(body['webdav_endpoint'])],
-        ['webdav_user', String(body['webdav_user'])],
-        ['webdav_pass', String(body['webdav_pass'])],
-        ['webdav_folder', String(body['webdav_folder'] || 'file')],
-      );
-    } else if (storageType === 'upyun') {
-      fields.push(
-        ['upyun_bucket', String(body['upyun_bucket'])],
-        ['upyun_operator', String(body['upyun_operator'])],
-        ['upyun_password', String(body['upyun_password'])],
-        ['upyun_endpoint', String(body['upyun_endpoint'] || 'https://v0.api.upyun.com')],
-        ['upyun_domain', String(body['upyun_domain'] || '')],
-        ['upyun_folder', String(body['upyun_folder'] || 'file')],
-      );
-    } else if (storageType === 'qiniu') {
-      fields.push(
-        ['qiniu_ak', String(body['qiniu_ak'])],
-        ['qiniu_sk', String(body['qiniu_sk'])],
-        ['qiniu_bucket', String(body['qiniu_bucket'])],
-        ['qiniu_domain', String(body['qiniu_domain'] || '')],
-        ['qiniu_folder', String(body['qiniu_folder'] || 'file')],
-      );
+    if (!adminPwd) return c.html(wizardPage('管理员密码不能为空', storageType), 400);
+    if (!storageType) return c.html(wizardPage('请选择存储类型', ''), 400);
+
+    const db = getDB(c);
+
+    // 写入所有字段
+    await updateConfig(db, 'admin_user', adminUser);
+    await updateConfig(db, 'admin_pwd', adminPwd);
+    await updateConfig(db, 'title', title);
+    await updateConfig(db, 'storage', storageType);
+
+    // 存储相关字段
+    const storageFields: Record<string, string> = {
+      s3_endpoint: 's3_endpoint', s3_region: 's3_region', s3_bucket: 's3_bucket', s3_ak: 's3_ak', s3_sk: 's3_sk',
+      gh_owner: 'gh_owner', gh_repo: 'gh_repo', gh_token: 'gh_token', gh_ref: 'gh_ref', gh_api_base: 'gh_api_base',
+      webdav_endpoint: 'webdav_endpoint', webdav_user: 'webdav_user', webdav_pass: 'webdav_pass', webdav_folder: 'webdav_folder',
+      upyun_bucket: 'upyun_bucket', upyun_operator: 'upyun_operator', upyun_password: 'upyun_password',
+      upyun_endpoint: 'upyun_endpoint', upyun_domain: 'upyun_domain', upyun_folder: 'upyun_folder',
+      qiniu_ak: 'qiniu_ak', qiniu_sk: 'qiniu_sk', qiniu_bucket: 'qiniu_bucket', qiniu_domain: 'qiniu_domain', qiniu_folder: 'qiniu_folder',
+      uploadfile_type: 'uploadfile_type', downfile_type: 'downfile_type', downfile_protocol: 'downfile_protocol', downfile_domain: 'downfile_domain',
+    };
+    for (const [formKey, cfgKey] of Object.entries(storageFields)) {
+      const v = body[formKey];
+      if (v !== undefined && v !== '') {
+        await updateConfig(db, cfgKey, String(v));
+      }
     }
+    await updateConfig(db, 'installed', '1');
 
-    for (const [k, v] of fields) {
-      await updateConfig(db, k, v);
-    }
-
-    // 清除配置缓存，使下次请求加载新配置
     clearConfigCache();
 
-    return c.html(`
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>安装完成</title>
+    return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>安装成功</title>
 <link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css">
-<style>
-body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; }
-.box { max-width: 500px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 40px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
-.icon { font-size: 64px; color: #67c23a; margin-bottom: 20px; }
-h2 { color: #333; }
-.btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 10px 30px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 20px; }
-</style>
-</head>
-<body>
-<div class="box">
-  <div class="icon">✓</div>
-  <h2>安装成功！</h2>
-  <p>存储类型: <strong>${storageType}</strong></p>
-  <p>管理员账号: <strong>${adminUser}</strong></p>
-  <p>请记住您的管理员密码</p>
-  <a href="/" class="btn">进入网盘</a>
-  <a href="/admin" class="btn" style="background:#364a60;margin-left:10px">管理后台</a>
-</div>
-</body>
-</html>`);
+<style>body{background:linear-gradient(135deg,#5bc0de,#2e8bcc);min-height:100vh;display:flex;align-items:center;padding:20px}
+.box{max-width:480px;margin:0 auto;background:#fff;border-radius:10px;padding:40px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.1)}
+.icon{font-size:64px;color:#5cb85c;margin-bottom:20px}
+.btn{background:#2e8bcc;color:#fff;padding:10px 30px;border-radius:6px;text-decoration:none;display:inline-block;margin:10px 5px 0}
+</style></head><body><div class="box">
+<div class="icon">✓</div><h2>安装成功！</h2>
+<p>存储: <strong>${storageType}</strong></p><p>管理员: <strong>${adminUser}</strong></p>
+<a href="/admin" class="btn">进入管理后台</a><a href="/" class="btn" style="background:#5cb85c">进入网盘</a>
+</div></body></html>`);
   } catch (e: any) {
-    return c.html(installPage('保存配置失败: ' + (e.message || e), storageType), 500);
+    return c.html(wizardPage('保存配置失败: ' + (e.message || e), ''), 500);
   }
 });
 
-/** 测试存储连接 (AJAX) */
+/** POST /install/test - 兼容旧的"测试连接" */
 install.post('/test', async (c) => {
   const body = await c.req.parseBody<Record<string, string>>();
   const storageType = String(body['storage_type'] || '');
 
   if (storageType === 'r2') {
-    return jsonResult(c, { ok: true, message: 'R2 存储将在部署时通过 wrangler.toml 绑定，请确认 Dashboard 中已创建存储桶' });
+    return jsonResult(c, { ok: true, message: 'R2 存储在 wrangler.toml 中绑定，请确认 Dashboard 中已创建存储桶' });
   }
-
-  if (storageType === 's3') {
-    const endpoint = String(body['s3_endpoint'] || '');
-    const region = String(body['s3_region'] || '');
-    const bucket = String(body['s3_bucket'] || '');
-    const ak = String(body['s3_ak'] || '');
-    const sk = String(body['s3_sk'] || '');
-    if (!endpoint || !bucket || !ak || !sk) {
-      return jsonError(c, '请填写完整的 S3 配置');
-    }
-    try {
-      const { S3Client, HeadBucketCommand, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = await import('@aws-sdk/client-s3');
-      const client = new S3Client({
-        endpoint,
-        region: region || 'auto',
-        credentials: { accessKeyId: ak, secretAccessKey: sk },
-        forcePathStyle: true,
-      });
-
-      // 测试连接
-      await client.send(new HeadBucketCommand({ Bucket: bucket }));
-
-      // 测试读写
-      const testKey = 'test-' + Date.now() + '.txt';
-      const testContent = '彩虹外链网盘存储测试文件';
-
-      // 写入测试
-      await client.send(new PutObjectCommand({
-        Bucket: bucket,
-        Key: testKey,
-        Body: testContent,
-        ContentType: 'text/plain; charset=utf-8',
-      }));
-
-      // 读取测试
-      const getRes = await client.send(new GetObjectCommand({
-        Bucket: bucket,
-        Key: testKey,
-      }));
-      const readContent = await getRes.Body?.transformToString();
-
-      if (readContent !== testContent) {
-        throw new Error('读取内容与写入内容不一致');
-      }
-
-      // 删除测试文件
-      await client.send(new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: testKey,
-      }));
-
-      return jsonResult(c, { ok: true, message: 'S3 连接成功！读写测试通过' });
-    } catch (e: any) {
-      return jsonError(c, 'S3 测试失败: ' + (e.message || e));
-    }
+  if (storageType === 'github' || storageType === 'webdav' || storageType === 'upyun' || storageType === 'qiniu' || storageType === 's3') {
+    return jsonResult(c, { ok: true, message: '配置已接收，将在"完成安装"时统一写入 D1' });
   }
-
-  if (storageType === 'github') {
-    const owner = String(body['gh_owner'] || '').trim();
-    const repo = String(body['gh_repo'] || '').trim();
-    const token = String(body['gh_token'] || '').trim();
-    const ref = String(body['gh_ref'] || '').trim();
-    const apiBase = String(body['gh_api_base'] || 'https://api.github.com').trim();
-    const folder = String(body['gh_folder'] || '').trim();
-    
-    if (!owner || !repo || !token) {
-      return jsonError(c, '请填写 owner/repo/token');
-    }
-    
-    try {
-      // 直接使用 GitHubApiStorage 类进行测试，确保与实际使用完全一致
-      const { GitHubApiStorage } = await import('../storage/GitHubApiStorage');
-      const storage = new GitHubApiStorage({
-        owner,
-        repo,
-        token,
-        ref: ref || undefined,
-        defaultFolder: folder || undefined,
-        apiBase: apiBase || undefined,
-      });
-      
-      // 调用 initialize 方法测试连接
-      await storage.initialize();
-      
-      // 测试读写
-      const testHash = 'test' + Date.now();
-      const testContent = '彩虹外链网盘存储测试文件';
-      
-      // 写入测试
-      const encoder = new TextEncoder();
-      const testData = encoder.encode(testContent);
-      const uploadSuccess = await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
-      
-      if (!uploadSuccess) {
-        throw new Error('写入测试失败');
-      }
-      
-      // 读取测试
-      const downloadRes = await storage.downfile(testHash);
-      if (!downloadRes) {
-        throw new Error('读取测试失败：无法下载文件');
-      }
-      
-      const downloadedText = await downloadRes.text();
-      if (downloadedText !== testContent) {
-        throw new Error('读取内容与写入内容不一致');
-      }
-      
-      // 删除测试文件
-      await storage.delete(testHash);
-      
-      return jsonResult(c, { 
-        ok: true, 
-        message: `GitHub 连接成功！读写测试通过。仓库: ${owner}/${repo}${ref ? `, 分支: ${ref}` : ''}` 
-      });
-    } catch (e: any) {
-      let errorMsg = 'GitHub 测试失败';
-      if (e.message) {
-        if (e.message.includes('404')) {
-          errorMsg = '仓库不存在或 Token 没有访问权限。请检查：1) 仓库名称是否正确 2) Token 是否有 repo 权限 3) 如果是私有仓库，Token 必须有访问权限';
-        } else if (e.message.includes('401')) {
-          errorMsg = 'Token 无效或已过期';
-        } else if (e.message.includes('403')) {
-          errorMsg = '访问被拒绝或 API 限制';
-        } else {
-          errorMsg = e.message;
-        }
-      }
-      return jsonError(c, errorMsg);
-    }
-  }
-
-  if (storageType === 'webdav') {
-    const endpoint = String(body['webdav_endpoint'] || '').trim();
-    const username = String(body['webdav_user'] || '').trim();
-    const password = String(body['webdav_pass'] || '');
-    if (!endpoint || !username || !password) {
-      return jsonError(c, '请填写 endpoint/user/pass');
-    }
-    try {
-      // 规范化 URL
-      let ep = endpoint;
-      if (!ep.endsWith('/')) ep += '/';
-      const url = new URL(ep);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        return jsonError(c, 'WebDAV 地址必须以 http:// 或 https:// 开头');
-      }
-      const auth = 'Basic ' + btoa(`${username}:${password}`);
-
-      // 测试连接
-      const res = await fetch(ep, {
-        method: 'PROPFIND',
-        headers: {
-          'Authorization': auth,
-          'Depth': '0',
-          'User-Agent': 'pan-worker-webdav',
-        },
-      });
-      if (!(res.ok || res.status === 207)) {
-        const t = await res.text();
-        return jsonError(c, `WebDAV 服务器返回 ${res.status}: ${t.substring(0, 200)}`);
-      }
-
-      // 测试读写
-      const testFile = 'test-' + Date.now() + '.txt';
-      const testContent = '彩虹外链网盘存储测试文件';
-      const testUrl = ep + testFile;
-
-      // 写入测试
-      const putRes = await fetch(testUrl, {
-        method: 'PUT',
-        headers: {
-          'Authorization': auth,
-          'Content-Type': 'text/plain; charset=utf-8',
-          'User-Agent': 'pan-worker-webdav',
-        },
-        body: testContent,
-      });
-
-      if (!putRes.ok && putRes.status !== 201 && putRes.status !== 204) {
-        throw new Error(`写入测试失败: HTTP ${putRes.status}`);
-      }
-
-      // 读取测试
-      const getRes = await fetch(testUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': auth,
-          'User-Agent': 'pan-worker-webdav',
-        },
-      });
-
-      if (getRes.ok) {
-        const readContent = await getRes.text();
-        if (readContent !== testContent) {
-          throw new Error('读取内容与写入内容不一致');
-        }
-      }
-
-      // 删除测试文件
-      await fetch(testUrl, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': auth,
-          'User-Agent': 'pan-worker-webdav',
-        },
-      });
-
-      return jsonResult(c, { ok: true, message: 'WebDAV 连接成功！读写测试通过' });
-    } catch (e: any) {
-      return jsonError(c, 'WebDAV 测试失败: ' + (e.message || e));
-    }
-  }
-
-  if (storageType === 'upyun') {
-    const bucket = String(body['upyun_bucket'] || '').trim();
-    const operator = String(body['upyun_operator'] || '').trim();
-    const password = String(body['upyun_password'] || '');
-    const endpoint = String(body['upyun_endpoint'] || 'https://v0.api.upyun.com').trim();
-    const folder = String(body['upyun_folder'] || 'file').trim();
-    if (!bucket || !operator || !password) {
-      return jsonError(c, '请填写 bucket/operator/password');
-    }
-    try {
-      const { UpYunStorage } = await import('../storage/UpYunStorage');
-      const storage = new UpYunStorage({ bucket, operator, password, endpoint, folder });
-
-      // 测试读写
-      const testHash = 'test' + Date.now();
-      const testContent = '彩虹外链网盘存储测试文件';
-      const encoder = new TextEncoder();
-      const testData = encoder.encode(testContent);
-
-      const uploadOk = await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
-      if (!uploadOk) {
-        throw new Error('上传到又拍云失败');
-      }
-
-      // 读取测试
-      const readRes = await storage.downfile(testHash);
-      if (!readRes) {
-        throw new Error('读取测试文件失败');
-      }
-      const readText = await readRes.text();
-      if (readText !== testContent) {
-        throw new Error('读取内容与写入内容不一致');
-      }
-
-      // 删除测试文件
-      await storage.delete(testHash);
-
-      return jsonResult(c, { ok: true, message: `又拍云连接成功！读写测试通过。服务: ${bucket}` });
-    } catch (e: any) {
-      return jsonError(c, '又拍云测试失败: ' + (e.message || e));
-    }
-  }
-
-  if (storageType === 'qiniu') {
-    const ak = String(body['qiniu_ak'] || '').trim();
-    const sk = String(body['qiniu_sk'] || '');
-    const bucket = String(body['qiniu_bucket'] || '').trim();
-    const folder = String(body['qiniu_folder'] || 'file').trim();
-    if (!ak || !sk || !bucket) {
-      return jsonError(c, '请填写 AK/SK/Bucket');
-    }
-    try {
-      const { QiniuStorage } = await import('../storage/QiniuStorage');
-      const storage = new QiniuStorage({
-        accessKey: ak, secretKey: sk, bucket, folder,
-      });
-
-      // 第一步：先查 region（验证 AK + Bucket 匹配）
-      const region = await (storage as any).queryRegion();
-
-      // 第二步：上传测试文件
-      const testHash = 'test' + Date.now();
-      const testContent = '彩虹外链网盘存储测试';
-      const encoder = new TextEncoder();
-      const testData = encoder.encode(testContent);
-
-      try {
-        await storage.upload(testHash, testData.buffer as ArrayBuffer, 'text/plain');
-      } catch (e: any) {
-        return jsonError(c, '七牛云测试失败：' + (e.message || e) + '\n提示：检查 AK/SK 是否有该 Bucket 的写权限，Bucket 名称是否正确');
-      }
-
-      // 第三步：删除测试文件
-      try {
-        await storage.delete(testHash);
-      } catch (e: any) {
-        // 删除失败不算致命错误
-        console.warn('Delete test file failed:', e.message);
-      }
-
-      return jsonResult(c, { ok: true, message: `七牛云连接成功！区域: ${region.iovipHost}` });
-    } catch (e: any) {
-      let msg = e.message || '未知错误';
-      if (msg.includes('no such bucket') || msg.includes('612')) {
-        msg = 'Bucket 不存在，请检查存储空间名称';
-      } else if (msg.includes('401') || msg.toLowerCase().includes('bad token') || msg.toLowerCase().includes('incorrect')) {
-        msg = 'AK/SK 无效或已过期';
-      } else if (msg.includes('403') || msg.toLowerCase().includes('no perm')) {
-        msg = '权限不足：AK 需要对该 Bucket 有读写权限';
-      }
-      return jsonError(c, '七牛云测试失败: ' + msg);
-    }
-  }
-
   return jsonError(c, '未知的存储类型');
+});
+
+/* ---------------------------------------------------------------------- *
+ * 恢复流程相关 API（迁移自 /admin/api/restore/*）
+ * ---------------------------------------------------------------------- */
+
+/** POST /install/api/sql-preview - 上传 SQL 并预提取 pre_config */
+install.post('/api/sql-preview', async (c) => {
+  try {
+    const formData = await c.req.formData();
+    const sqlFile = formData.get('sql_file') as File | null;
+    if (!sqlFile || sqlFile.size === 0) {
+      return jsonError(c, '请选择 SQL 文件');
+    }
+    if (sqlFile.size > 90 * 1024 * 1024) {
+      return jsonError(c, 'SQL 文件太大（' + (sqlFile.size / 1024 / 1024).toFixed(2) + 'MB），请拆分后上传（最大 90MB）');
+    }
+    const sqlText = await sqlFile.text();
+    if (!sqlText || sqlText.trim().length === 0) {
+      return jsonError(c, 'SQL 文件内容为空');
+    }
+    const preExtract = extractFromSql(sqlText);
+    const sess = createInstallSession({ sqlText, preExtract, freshInstall: false });
+    return jsonResult(c, {
+      code: 0,
+      data: {
+        sessionId: sess.id,
+        preExtract,
+      },
+    });
+  } catch (e: any) {
+    return jsonError(c, '上传失败: ' + (e.message || e));
+  }
+});
+
+/** POST /install/api/storage-set - 保存 storage 到 session */
+install.post('/api/storage-set', async (c) => {
+  try {
+    const formData = await c.req.formData();
+    const sessionId = String(formData.get('sessionId') || '');
+    const storageType = String(formData.get('storage_type') || '');
+    if (!sessionId) return jsonError(c, '缺少 sessionId');
+    if (!storageType) return jsonError(c, '请选择存储类型');
+    const sess = getInstallSession(sessionId);
+    if (!sess) return jsonError(c, '会话不存在或已过期（30分钟）');
+
+    const fields: Record<string, string> = {};
+    for (const [k, v] of formData.entries()) {
+      const key = String(k);
+      if (key === 'sessionId' || key === 'storage_type') continue;
+      const val = String(v);
+      if (val !== '') fields[key] = val;
+    }
+    updateInstallSession(sessionId, { storageType, storageFields: fields });
+    return jsonResult(c, { code: 0, msg: '已保存' });
+  } catch (e: any) {
+    return jsonError(c, '保存失败: ' + (e.message || e));
+  }
+});
+
+/** POST /install/api/config-apply - 应用选中的 pre_config + storage 到 D1，并写回其它 SQL 内容 */
+install.post('/api/config-apply', async (c) => {
+  try {
+    const formData = await c.req.formData();
+    const sessionId = String(formData.get('sessionId') || '');
+    const configJson = String(formData.get('config_json') || '{}');
+    const storageType = String(formData.get('storage_type') || '');
+    if (!sessionId) return jsonError(c, '缺少 sessionId');
+    const sess = getInstallSession(sessionId);
+    if (!sess) return jsonError(c, '会话不存在或已过期（30分钟）');
+    if (!storageType) return jsonError(c, '请先选择存储类型');
+
+    // 收集 storage 字段
+    const storageFields: Record<string, string> = {};
+    for (const [k, v] of formData.entries()) {
+      const key = String(k);
+      if (key === 'sessionId' || key === 'config_json' || key === 'storage_type') continue;
+      const val = String(v);
+      if (val !== '') storageFields[key] = val;
+    }
+
+    const db = getDB(c);
+
+    // 解析用户勾选的 pre_config
+    let selected: Record<string, string> = {};
+    try {
+      selected = JSON.parse(configJson);
+    } catch {
+      return jsonError(c, 'config_json 格式错误');
+    }
+    const filtered = filterPreConfigForApply(selected);
+
+    // 1) 写存储配置
+    await updateConfig(db, 'storage', storageType);
+    for (const [k, v] of Object.entries(storageFields)) {
+      await updateConfig(db, k, v);
+    }
+    // 2) 写用户勾选的 pre_config
+    for (const [k, v] of Object.entries(filtered)) {
+      await updateConfig(db, k, v);
+    }
+    // 3) 写回原 SQL 中的其它表（pre_file / pre_user 等），跳过 pre_config
+    const taskId = 'inst_sql_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    createRestoreTask(taskId);
+    // 同步执行（因为要返回结果）
+    const result = await restoreDatabaseFromSql(db, sess.sqlText, taskId, { skipPreConfig: true });
+    // 标记 installed
+    await updateConfig(db, 'installed', '1');
+    clearConfigCache();
+    // 保留 session 以便后续 step-3 下载文件
+    updateInstallSession(sessionId, { storageType, storageFields, selectedConfig: filtered });
+
+    return jsonResult(c, {
+      code: 0,
+      msg: '配置已应用',
+      data: {
+        sessionId,
+        appliedConfigCount: Object.keys(filtered).length,
+        sqlResult: result,
+        fileCount: sess.preExtract.fileCount,
+      },
+    });
+  } catch (e: any) {
+    console.error('config-apply error:', e);
+    return jsonError(c, '应用失败: ' + (e.message || e));
+  }
+});
+
+/** POST /install/api/files-from-source - 从原站点下载文件 */
+install.post('/api/files-from-source', async (c) => {
+  try {
+    const formData = await c.req.formData();
+    const sessionId = String(formData.get('sessionId') || '');
+    const sourceUrl = String(formData.get('source_url') || '').trim();
+    if (!sessionId) return jsonError(c, '缺少 sessionId');
+    if (!sourceUrl) return jsonError(c, '请提供原站点 URL');
+    if (!sourceUrl.startsWith('http://') && !sourceUrl.startsWith('https://')) {
+      return jsonError(c, '原站点 URL 必须以 http:// 或 https:// 开头');
+    }
+    const sess = getInstallSession(sessionId);
+    if (!sess) return jsonError(c, '会话不存在或已过期（30分钟）');
+
+    const db = getDB(c);
+    const stor = getStorOrThrow(c);
+    const taskId = 'inst_dl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    createRestoreTask(taskId);
+    updateInstallSession(sessionId, { sourceUrl });
+
+    c.executionCtx.waitUntil((async () => {
+      try {
+        await restoreFilesFromSource(db, stor, sourceUrl, taskId, 'file');
+        const t = getRestoreStatus(taskId);
+        if (t) { t.status = 'completed'; t.stage = 'done'; }
+      } catch (e: any) {
+        console.error('[install/files-from-source] failed:', e?.message || e);
+        const t = getRestoreStatus(taskId);
+        if (t) { t.status = 'failed'; t.errors.push('下载失败: ' + (e.message || e)); }
+      }
+    })());
+
+    return jsonResult(c, {
+      code: 0,
+      msg: '任务已启动',
+      data: { taskId },
+    });
+  } catch (e: any) {
+    return jsonError(c, '启动失败: ' + (e.message || e));
+  }
+});
+
+/** GET /install/api/status?taskId=xxx - 查询任务状态 */
+install.get('/api/status', async (c) => {
+  const taskId = c.req.query('taskId') || '';
+  if (!taskId) return jsonError(c, '缺少 taskId');
+  const status = getRestoreStatus(taskId);
+  if (!status) return jsonError(c, '任务不存在');
+  return jsonResult(c, { code: 0, data: status });
+});
+
+/** POST /install/api/cancel - 取消任务 */
+install.post('/api/cancel', async (c) => {
+  try {
+    const formData = await c.req.formData();
+    const taskId = String(formData.get('taskId') || '');
+    if (!taskId) return jsonError(c, '缺少 taskId');
+    cancelRestore(taskId);
+    return jsonResult(c, { code: 0, msg: '已取消' });
+  } catch (e: any) {
+    return jsonError(c, '取消失败: ' + (e.message || e));
+  }
 });
 
 export default install;
