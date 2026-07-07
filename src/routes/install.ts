@@ -1,4 +1,4 @@
-﻿﻿// 彩虹外链网盘 - 安装/恢复向导路由
+// 彩虹外链网盘 - 安装/恢复向导路由
 // 首次部署/存储未配置时自动跳转到此页
 // 整合：全新安装 + 从原 PHP 备份恢复（不再有 /admin/restore）
 
@@ -12,7 +12,7 @@ import { UpYunStorage } from '../storage/UpYunStorage';
 import type { AppEnv } from '../middleware';
 import { getDB, getConf, getStorOrThrow } from '../middleware';
 import { isStorageConfigured } from '../storage/factory';
-import { updateConfig, clearConfigCache } from '../config';
+import { updateConfig, clearConfigCache, loadConfig } from '../config';
 import { jsonResult, jsonError } from '../utils/response';
 import { extractFromSql, filterPreConfigForApply } from '../services/restorePreExtract';
 import {
@@ -301,8 +301,10 @@ function showStep(n) {
   next.style.display = '';
   if (n === 1 && state.mode === 'fresh') {
     next.innerHTML = '<i class="fa fa-check"></i> 完成安装';
-  } else if (n === 3) {
-    next.innerHTML = '<i class="fa fa-check"></i> 应用配置并完成';
+  } else if (n === 2 && state.mode === 'restore') {
+    next.innerHTML = '<i class="fa fa-check"></i> 应用配置并继续';
+  } else if (n === 3 && state.mode === 'restore') {
+    next.innerHTML = '<i class="fa fa-check"></i> 完成';
   } else {
     next.innerHTML = '下一步 <i class="fa fa-arrow-right"></i>';
   }
@@ -322,9 +324,15 @@ async function nextStep() {
     await submitFresh();
     return;
   }
+  if (state.step === 2 && state.mode === 'restore') {
+    // step 2r → 3r：先应用配置再进入文件下载步骤
+    const ok = await applyConfigAndComplete();
+    if (ok) showStep(3);
+    return;
+  }
   if (state.step === 3 && state.mode === 'restore') {
-    // 应用配置并完成
-    await applyConfigAndComplete();
+    // step 3r → step 4：完成
+    showStep(5);
     return;
   }
   showStep(state.step + 1);
@@ -445,7 +453,8 @@ function toggleConfig(cb) {
 async function setStorage(prefix) {
   const form = document.getElementById('step-' + (prefix === 'fresh-' ? '1f' : '2r'));
   const fd = new FormData();
-  fd.set('storage_type', document.getElementById(prefix + 'storage_type').value);
+  const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
+  fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
   document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
@@ -471,15 +480,18 @@ async function applyConfigAndComplete() {
     if (state.preExtract.fileCount > 0) {
       // 跳到 step 3r 输入原站点
       showStep(3);
+      return true;
     } else {
       // 没有文件，直接完成
       const sum = document.getElementById('doneSummary');
       sum.innerText = '存储: ' + document.getElementById('restore_storage_type').value + '，已应用 ' + Object.keys(cfg).length + ' 条配置';
       showStep(5);
+      return true;
     }
   } catch (e) {
     result.className = 'alert alert-danger';
     result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+    return false;
   }
 }
 
@@ -550,8 +562,9 @@ async function testStorage(prefix) {
   if (!div) return;
   div.className = 'alert alert-info';
   div.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 测试中...';
+  const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
   const fd = new FormData();
-  fd.set('storage_type', document.getElementById(prefix + 'storage_type').value);
+  fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
   document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
@@ -751,11 +764,15 @@ install.post('/test', async (c) => {
     const storageType = String(body['storage_type'] || '');
     if (!storageType) return jsonError(c, '请选择存储类型');
 
+    // 统一响应包装：{ code:0, data:{ ok, message } } / { code:-1, data:{ ok:false, message } }
+    const wrap = (ok: boolean, message: string) =>
+      jsonResult(c, { code: ok ? 0 : -1, data: { ok, message } });
+
     // R2: 用 wrangler.toml 绑定的 env 绑定测试
     if (storageType === 'r2') {
       const bucket = (c.env as any).FILE_R2;
       if (!bucket) {
-        return jsonResult(c, { ok: false, message: 'R2 未绑定（请在 wrangler.toml 配置 FILE_R2 绑定）' });
+        return wrap(false, 'R2 未绑定（请在 wrangler.toml 配置 FILE_R2 绑定）');
       }
       const testKey = '_install_test_' + Date.now() + '.txt';
       const testData = 'test-' + Date.now();
@@ -763,16 +780,16 @@ install.post('/test', async (c) => {
         await bucket.put(testKey, testData);
         const obj = await bucket.get(testKey);
         if (!obj) {
-          return jsonResult(c, { ok: false, message: 'R2 写入成功但读取失败' });
+          return wrap(false, 'R2 写入成功但读取失败');
         }
         const text = await obj.text();
         await bucket.delete(testKey);
         if (text !== testData) {
-          return jsonResult(c, { ok: false, message: 'R2 读取内容不一致' });
+          return wrap(false, 'R2 读取内容不一致');
         }
-        return jsonResult(c, { ok: true, message: 'R2 读写测试通过' });
+        return wrap(true, 'R2 读写测试通过');
       } catch (e: any) {
-        return jsonResult(c, { ok: false, message: 'R2 测试失败: ' + (e.message || e) });
+        return wrap(false, 'R2 测试失败: ' + (e.message || e));
       }
     }
 
@@ -787,20 +804,20 @@ install.post('/test', async (c) => {
           secretAccessKey: String(body['s3_sk'] || ''),
         };
         if (!cfg.endpoint || !cfg.bucket || !cfg.accessKeyId || !cfg.secretAccessKey) {
-          return jsonResult(c, { ok: false, message: '请填写完整的 S3 配置（endpoint/bucket/ak/sk）' });
+          return wrap(false, '请填写完整的 S3 配置（endpoint/bucket/ak/sk）');
         }
         const stor = new S3Storage(cfg as any);
         const testKey = '_install_test_' + Date.now() + '.txt';
         const testData = 'test-' + Date.now();
         await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
         const got = await stor.get(testKey);
-        if (!got) return jsonResult(c, { ok: false, message: 'S3 写入成功但读取失败' });
+        if (!got) return wrap(false, 'S3 写入成功但读取失败');
         const text = await new Response(got.body).text();
         await stor.delete(testKey);
-        if (text !== testData) return jsonResult(c, { ok: false, message: 'S3 读取内容不一致' });
-        return jsonResult(c, { ok: true, message: 'S3 读写测试通过' });
+        if (text !== testData) return wrap(false, 'S3 读取内容不一致');
+        return wrap(true, 'S3 读写测试通过');
       } catch (e: any) {
-        return jsonResult(c, { ok: false, message: 'S3 测试失败: ' + (e.message || e) });
+        return wrap(false, 'S3 测试失败: ' + (e.message || e));
       }
     }
 
@@ -815,12 +832,12 @@ install.post('/test', async (c) => {
           apiBase: String(body['gh_api_base'] || 'https://api.github.com'),
         };
         if (!cfg.owner || !cfg.repo || !cfg.token) {
-          return jsonResult(c, { ok: false, message: '请填写完整的 GitHub 配置（owner/repo/token）' });
+          return wrap(false, '请填写完整的 GitHub 配置（owner/repo/token）');
         }
         const result = await GitHubApiStorage.testConnection(cfg as any);
-        return jsonResult(c, result);
+        return jsonResult(c, { code: result.ok ? 0 : -1, data: result });
       } catch (e: any) {
-        return jsonResult(c, { ok: false, message: 'GitHub 测试失败: ' + (e.message || e) });
+        return wrap(false, 'GitHub 测试失败: ' + (e.message || e));
       }
     }
 
@@ -834,20 +851,20 @@ install.post('/test', async (c) => {
           folder: String(body['webdav_folder'] || 'file'),
         };
         if (!cfg.endpoint || !cfg.user || !cfg.pass) {
-          return jsonResult(c, { ok: false, message: '请填写完整的 WebDAV 配置（endpoint/user/pass）' });
+          return wrap(false, '请填写完整的 WebDAV 配置（endpoint/user/pass）');
         }
         const stor = new WebDavStorage(cfg as any);
         const testKey = '_install_test_' + Date.now() + '.txt';
         const testData = 'test-' + Date.now();
         await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
         const got = await stor.get(testKey);
-        if (!got) return jsonResult(c, { ok: false, message: 'WebDAV 写入成功但读取失败' });
+        if (!got) return wrap(false, 'WebDAV 写入成功但读取失败');
         const text = await new Response(got.body).text();
         await stor.delete(testKey);
-        if (text !== testData) return jsonResult(c, { ok: false, message: 'WebDAV 读取内容不一致' });
-        return jsonResult(c, { ok: true, message: 'WebDAV 读写测试通过' });
+        if (text !== testData) return wrap(false, 'WebDAV 读取内容不一致');
+        return wrap(true, 'WebDAV 读写测试通过');
       } catch (e: any) {
-        return jsonResult(c, { ok: false, message: 'WebDAV 测试失败: ' + (e.message || e) });
+        return wrap(false, 'WebDAV 测试失败: ' + (e.message || e));
       }
     }
 
@@ -863,20 +880,20 @@ install.post('/test', async (c) => {
           folder: String(body['upyun_folder'] || 'file'),
         };
         if (!cfg.bucket || !cfg.operator || !cfg.password) {
-          return jsonResult(c, { ok: false, message: '请填写完整的又拍云配置（bucket/operator/password）' });
+          return wrap(false, '请填写完整的又拍云配置（bucket/operator/password）');
         }
         const stor = new UpYunStorage(cfg as any);
         const testKey = '_install_test_' + Date.now() + '.txt';
         const testData = 'test-' + Date.now();
         await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
         const got = await stor.get(testKey);
-        if (!got) return jsonResult(c, { ok: false, message: '又拍云写入成功但读取失败' });
+        if (!got) return wrap(false, '又拍云写入成功但读取失败');
         const text = await new Response(got.body).text();
         await stor.delete(testKey);
-        if (text !== testData) return jsonResult(c, { ok: false, message: '又拍云读取内容不一致' });
-        return jsonResult(c, { ok: true, message: '又拍云读写测试通过' });
+        if (text !== testData) return wrap(false, '又拍云读取内容不一致');
+        return wrap(true, '又拍云读写测试通过');
       } catch (e: any) {
-        return jsonResult(c, { ok: false, message: '又拍云测试失败: ' + (e.message || e) });
+        return wrap(false, '又拍云测试失败: ' + (e.message || e));
       }
     }
 
@@ -891,20 +908,20 @@ install.post('/test', async (c) => {
           folder: String(body['qiniu_folder'] || 'file'),
         };
         if (!cfg.accessKey || !cfg.secretKey || !cfg.bucket) {
-          return jsonResult(c, { ok: false, message: '请填写完整的七牛云配置（ak/sk/bucket）' });
+          return wrap(false, '请填写完整的七牛云配置（ak/sk/bucket）');
         }
         const stor = new QiniuStorage(cfg as any);
         const testKey = '_install_test_' + Date.now() + '.txt';
         const testData = 'test-' + Date.now();
         await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
         const got = await stor.get(testKey);
-        if (!got) return jsonResult(c, { ok: false, message: '七牛云写入成功但读取失败' });
+        if (!got) return wrap(false, '七牛云写入成功但读取失败');
         const text = await new Response(got.body).text();
         await stor.delete(testKey);
-        if (text !== testData) return jsonResult(c, { ok: false, message: '七牛云读取内容不一致' });
-        return jsonResult(c, { ok: true, message: '七牛云读写测试通过' });
+        if (text !== testData) return wrap(false, '七牛云读取内容不一致');
+        return wrap(true, '七牛云读写测试通过');
       } catch (e: any) {
-        return jsonResult(c, { ok: false, message: '七牛云测试失败: ' + (e.message || e) });
+        return wrap(false, '七牛云测试失败: ' + (e.message || e));
       }
     }
 
@@ -1076,6 +1093,22 @@ install.post('/api/files-from-source', async (c) => {
     }
     const sess = await getInstallSession(db, sessionId);
     if (!sess) return jsonError(c, '会话不存在或已过期（30分钟），请重新上传 SQL');
+
+    // 兼容：用户可能没走 "应用配置" 步骤直接点开始下载
+    // 此时 D1 里 storage 还没配置，但 session 里有
+    const cfg = await loadConfig(db);
+    if (cfg.installed !== 1 && sess.storageType) {
+      console.log('[files-from-source] auto-apply storage from session:', sess.storageType);
+      await updateConfig(db, 'storage', sess.storageType);
+      for (const [k, v] of Object.entries(sess.storageFields || {})) {
+        await updateConfig(db, k, v);
+      }
+      for (const [k, v] of Object.entries(sess.selectedConfig || {})) {
+        await updateConfig(db, k, v);
+      }
+      await updateConfig(db, 'installed', '1');
+      clearConfigCache();
+    }
 
     const stor = getStorOrThrow(c);
     const taskId = 'inst_dl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
