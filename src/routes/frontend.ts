@@ -40,8 +40,7 @@ const CDN = {
   bootstrapTablePageJump: 'https://s4.zstatic.net/ajax/libs/bootstrap-table/1.21.4/extensions/page-jump-to/bootstrap-table-page-jump-to.min.js',
 };
 
-// ===================== 通用 layout（仿照原 header.php + footer.php
-======================
+// ===================== 通用 layout（仿照原 header.php + footer.php） =====================
 function siteUrl(c: any): string {
   const u = new URL(c.req.url);
   return `${u.protocol}//${u.host}`;
@@ -470,19 +469,19 @@ if (pwd!=null && pwd!="")
 
   if (viewType === 'image') {
     filetype = 1;
-    fileTitle = '<i class="fa fa-picture-o"></i> 图片查看；
+    fileTitle = '<i class="fa fa-picture-o"></i> 图片查看器';
     htmlcode = htmlspecialchars(`<img src="${viewurlAll}"/>`);
     ubbcode = `[img]${viewurlAll}[/img]`;
     linktitle = '图片链接';
   } else if (viewType === 'audio') {
     filetype = 2;
-    fileTitle = '<i class="fa fa-music"></i> 音乐播放器;
+    fileTitle = '<i class="fa fa-music"></i> 音乐播放器'
     htmlcode = htmlspecialchars(`<audio src="${viewurlAll}" autoplay="autoplay" loop="loop" preload="auto"></audio>`);
     ubbcode = `[audio]${viewurlAll}[/audio]`;
     linktitle = '音乐链接';
   } else if (viewType === 'video') {
     filetype = 3;
-    fileTitle = '<i class="fa fa-video-camera"></i> 视频播放器;
+    fileTitle = '<i class="fa fa-video-camera"></i> 视频播放器';
     htmlcode = htmlspecialchars(`<video src="${viewurlAll}" controls="" width="100%"></video>`);
     ubbcode = `[movie]${viewurlAll}[/movie]`;
     linktitle = '视频链接';
@@ -1502,11 +1501,11 @@ function pollMigrateProgress(taskId){
 </div>
 </div>`;
   } else if (mod === 'green') {
-    pageTitle = '图片检测设置;
+    pageTitle = '图片检测设置';
     const greenLabelPorn = config.green_label_porn ? config.green_label_porn.split(',') : [];
     const greenLabelTerrorism = config.green_label_terrorism ? config.green_label_terrorism.split(',') : [];
     panelBody = `<div class="panel panel-primary">
-<div class="panel-heading"><h3 class="panel-title">图片检测设置/h3></div>
+<div class="panel-heading"><h3 class="panel-title">图片检测设置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
     <div class="form-group">
@@ -1598,9 +1597,9 @@ downurl - 下载地址
 </div>
 </div>`;
   } else if (mod === 'account') {
-    pageTitle = '管理员账号设置;
+    pageTitle = '管理员账号设置';
     panelBody = `<div class="panel panel-primary">
-<div class="panel-heading"><h3 class="panel-title">管理员账号设置/h3></div>
+<div class="panel-heading"><h3 class="panel-title">管理员账号设置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
   <div class="form-group">
@@ -1775,7 +1774,8 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     });
   } catch (e: any) {
     console.error('[getcount] unhandled exception:', e?.message || e, e?.stack);
-    // 兜底：仍然返回 code:0 以保证前端会停在 0，至少给个客户端    return c.json({
+    // 兜底：仍然返回 code:0 以保证前端不会停在 0，至少给一个空值
+    return c.json({
       code: 0,
       count1: 0,
       count2: 0,
@@ -1829,7 +1829,7 @@ frontend.get('/admin/ajax/getFileInfo', async (c) => {
   const db = getDB(c);
   const id = parseInt(c.req.query('id') || '0');
   const row = await getFileById(db, id);
-  if (!row) return c.json({ code: -1, msg: '文件不存在 });
+  if (!row) return c.json({ code: -1, msg: '文件不存在' });
   return c.json({ ...row, code: 0, size2: sizeFormat(row.size) });
 });
 
@@ -1868,7 +1868,7 @@ frontend.get('/admin/ajax/delFile', async (c) => {
   const stor = getStorOrThrow(c);
   const id = parseInt(c.req.query('id') || '0');
   const row = await getFileById(db, id);
-  if (!row) return c.json({ code: -1, msg: '文件不存在 });
+  if (!row) return c.json({ code: -1, msg: '文件不存在' });
   try {
     await stor.delete(row.hash);
   } catch {}
