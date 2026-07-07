@@ -267,11 +267,17 @@ const state = {
 function showStep(n) {
   state.step = n;
   document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
-  const ids = ['step-0', 'step-1f', 'step-1r', 'step-2r', 'step-3r', 'step-4'];
-  document.getElementById(ids[n]).classList.add('active');
+  // 根据安装模式选择步骤 ID
+  const ids = state.mode === 'restore'
+    ? ['step-0', 'step-1r', 'step-2r', 'step-3r', '', 'step-4']
+    : ['step-0', 'step-1f', '', '', '', 'step-4'];
+  const el = document.getElementById(ids[n]);
+  if (el) el.classList.add('active');
 
-  // 步骤指示器
-  const map = { 0: 0, 1: 1, 2: 1, 3: 2, 4: 3, 5: 3 };
+  // 步骤指示器（restore: 0→1→1→2→3, fresh: 0→1→3）
+  const map = state.mode === 'restore'
+    ? { 0: 0, 1: 1, 2: 1, 3: 2, 5: 3 }
+    : { 0: 0, 1: 1, 5: 3 };
   document.querySelectorAll('.step-pill').forEach((el, i) => {
     el.classList.remove('active', 'done');
     if (i < map[n]) el.classList.add('done');
@@ -529,6 +535,34 @@ function pollFileStatus() {
   }, 1000);
 }
 
+/* ==================== 存储测试 ==================== */
+async function testStorage(prefix) {
+  const btn = document.querySelector('#' + (prefix === 'fresh-' ? 'fresh' : 'restore') + 'StorageTabs').parentElement.querySelector('[onclick*="testStorage"]');
+  const div = document.getElementById(prefix + 'testResult');
+  if (!div) return;
+  div.className = 'alert alert-info';
+  div.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 测试中...';
+  const fd = new FormData();
+  fd.set('storage_type', document.getElementById(prefix + 'storage_type').value);
+  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
+    if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
+  });
+  try {
+    const res = await fetch('/install/test', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json.code === 0 && json.data && json.data.ok) {
+      div.className = 'alert alert-success';
+      div.innerHTML = '<i class="fa fa-check"></i> ' + (json.data.message || '测试通过');
+    } else {
+      div.className = 'alert alert-danger';
+      div.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + (json.msg || json.data?.message || '测试失败');
+    }
+  } catch (e) {
+    div.className = 'alert alert-danger';
+    div.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+  }
+}
+
 /* ==================== 存储 Tab 切换 ==================== */
 function bindStorageTabs(prefix) {
   const tabs = document.querySelectorAll('#' + (prefix === 'fresh-' ? 'fresh' : 'restore') + 'StorageTabs .storage-tab');
@@ -566,6 +600,8 @@ function renderStorageForms(prefix: string): string {
   return `
     <div class="storage-form active" id="${prefix}form-r2">
       <div class="alert alert-info">R2 存储桶需在 Cloudflare Dashboard 中手动创建，wrangler.toml 中已绑定 <code>FILE_R2</code>。</div>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-s3">
       <div class="form-group"><label>Endpoint <span class="required">*</span></label>
@@ -578,6 +614,8 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}s3_ak" class="form-control"></div>
       <div class="form-group"><label>SecretAccessKey <span class="required">*</span></label>
         <input type="password" name="${prefix}s3_sk" class="form-control"></div>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-github">
       <div class="alert alert-info">需要 Token 具备 <code>repo</code> 权限。</div>
@@ -591,6 +629,8 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}gh_ref" class="form-control" placeholder="main"></div>
       <div class="form-group"><label>API Base</label>
         <input type="text" name="${prefix}gh_api_base" class="form-control" value="https://api.github.com"></div>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-webdav">
       <div class="form-group"><label>WebDAV 服务地址 <span class="required">*</span></label>
@@ -601,6 +641,8 @@ function renderStorageForms(prefix: string): string {
         <input type="password" name="${prefix}webdav_pass" class="form-control"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}webdav_folder" class="form-control" value="file"></div>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-upyun">
       <div class="form-group"><label>服务名 (Bucket) <span class="required">*</span></label>
@@ -615,6 +657,8 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}upyun_folder" class="form-control" value="file"></div>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-qiniu">
       <div class="form-group"><label>AccessKey (AK) <span class="required">*</span></label>
@@ -627,6 +671,8 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}qiniu_domain" class="form-control" placeholder="https://cdn.example.com"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}qiniu_folder" class="form-control" value="file"></div>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
   `;
 }
@@ -654,8 +700,8 @@ install.post('/save', async (c) => {
     const adminPwd = String(body['admin_pwd'] || '');
     const title = String(body['title'] || '彩虹外链网盘');
 
-    if (!adminPwd) return c.html(wizardPage('管理员密码不能为空', storageType), 400);
-    if (!storageType) return c.html(wizardPage('请选择存储类型', ''), 400);
+    if (!adminPwd) return jsonError(c, '管理员密码不能为空');
+    if (!storageType) return jsonError(c, '请选择存储类型');
 
     const db = getDB(c);
 
@@ -684,20 +730,9 @@ install.post('/save', async (c) => {
     await updateConfig(db, 'installed', '1');
 
     clearConfigCache();
-
-    return c.html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>安装成功</title>
-<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css">
-<style>body{background:linear-gradient(135deg,#5bc0de,#2e8bcc);min-height:100vh;display:flex;align-items:center;padding:20px}
-.box{max-width:480px;margin:0 auto;background:#fff;border-radius:10px;padding:40px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.1)}
-.icon{font-size:64px;color:#5cb85c;margin-bottom:20px}
-.btn{background:#2e8bcc;color:#fff;padding:10px 30px;border-radius:6px;text-decoration:none;display:inline-block;margin:10px 5px 0}
-</style></head><body><div class="box">
-<div class="icon">✓</div><h2>安装成功！</h2>
-<p>存储: <strong>${storageType}</strong></p><p>管理员: <strong>${adminUser}</strong></p>
-<a href="/admin" class="btn">进入管理后台</a><a href="/" class="btn" style="background:#5cb85c">进入网盘</a>
-</div></body></html>`);
+    return jsonResult(c, { code: 0, msg: '安装成功', data: { storageType, adminUser } });
   } catch (e: any) {
-    return c.html(wizardPage('保存配置失败: ' + (e.message || e), ''), 500);
+    return jsonError(c, '保存配置失败: ' + (e.message || e));
   }
 });
 
