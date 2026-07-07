@@ -19,6 +19,7 @@ export interface SqlPreExtractResult {
 
 /**
  * 把 SQL 文本切成语句数组（按分号，且忽略字符串内的分号）
+ * 同时去除行首 -- 注释
  * 比 restore.ts 的 splitSqlStatements 简单，预提取不需要那么严格
  */
 function splitStatements(sql: string): string[] {
@@ -39,6 +40,19 @@ function splitStatements(sql: string): string[] {
         inString = false;
       }
     } else {
+      // 行首注释：-- 到换行为止
+      if (ch === '-' && sql[i + 1] === '-') {
+        while (i < sql.length && sql[i] !== '\n') i++;
+        if (i < sql.length) buf += '\n'; // 保留换行
+        continue;
+      }
+      // /* ... */ 块注释
+      if (ch === '/' && sql[i + 1] === '*') {
+        i += 2;
+        while (i < sql.length && !(sql[i] === '*' && sql[i + 1] === '/')) i++;
+        i += 1; // 跳过 /
+        continue;
+      }
       if (ch === "'" || ch === '"' || ch === '`') {
         inString = true;
         stringChar = ch;
