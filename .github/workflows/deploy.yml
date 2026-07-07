@@ -9,20 +9,6 @@
 #     CLOUDFLARE_API_TOKEN     Cloudflare API Token (需要 Workers+D1 权限)
 #     CLOUDFLARE_ACCOUNT_ID     Cloudflare 账户 ID
 #
-#   【可选的 Secrets（用于跳过 /install 页面）】
-#     ADMIN_USER               管理员账号 (默认: admin)
-#     ADMIN_PWD                管理员密码 (必填才会启用自动配置)
-#     SITE_TITLE               站点名称 (默认: 彩虹外链网盘)
-#     STORAGE_TYPE             存储类型 (默认: r2)
-#                             可选: r2 / s3 / github / webdav / upyun / qiniu
-#                               默认 r2，不需要额外配置
-#                               设为 qiniu 时需要填写以下 QINIU_* 项
-#     QINIU_AK                 七牛云 AccessKey (仅 STORAGE_TYPE=qiniu 时生效)
-#     QINIU_SK                 七牛云 SecretKey (同上)
-#     QINIU_BUCKET             七牛云存储空间名称 (同上)
-#     QINIU_DOMAIN             七牛云绑定域名 (同上，例如 https://dlp.wn5.top)
-#     QINIU_FOLDER             七牛云存储子目录 (默认: file，同上)
-#
 #   3. 在 Actions 页面手动运行 "Deploy to Cloudflare Workers"，或
 #      推送 main 分支自动触发
 # =====================================================================
@@ -154,87 +140,3 @@ jobs:
         run: |
           echo "🚀 部署到 Cloudflare Workers..."
           npx wrangler deploy --config wrangler.spa.toml 2>&1 | sed -E 's/https:\/\/[a-zA-Z0-9.-]*\.(workers|pages)\.dev/https:\/\/[REDACTED].\1.dev/g'
-
-      # ==================== 从 Secrets 自动配置 ====================
-      # 如果设置了 ADMIN_PWD，则自动写入配置到 D1 并标记为已安装
-      # 这样部署后直接可用，无需手动访问 /install/ 页面
-      # 注意：GitHub Actions 不支持在 if: 中使用 secrets，改用 shell 级别判断
-      - name: Auto-configure from Secrets (跳过安装向导)
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ADMIN_USER: ${{ secrets.ADMIN_USER || 'admin' }}
-          ADMIN_PWD: ${{ secrets.ADMIN_PWD }}
-          SITE_TITLE: ${{ secrets.SITE_TITLE || '彩虹外链网盘' }}
-          STORAGE_TYPE: ${{ secrets.STORAGE_TYPE || 'r2' }}
-          QINIU_AK: ${{ secrets.QINIU_AK || '' }}
-          QINIU_SK: ${{ secrets.QINIU_SK || '' }}
-          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET || '' }}
-          QINIU_DOMAIN: ${{ secrets.QINIU_DOMAIN || '' }}
-          QINIU_FOLDER: ${{ secrets.QINIU_FOLDER || 'file' }}
-        run: |
-          # 如果没有设置 ADMIN_PWD，则跳过自动配置
-          if [ -z "$ADMIN_PWD" ]; then
-            echo "ℹ️  未检测到 ADMIN_PWD，跳过自动配置。"
-            echo "   如需自动配置，请在 GitHub Secrets 中添加 ADMIN_PWD。"
-            echo "   也可以部署后手动访问 /install/ 完成配置。"
-            exit 0
-          fi
-
-          echo "检测到 ADMIN_PWD，开始自动配置..."
-
-          # SQL 值转义函数：将单引号替换为两个单引号
-          sql_escape() {
-            echo "$1" | sed "s/'/''/g"
-          }
-
-          # 构建 SQL
-          SQL=""
-
-          # 管理员账号
-          SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('admin_user', '$(sql_escape "$ADMIN_USER")');"
-          SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('admin_pwd', '$(sql_escape "$ADMIN_PWD")');"
-          echo "  - admin_user = $ADMIN_USER"
-
-          # 站点名称
-          SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('title', '$(sql_escape "$SITE_TITLE")');"
-          echo "  - title = $SITE_TITLE"
-
-          # 存储类型
-          SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('storage', '$(sql_escape "$STORAGE_TYPE")');"
-          echo "  - storage = $STORAGE_TYPE"
-
-          # 根据存储类型写入对应的配置项
-          if [ "$STORAGE_TYPE" = "qiniu" ]; then
-            SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('qiniu_ak', '$(sql_escape "$QINIU_AK")');"
-            SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('qiniu_sk', '$(sql_escape "$QINIU_SK")');"
-            SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('qiniu_bucket', '$(sql_escape "$QINIU_BUCKET")');"
-            SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('qiniu_domain', '$(sql_escape "$QINIU_DOMAIN")');"
-            SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('qiniu_folder', '$(sql_escape "$QINIU_FOLDER")');"
-            echo "  - qiniu 配置已写入"
-          fi
-
-          # R2 不需要额外配置，wrangler.toml 已绑定
-          if [ "$STORAGE_TYPE" = "r2" ]; then
-            echo "  - R2 无需额外配置（wrangler.toml 已绑定）"
-          fi
-
-          # 标记为已安装
-          SQL+="INSERT OR REPLACE INTO pre_config (k, v) VALUES ('installed', '1');"
-
-          # 执行 SQL
-          echo ""
-          echo "执行 D1 配置写入..."
-          npx wrangler d1 execute pan-db --config wrangler.spa.toml --command="$SQL" --remote
-
-          if [ $? -eq 0 ]; then
-            echo ""
-            echo "============================================="
-            echo "✅ 配置完成！应用已就绪！"
-            echo "   管理员账号: $ADMIN_USER"
-            echo "   存储类型:   $STORAGE_TYPE"
-            echo "============================================="
-          else
-            echo ""
-            echo "⚠️  D1 写入失败，你可能需要手动访问 /install/ 完成配置"
-          fi
