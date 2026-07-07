@@ -92,3 +92,18 @@ INSERT INTO pre_config (k, v) VALUES
   ('gh_api_base', 'https://api.github.com'),
   -- 安装标识 (0=未安装, 1=已安装)
   ('installed', '0');
+
+-- 安装/恢复会话临时表（30 分钟后自动清理）
+-- 用 D1 存 SQL 文本，避免 Worker 多实例内存 Map 数据丢失
+CREATE TABLE IF NOT EXISTS install_session (
+  id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  sql_text TEXT NOT NULL,
+  pre_extract TEXT NOT NULL,
+  storage_type TEXT,
+  storage_fields TEXT,
+  selected_config TEXT,
+  source_url TEXT,
+  fresh_install INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_install_session_created_at ON install_session(created_at);
