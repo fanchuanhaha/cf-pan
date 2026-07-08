@@ -199,6 +199,7 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
       <div id="fileCountHint" class="text-muted" style="margin-top:8px"></div>
 
       <h4 style="margin-top:24px"><i class="fa fa-database"></i> 选择新的存储后端</h4>
+      <div id="restoreAutoFillNote" class="alert alert-info" style="display:none; margin-top:8px; font-size:13px"></div>
       <div class="storage-tabs" id="restoreStorageTabs">
         <button type="button" class="storage-tab active" data-target="restore-form-r2">R2</button>
         <button type="button" class="storage-tab" data-target="restore-form-s3">S3</button>
@@ -396,10 +397,63 @@ async function uploadSql() {
     renderConfigList();
     renderWarnings();
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
+    // 检测 SQL 备份中已有的存储配置，自动填入表单
+    autoFillStorageFromSql();
     showStep(2);
   } catch (e) {
     result.className = 'alert alert-danger';
     result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+  }
+}
+
+/**
+ * 检测 SQL 备份中已有的存储配置（如 qiniu_ak 等），自动填入 step-2r 的表单
+ * 提升用户体验：避免用户重复填写已存在于 SQL 备份中的字段
+ */
+function autoFillStorageFromSql() {
+  const cfg = state.preExtract?.preConfig || {};
+  const sqlStorage = cfg.storage || '';
+  // 推断 SQL 备份中使用的存储类型
+  let detectedType = '';
+  if (cfg.qiniu_ak && cfg.qiniu_sk && cfg.qiniu_bucket) {
+    detectedType = 'qiniu';
+  } else if (cfg.s3_endpoint && cfg.s3_bucket && cfg.s3_ak && cfg.s3_sk) {
+    detectedType = 's3';
+  } else if (cfg.webdav_endpoint && cfg.webdav_user && cfg.webdav_pass) {
+    detectedType = 'webdav';
+  } else if (cfg.upyun_bucket && cfg.upyun_operator && cfg.upyun_password) {
+    detectedType = 'upyun';
+  } else if (cfg.gh_owner && cfg.gh_repo && cfg.gh_token) {
+    detectedType = 'github';
+  }
+  if (!detectedType) return;
+
+  // 切换到对应 tab
+  const tab = document.querySelector('#restoreStorageTabs .storage-tab[data-target="restore-form-' + detectedType + '"]');
+  if (tab) tab.click();
+
+  // 填入字段
+  const prefix = 'restore-';
+  const fieldsByType: Record<string, string[]> = {
+    qiniu: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket', 'qiniu_domain', 'qiniu_folder'],
+    s3: ['s3_endpoint', 's3_region', 's3_bucket', 's3_ak', 's3_sk'],
+    webdav: ['webdav_endpoint', 'webdav_user', 'webdav_pass', 'webdav_folder'],
+    upyun: ['upyun_bucket', 'upyun_operator', 'upyun_password', 'upyun_endpoint', 'upyun_domain', 'upyun_folder'],
+    github: ['gh_owner', 'gh_repo', 'gh_token', 'gh_ref', 'gh_folder', 'gh_api_base'],
+  };
+  const keys = fieldsByType[detectedType] || [];
+  let filled = 0;
+  for (const k of keys) {
+    if (!cfg[k]) continue;
+    const el = document.querySelector('input[name="' + prefix + k + '"]');
+    if (el) { el.value = cfg[k]; filled++; }
+  }
+  if (filled > 0) {
+    const note = document.getElementById('restoreAutoFillNote');
+    if (note) {
+      note.style.display = 'block';
+      note.innerHTML = '<i class="fa fa-magic"></i> 已从 SQL 备份中自动识别到 <strong>' + detectedType + '</strong> 存储配置（填入 ' + filled + ' 个字段）。原配置: storage="' + escapeHtml(sqlStorage) + '"（本系统不支持），请确认后点击"测试"或"保存"。';
+    }
   }
 }
 
@@ -455,7 +509,8 @@ async function setStorage(prefix) {
   const fd = new FormData();
   const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
   fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
-  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
+  // 表单 input name 形如 "restore-qiniu_ak"（带连字符），需匹配 prefix+xxx 而不是 prefix_+xxx
+  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix + '"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
   return fd;
@@ -565,7 +620,8 @@ async function testStorage(prefix) {
   const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
   const fd = new FormData();
   fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
-  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
+  // input name 形如 "restore-qiniu_ak"（带连字符）
+  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix + '"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
   try {
@@ -595,8 +651,12 @@ function bindStorageTabs(prefix) {
       const root = document.getElementById(target.split('-')[0] === 'fresh' ? 'step-1f' : 'step-2r');
       root.querySelectorAll('.storage-form').forEach(f => f.classList.remove('active'));
       document.getElementById(target).classList.add('active');
-      const hidden = document.getElementById(prefix + 'storage_type');
-      hidden.value = target.replace(prefix + 'form-', '');
+      const hidden = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
+      if (hidden) {
+        hidden.value = target.replace(prefix + 'form-', '');
+      } else {
+        console.warn('hidden storage_type input not found for prefix=' + prefix);
+      }
     });
   });
 }
@@ -621,7 +681,7 @@ function renderStorageForms(prefix: string): string {
   return `
     <div class="storage-form active" id="${prefix}form-r2">
       <div class="alert alert-info">R2 存储桶需在 Cloudflare Dashboard 中手动创建，wrangler.toml 中已绑定 <code>FILE_R2</code>。</div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-s3">
@@ -635,7 +695,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}s3_ak" class="form-control"></div>
       <div class="form-group"><label>SecretAccessKey <span class="required">*</span></label>
         <input type="password" name="${prefix}s3_sk" class="form-control"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-github">
@@ -650,7 +710,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}gh_ref" class="form-control" placeholder="main"></div>
       <div class="form-group"><label>API Base</label>
         <input type="text" name="${prefix}gh_api_base" class="form-control" value="https://api.github.com"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-webdav">
@@ -662,7 +722,7 @@ function renderStorageForms(prefix: string): string {
         <input type="password" name="${prefix}webdav_pass" class="form-control"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}webdav_folder" class="form-control" value="file"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-upyun">
@@ -678,7 +738,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}upyun_folder" class="form-control" value="file"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-qiniu">
@@ -692,7 +752,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}qiniu_domain" class="form-control" placeholder="https://cdn.example.com"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}qiniu_folder" class="form-control" value="file"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('')"><i class="fa fa-flask"></i> 测试读写</button>
+      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
   `;
@@ -1013,7 +1073,7 @@ install.post('/api/config-apply', async (c) => {
     const formData = await c.req.formData();
     const sessionId = String(formData.get('sessionId') || '');
     const configJson = String(formData.get('config_json') || '{}');
-    const storageType = String(formData.get('storage_type') || '');
+    let storageType = String(formData.get('storage_type') || '');
     if (!sessionId) return jsonError(c, '缺少 sessionId');
     const sess = await getInstallSession(db, sessionId);
     if (!sess) return jsonError(c, '会话不存在或已过期（30分钟），请重新上传 SQL');
@@ -1037,10 +1097,75 @@ install.post('/api/config-apply', async (c) => {
     }
     const filtered = filterPreConfigForApply(selected);
 
+    // 智能合并：用户填写的 storageFields 优先于 SQL 备份中已存在的 storage 字段
+    // 如果用户在 UI 选的是 r2/s3 等没填字段，但 SQL 备份里有完整的 qiniu 配置，则用 SQL 里的
+    // 这样即使前端表单数据没正确传过来，也能从 SQL 备份中恢复
+    const sqlConfig = sess.preExtract?.preConfig || {};
+    const merged: Record<string, string> = { ...sqlConfig };
+    for (const [k, v] of Object.entries(storageFields)) {
+      // 表单里传过来的字段（如 qiniu_ak）覆盖 SQL 备份的（用户在 UI 改过）
+      merged[k] = v;
+    }
+
+    // 智能回退：用户没填某个存储后端的核心字段，但 SQL 备份中有 → 用 SQL 里的
+    function fillIfEmpty(target: Record<string, string>, keys: string[]) {
+      for (const k of keys) {
+        if (!target[k] && sqlConfig[k]) target[k] = sqlConfig[k];
+      }
+    }
+    if (storageType === 'qiniu') {
+      fillIfEmpty(merged, ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket', 'qiniu_domain', 'qiniu_folder']);
+    } else if (storageType === 's3') {
+      fillIfEmpty(merged, ['s3_endpoint', 's3_region', 's3_bucket', 's3_ak', 's3_sk']);
+    } else if (storageType === 'webdav') {
+      fillIfEmpty(merged, ['webdav_endpoint', 'webdav_user', 'webdav_pass', 'webdav_folder']);
+    } else if (storageType === 'upyun') {
+      fillIfEmpty(merged, ['upyun_bucket', 'upyun_operator', 'upyun_password', 'upyun_endpoint', 'upyun_domain', 'upyun_folder']);
+    } else if (storageType === 'github') {
+      fillIfEmpty(merged, ['gh_owner', 'gh_repo', 'gh_token', 'gh_ref', 'gh_folder', 'gh_api_base']);
+    }
+
+    // 验证 storage 字段是否完整（用户传的 + SQL 合并后）
+    function validateStorageComplete(type: string, m: Record<string, string>): { ok: boolean; missing: string[] } {
+      const missing: string[] = [];
+      if (type === 'qiniu') {
+        if (!m.qiniu_ak) missing.push('qiniu_ak');
+        if (!m.qiniu_sk) missing.push('qiniu_sk');
+        if (!m.qiniu_bucket) missing.push('qiniu_bucket');
+      } else if (type === 's3') {
+        if (!m.s3_endpoint) missing.push('s3_endpoint');
+        if (!m.s3_bucket) missing.push('s3_bucket');
+        if (!m.s3_ak) missing.push('s3_ak');
+        if (!m.s3_sk) missing.push('s3_sk');
+      } else if (type === 'webdav') {
+        if (!m.webdav_endpoint) missing.push('webdav_endpoint');
+        if (!m.webdav_user) missing.push('webdav_user');
+        if (!m.webdav_pass) missing.push('webdav_pass');
+      } else if (type === 'upyun') {
+        if (!m.upyun_bucket) missing.push('upyun_bucket');
+        if (!m.upyun_operator) missing.push('upyun_operator');
+        if (!m.upyun_password) missing.push('upyun_password');
+      } else if (type === 'github') {
+        if (!m.gh_owner) missing.push('gh_owner');
+        if (!m.gh_repo) missing.push('gh_repo');
+        if (!m.gh_token) missing.push('gh_token');
+      }
+      return { ok: missing.length === 0, missing };
+    }
+    const v = validateStorageComplete(storageType, merged);
+    if (!v.ok) {
+      return jsonError(c, `${storageType} 存储配置不完整，缺少: ${v.missing.join(', ')}。请在表单中填写，或确认 SQL 备份中已包含这些字段。`);
+    }
+
     // 1) 写存储配置
     await updateConfig(db, 'storage', storageType);
-    for (const [k, v] of Object.entries(storageFields)) {
-      await updateConfig(db, k, v);
+    for (const [k, v] of Object.entries(merged)) {
+      // 跳过 storage 本身（已写），以及敏感/系统字段
+      if (k === 'storage' || k === 'installed') continue;
+      // 只写与 storage_type 相关的字段，避免误覆盖其它配置
+      if (k.startsWith(storageType + '_') || k.startsWith(storageType === 'github' ? 'gh_' : '')) {
+        await updateConfig(db, k, v);
+      }
     }
     // 2) 写用户勾选的 pre_config
     for (const [k, v] of Object.entries(filtered)) {
@@ -1055,7 +1180,7 @@ install.post('/api/config-apply', async (c) => {
     await updateConfig(db, 'installed', '1');
     clearConfigCache();
     // 保留 session 以便后续 step-3 下载文件
-    await updateInstallSession(db, sessionId, { storageType, storageFields, selectedConfig: filtered });
+    await updateInstallSession(db, sessionId, { storageType, storageFields: merged, selectedConfig: filtered });
 
     return new Response(JSON.stringify({
       code: 0,
@@ -1096,7 +1221,7 @@ install.post('/api/files-from-source', async (c) => {
 
     // 兼容：用户可能没走 "应用配置" 步骤直接点开始下载
     // 此时 D1 里 storage 还没配置，但 session 里有
-    const cfg = await loadConfig(db);
+    const cfg = await loadConfig(db, { FILE_R2: c.env.FILE_R2 });
     if (cfg.installed !== 1 && sess.storageType) {
       console.log('[files-from-source] auto-apply storage from session:', sess.storageType);
       await updateConfig(db, 'storage', sess.storageType);

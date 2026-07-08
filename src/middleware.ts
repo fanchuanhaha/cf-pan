@@ -31,7 +31,7 @@ export type AppContext = Context<AppEnv>;
 export const initApp = (): MiddlewareHandler<AppEnv> => {
   return async (c, next) => {
     const db = c.env.DB;
-    const config = await loadConfig(db);
+    const config = await loadConfig(db, { FILE_R2: c.env.FILE_R2 });
     const stor = createStorage(config, { FILE_R2: c.env.FILE_R2 });
     const storageOk = isStorageConfigured(config, { FILE_R2: c.env.FILE_R2 });
 

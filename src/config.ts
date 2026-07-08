@@ -5,7 +5,7 @@ interface D1Result {
   v: string;
 }
 
-export type StorageType = 'r2' | 's3' | 'github' | 'webdav' | 'upyun' | 'qiniu';
+export type StorageType = 'r2' | 's3' | 'github' | 'webdav' | 'upyun' | 'qiniu' | 'local';
 
 export interface AppConfig {
   title: string;
@@ -169,7 +169,7 @@ const defaults: AppConfig = {
 let cached: AppConfig | null = null;
 
 /** 从 D1 加载配置 */
-export async function loadConfig(db: D1Database): Promise<AppConfig> {
+export async function loadConfig(db: D1Database, env?: { FILE_R2?: R2Bucket }): Promise<AppConfig> {
   // 不使用缓存，每次都从数据库加载最新配置（确保配置修改后立即生效）
   const { results } = await db.prepare('SELECT k, v FROM pre_config').all<D1Result>();
   const config = { ...defaults };
@@ -185,8 +185,53 @@ export async function loadConfig(db: D1Database): Promise<AppConfig> {
       }
     }
   }
+  // 智能回退：兼容从 PHP 备份恢复时 storage='local' 或未配置 R2 的情况
+  // 检测其它已完整配置的后端（七牛云/S3/GitHub/WebDAV/又拍云），若有则临时切换
+  // 不写回数据库，仅在内存中覆盖，让用户后续可在后台修改
+  autoFallbackStorage(config, env);
   cached = config;
   return config;
+}
+
+/**
+ * 智能回退存储类型：
+ * - storage='r2' 但 FILE_R2 未绑定 → 查找其它完整配置的后端
+ * - storage='local'（PHP 项目类型，本系统不支持）→ 查找其它完整配置的后端
+ * - 查找顺序：qiniu > s3 > webdav > upyun > github
+ */
+function autoFallbackStorage(config: AppConfig, env?: { FILE_R2?: R2Bucket }): void {
+  const current = config.storage;
+  const needFallback =
+    current === 'local' || // PHP 项目类型
+    (current === 'r2' && !env?.FILE_R2); // R2 默认值但未绑定
+  if (!needFallback) return;
+
+  // 按使用频率/通用性优先级检测
+  if (config.qiniu_ak && config.qiniu_sk && config.qiniu_bucket) {
+    console.log('[loadConfig] storage fallback: local/r2 → qiniu (qiniu config detected)');
+    config.storage = 'qiniu';
+    return;
+  }
+  if (config.s3_endpoint && config.s3_bucket && config.s3_ak && config.s3_sk) {
+    console.log('[loadConfig] storage fallback: local/r2 → s3 (s3 config detected)');
+    config.storage = 's3';
+    return;
+  }
+  if (config.webdav_endpoint && config.webdav_user && config.webdav_pass) {
+    console.log('[loadConfig] storage fallback: local/r2 → webdav (webdav config detected)');
+    config.storage = 'webdav';
+    return;
+  }
+  if (config.upyun_bucket && config.upyun_operator && config.upyun_password) {
+    console.log('[loadConfig] storage fallback: local/r2 → upyun (upyun config detected)');
+    config.storage = 'upyun';
+    return;
+  }
+  if (config.gh_owner && config.gh_repo && config.gh_token) {
+    console.log('[loadConfig] storage fallback: local/r2 → github (github config detected)');
+    config.storage = 'github';
+    return;
+  }
 }
 
 /** 更新单条配置 */
