@@ -69,7 +69,9 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
 .step-pill.done .num { background: #5cb85c; }
 .step { display: none; }
 .step.active { display: block; animation: fadeIn 0.3s; }
+.step.fade-out { animation: fadeOut 0.2s; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
 .choose-card { border: 2px solid #e7e7e7; border-radius: 8px; padding: 24px; cursor: pointer; transition: all 0.2s; height: 100%; text-align: center; background: #fff; }
 .choose-card:hover { border-color: #2e8bcc; box-shadow: 0 4px 12px rgba(46,139,204,0.15); }
 .choose-card i { font-size: 48px; color: #2e8bcc; margin-bottom: 12px; }
@@ -275,13 +277,35 @@ const state = {
 /* ==================== 步骤导航 ==================== */
 function showStep(n) {
   state.step = n;
-  document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
   // 根据安装模式选择步骤 ID
   const ids = state.mode === 'restore'
     ? ['step-0', 'step-1r', 'step-2r', 'step-3r', '', 'step-4']
     : ['step-0', 'step-1f', '', '', '', 'step-4'];
-  const el = document.getElementById(ids[n]);
-  if (el) el.classList.add('active');
+  const nextEl = document.getElementById(ids[n]);
+  if (!nextEl) {
+    // 找不到目标步骤时直接切换
+    document.querySelectorAll('.step').forEach(el => el.classList.remove('active', 'fade-out'));
+    return;
+  }
+
+  // 找到当前可见的 step，做 fade-out 后再 fade-in 新 step
+  const currentEl = document.querySelector('.step.active');
+  if (currentEl === nextEl) {
+    // 同一 step，重新触发动画
+    currentEl.classList.remove('active');
+    void currentEl.offsetWidth; // 强制 reflow
+    nextEl.classList.add('active');
+  } else if (currentEl) {
+    // fade out 当前 → 切换 active
+    currentEl.classList.add('fade-out');
+    setTimeout(() => {
+      currentEl.classList.remove('active', 'fade-out');
+      nextEl.classList.add('active');
+    }, 180);
+  } else {
+    // 第一次进入，直接显示
+    nextEl.classList.add('active');
+  }
 
   // 步骤指示器（restore: 0→1→1→2→3, fresh: 0→1→3）
   const map = state.mode === 'restore'
