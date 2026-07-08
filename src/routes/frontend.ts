@@ -1707,8 +1707,7 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     const db = getDB(c);
     const config = getConf(c);
 
-    // 文件总数：按 max(id) 取最新一个id 作为显示
-    let total = 0;
+    // 文件总数：按 max(id) 取最新一个id 作为显示：    let total = 0;
     try {
       const r = await db.prepare('SELECT MAX(id) as c FROM pre_file').first<{ c: number }>();
       total = r?.c ?? 0;
@@ -1716,16 +1715,14 @@ frontend.get('/admin/ajax/getcount', async (c) => {
       console.error('[getcount] getFileTotal(max id) failed:', e?.message || e);
     }
 
-    // 抽样选几条验证
-    let sample: any = null;
+    // 抽样选几条验证    let sample: any = null;
     try {
       sample = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
     } catch (e: any) {
       console.error('[getcount] sample failed:', e?.message || e);
     }
 
-    // 日期边界（全部使用 UTC，因为 Workers 运行在 UTC 时区）
-    const isoNow = new Date().toISOString(); // e.g. "2026-07-01T15:30:00.000Z"
+    // 日期边界（全部使用 UTC，因为 Workers 运行在 UTC 时区    const isoNow = new Date().toISOString(); // e.g. "2026-07-01T15:30:00.000Z"
     const todayStr = isoNow.substring(0, 10);
     const todayBoundary = todayStr + ' 00:00:00';
 

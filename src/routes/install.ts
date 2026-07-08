@@ -14,7 +14,7 @@ import { getDB, getConf, getStorOrThrow } from '../middleware';
 import { isStorageConfigured } from '../storage/factory';
 import { updateConfig, clearConfigCache, loadConfig } from '../config';
 import { jsonResult, jsonError } from '../utils/response';
-import { extractFromSql, filterPreConfigForApply } from '../services/restorePreExtract';
+import { extractFromSql, filterPreConfigForApply, detectStorageFromPreConfig } from '../services/restorePreExtract';
 import {
   createInstallSession,
   getInstallSession,
@@ -69,9 +69,7 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
 .step-pill.done .num { background: #5cb85c; }
 .step { display: none; }
 .step.active { display: block; animation: fadeIn 0.3s; }
-.step.fade-out { animation: fadeOut 0.2s; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes fadeOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
 .choose-card { border: 2px solid #e7e7e7; border-radius: 8px; padding: 24px; cursor: pointer; transition: all 0.2s; height: 100%; text-align: center; background: #fff; }
 .choose-card:hover { border-color: #2e8bcc; box-shadow: 0 4px 12px rgba(46,139,204,0.15); }
 .choose-card i { font-size: 48px; color: #2e8bcc; margin-bottom: 12px; }
@@ -201,7 +199,6 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
       <div id="fileCountHint" class="text-muted" style="margin-top:8px"></div>
 
       <h4 style="margin-top:24px"><i class="fa fa-database"></i> 选择新的存储后端</h4>
-      <div id="restoreAutoFillNote" class="alert alert-info" style="display:none; margin-top:8px; font-size:13px"></div>
       <div class="storage-tabs" id="restoreStorageTabs">
         <button type="button" class="storage-tab active" data-target="restore-form-r2">R2</button>
         <button type="button" class="storage-tab" data-target="restore-form-s3">S3</button>
@@ -270,6 +267,7 @@ const state = {
   sessionId: '',        // 恢复流程的会话
   selectedConfig: {},   // 勾选的 pre_config
   preExtract: null,
+  storageDetection: null, // 智能识别的存储类型
   fileTaskId: '',
   filePollTimer: null,
 };
@@ -277,35 +275,13 @@ const state = {
 /* ==================== 步骤导航 ==================== */
 function showStep(n) {
   state.step = n;
+  document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
   // 根据安装模式选择步骤 ID
   const ids = state.mode === 'restore'
     ? ['step-0', 'step-1r', 'step-2r', 'step-3r', '', 'step-4']
     : ['step-0', 'step-1f', '', '', '', 'step-4'];
-  const nextEl = document.getElementById(ids[n]);
-  if (!nextEl) {
-    // 找不到目标步骤时直接切换
-    document.querySelectorAll('.step').forEach(el => el.classList.remove('active', 'fade-out'));
-    return;
-  }
-
-  // 找到当前可见的 step，做 fade-out 后再 fade-in 新 step
-  const currentEl = document.querySelector('.step.active');
-  if (currentEl === nextEl) {
-    // 同一 step，重新触发动画
-    currentEl.classList.remove('active');
-    void currentEl.offsetWidth; // 强制 reflow
-    nextEl.classList.add('active');
-  } else if (currentEl) {
-    // fade out 当前 → 切换 active
-    currentEl.classList.add('fade-out');
-    setTimeout(() => {
-      currentEl.classList.remove('active', 'fade-out');
-      nextEl.classList.add('active');
-    }, 180);
-  } else {
-    // 第一次进入，直接显示
-    nextEl.classList.add('active');
-  }
+  const el = document.getElementById(ids[n]);
+  if (el) el.classList.add('active');
 
   // 步骤指示器（restore: 0→1→1→2→3, fresh: 0→1→3）
   const map = state.mode === 'restore'
@@ -371,7 +347,14 @@ function goFreshInstall() {
 
 async function submitFresh() {
   const form = document.getElementById('formFresh');
-  const fd = new FormData(form);
+  const rawFd = new FormData(form);
+  const fd = new FormData();
+  // 去掉 fresh- 前缀，避免服务端按裸字段名查不到
+  for (const [k, v] of rawFd.entries()) {
+    const key = String(k);
+    const cleanKey = key.startsWith('fresh-') ? key.slice('fresh-'.length) : key;
+    fd.append(cleanKey, v);
+  }
   const testRes = document.getElementById('freshTestResult');
   testRes.style.display = 'block';
   testRes.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在保存配置...';
@@ -410,6 +393,7 @@ async function uploadSql() {
     if (json.code !== 0) throw new Error(json.msg || '上传失败');
     state.sessionId = json.data.sessionId;
     state.preExtract = json.data.preExtract;
+    state.storageDetection = json.data.storageDetection;
     state.selectedConfig = {};
     for (const k of Object.keys(state.preExtract.preConfig || {})) {
       if (k === 'storage') continue;
@@ -421,8 +405,12 @@ async function uploadSql() {
     renderConfigList();
     renderWarnings();
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
-    // 检测 SQL 备份中已有的存储配置，自动填入表单
-    autoFillStorageFromSql();
+    // 智能预填存储配置（即使 storage=local 也能从其它字段推断）
+    if (state.storageDetection && state.storageDetection.type) {
+      const sd = state.storageDetection;
+      result.innerHTML += '<br><i class="fa fa-magic"></i> 检测到原系统使用 <b>' + sd.type + '</b> 存储（' + sd.source + '，置信度 ' + sd.confidence + '），已自动填入下方表单';
+      autoFillStorageForm(sd.type, sd.fields);
+    }
     showStep(2);
   } catch (e) {
     result.className = 'alert alert-danger';
@@ -430,55 +418,17 @@ async function uploadSql() {
   }
 }
 
-/**
- * 检测 SQL 备份中已有的存储配置（如 qiniu_ak 等），自动填入 step-2r 的表单
- * 提升用户体验：避免用户重复填写已存在于 SQL 备份中的字段
- */
-function autoFillStorageFromSql() {
-  const cfg = state.preExtract?.preConfig || {};
-  const sqlStorage = cfg.storage || '';
-  // 推断 SQL 备份中使用的存储类型
-  let detectedType = '';
-  if (cfg.qiniu_ak && cfg.qiniu_sk && cfg.qiniu_bucket) {
-    detectedType = 'qiniu';
-  } else if (cfg.s3_endpoint && cfg.s3_bucket && cfg.s3_ak && cfg.s3_sk) {
-    detectedType = 's3';
-  } else if (cfg.webdav_endpoint && cfg.webdav_user && cfg.webdav_pass) {
-    detectedType = 'webdav';
-  } else if (cfg.upyun_bucket && cfg.upyun_operator && cfg.upyun_password) {
-    detectedType = 'upyun';
-  } else if (cfg.gh_owner && cfg.gh_repo && cfg.gh_token) {
-    detectedType = 'github';
-  }
-  if (!detectedType) return;
-
-  // 切换到对应 tab
-  const tab = document.querySelector('#restoreStorageTabs .storage-tab[data-target="restore-form-' + detectedType + '"]');
+function autoFillStorageForm(storageType, fields) {
+  // 切换到对应 Tab
+  const tab = document.querySelector('#restoreStorageTabs .storage-tab[data-target="restore-form-' + storageType + '"]');
   if (tab) tab.click();
-
-  // 填入字段
-  const prefix = 'restore-';
-  const fieldsByType: Record<string, string[]> = {
-    qiniu: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket', 'qiniu_domain', 'qiniu_folder'],
-    s3: ['s3_endpoint', 's3_region', 's3_bucket', 's3_ak', 's3_sk'],
-    webdav: ['webdav_endpoint', 'webdav_user', 'webdav_pass', 'webdav_folder'],
-    upyun: ['upyun_bucket', 'upyun_operator', 'upyun_password', 'upyun_endpoint', 'upyun_domain', 'upyun_folder'],
-    github: ['gh_owner', 'gh_repo', 'gh_token', 'gh_ref', 'gh_folder', 'gh_api_base'],
-  };
-  const keys = fieldsByType[detectedType] || [];
-  let filled = 0;
-  for (const k of keys) {
-    if (!cfg[k]) continue;
-    const el = document.querySelector('input[name="' + prefix + k + '"]');
-    if (el) { el.value = cfg[k]; filled++; }
-  }
-  if (filled > 0) {
-    const note = document.getElementById('restoreAutoFillNote');
-    if (note) {
-      note.style.display = 'block';
-      note.innerHTML = '<i class="fa fa-magic"></i> 已从 SQL 备份中自动识别到 <strong>' + detectedType + '</strong> 存储配置（填入 ' + filled + ' 个字段）。原配置: storage="' + escapeHtml(sqlStorage) + '"（本系统不支持），请确认后点击"测试"或"保存"。';
+  // 填字段
+  setTimeout(() => {
+    for (const [k, v] of Object.entries(fields || {})) {
+      const inp = document.querySelector('#step-2r input[name="restore-' + k + '"]');
+      if (inp) inp.value = String(v);
     }
-  }
+  }, 50);
 }
 
 function renderWarnings() {
@@ -533,7 +483,6 @@ async function setStorage(prefix) {
   const fd = new FormData();
   const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
   fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
-  // 表单 input name 形如 "restore-qiniu_ak"（带连字符），需匹配 prefix+xxx 而不是 prefix_+xxx
   document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix + '"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
@@ -644,7 +593,6 @@ async function testStorage(prefix) {
   const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
   const fd = new FormData();
   fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
-  // input name 形如 "restore-qiniu_ak"（带连字符）
   document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix + '"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
@@ -675,12 +623,8 @@ function bindStorageTabs(prefix) {
       const root = document.getElementById(target.split('-')[0] === 'fresh' ? 'step-1f' : 'step-2r');
       root.querySelectorAll('.storage-form').forEach(f => f.classList.remove('active'));
       document.getElementById(target).classList.add('active');
-      const hidden = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
-      if (hidden) {
-        hidden.value = target.replace(prefix + 'form-', '');
-      } else {
-        console.warn('hidden storage_type input not found for prefix=' + prefix);
-      }
+      const hidden = document.getElementById(prefix + 'storage_type');
+      hidden.value = target.replace(prefix + 'form-', '');
     });
   });
 }
@@ -1036,6 +980,8 @@ install.post('/api/sql-preview', async (c) => {
       return jsonError(c, 'SQL 文件内容为空');
     }
     const preExtract = extractFromSql(sqlText);
+    // 智能识别原系统使用的存储后端（即使 storage=local 也能从其它字段推断）
+    const storageDetection = detectStorageFromPreConfig(preExtract.preConfig);
     // 写入 D1（跨实例可用）
     const sess = await createInstallSession(db, { sqlText, preExtract, freshInstall: false });
     return new Response(JSON.stringify({
@@ -1043,6 +989,7 @@ install.post('/api/sql-preview', async (c) => {
       data: {
         sessionId: sess.id,
         preExtract,
+        storageDetection,
       },
     }), {
       status: 200,
@@ -1097,7 +1044,7 @@ install.post('/api/config-apply', async (c) => {
     const formData = await c.req.formData();
     const sessionId = String(formData.get('sessionId') || '');
     const configJson = String(formData.get('config_json') || '{}');
-    let storageType = String(formData.get('storage_type') || '');
+    const storageType = String(formData.get('storage_type') || '');
     if (!sessionId) return jsonError(c, '缺少 sessionId');
     const sess = await getInstallSession(db, sessionId);
     if (!sess) return jsonError(c, '会话不存在或已过期（30分钟），请重新上传 SQL');
@@ -1121,75 +1068,10 @@ install.post('/api/config-apply', async (c) => {
     }
     const filtered = filterPreConfigForApply(selected);
 
-    // 智能合并：用户填写的 storageFields 优先于 SQL 备份中已存在的 storage 字段
-    // 如果用户在 UI 选的是 r2/s3 等没填字段，但 SQL 备份里有完整的 qiniu 配置，则用 SQL 里的
-    // 这样即使前端表单数据没正确传过来，也能从 SQL 备份中恢复
-    const sqlConfig = sess.preExtract?.preConfig || {};
-    const merged: Record<string, string> = { ...sqlConfig };
-    for (const [k, v] of Object.entries(storageFields)) {
-      // 表单里传过来的字段（如 qiniu_ak）覆盖 SQL 备份的（用户在 UI 改过）
-      merged[k] = v;
-    }
-
-    // 智能回退：用户没填某个存储后端的核心字段，但 SQL 备份中有 → 用 SQL 里的
-    function fillIfEmpty(target: Record<string, string>, keys: string[]) {
-      for (const k of keys) {
-        if (!target[k] && sqlConfig[k]) target[k] = sqlConfig[k];
-      }
-    }
-    if (storageType === 'qiniu') {
-      fillIfEmpty(merged, ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket', 'qiniu_domain', 'qiniu_folder']);
-    } else if (storageType === 's3') {
-      fillIfEmpty(merged, ['s3_endpoint', 's3_region', 's3_bucket', 's3_ak', 's3_sk']);
-    } else if (storageType === 'webdav') {
-      fillIfEmpty(merged, ['webdav_endpoint', 'webdav_user', 'webdav_pass', 'webdav_folder']);
-    } else if (storageType === 'upyun') {
-      fillIfEmpty(merged, ['upyun_bucket', 'upyun_operator', 'upyun_password', 'upyun_endpoint', 'upyun_domain', 'upyun_folder']);
-    } else if (storageType === 'github') {
-      fillIfEmpty(merged, ['gh_owner', 'gh_repo', 'gh_token', 'gh_ref', 'gh_folder', 'gh_api_base']);
-    }
-
-    // 验证 storage 字段是否完整（用户传的 + SQL 合并后）
-    function validateStorageComplete(type: string, m: Record<string, string>): { ok: boolean; missing: string[] } {
-      const missing: string[] = [];
-      if (type === 'qiniu') {
-        if (!m.qiniu_ak) missing.push('qiniu_ak');
-        if (!m.qiniu_sk) missing.push('qiniu_sk');
-        if (!m.qiniu_bucket) missing.push('qiniu_bucket');
-      } else if (type === 's3') {
-        if (!m.s3_endpoint) missing.push('s3_endpoint');
-        if (!m.s3_bucket) missing.push('s3_bucket');
-        if (!m.s3_ak) missing.push('s3_ak');
-        if (!m.s3_sk) missing.push('s3_sk');
-      } else if (type === 'webdav') {
-        if (!m.webdav_endpoint) missing.push('webdav_endpoint');
-        if (!m.webdav_user) missing.push('webdav_user');
-        if (!m.webdav_pass) missing.push('webdav_pass');
-      } else if (type === 'upyun') {
-        if (!m.upyun_bucket) missing.push('upyun_bucket');
-        if (!m.upyun_operator) missing.push('upyun_operator');
-        if (!m.upyun_password) missing.push('upyun_password');
-      } else if (type === 'github') {
-        if (!m.gh_owner) missing.push('gh_owner');
-        if (!m.gh_repo) missing.push('gh_repo');
-        if (!m.gh_token) missing.push('gh_token');
-      }
-      return { ok: missing.length === 0, missing };
-    }
-    const v = validateStorageComplete(storageType, merged);
-    if (!v.ok) {
-      return jsonError(c, `${storageType} 存储配置不完整，缺少: ${v.missing.join(', ')}。请在表单中填写，或确认 SQL 备份中已包含这些字段。`);
-    }
-
     // 1) 写存储配置
     await updateConfig(db, 'storage', storageType);
-    for (const [k, v] of Object.entries(merged)) {
-      // 跳过 storage 本身（已写），以及敏感/系统字段
-      if (k === 'storage' || k === 'installed') continue;
-      // 只写与 storage_type 相关的字段，避免误覆盖其它配置
-      if (k.startsWith(storageType + '_') || k.startsWith(storageType === 'github' ? 'gh_' : '')) {
-        await updateConfig(db, k, v);
-      }
+    for (const [k, v] of Object.entries(storageFields)) {
+      await updateConfig(db, k, v);
     }
     // 2) 写用户勾选的 pre_config
     for (const [k, v] of Object.entries(filtered)) {
@@ -1204,7 +1086,7 @@ install.post('/api/config-apply', async (c) => {
     await updateConfig(db, 'installed', '1');
     clearConfigCache();
     // 保留 session 以便后续 step-3 下载文件
-    await updateInstallSession(db, sessionId, { storageType, storageFields: merged, selectedConfig: filtered });
+    await updateInstallSession(db, sessionId, { storageType, storageFields, selectedConfig: filtered });
 
     return new Response(JSON.stringify({
       code: 0,
@@ -1245,7 +1127,7 @@ install.post('/api/files-from-source', async (c) => {
 
     // 兼容：用户可能没走 "应用配置" 步骤直接点开始下载
     // 此时 D1 里 storage 还没配置，但 session 里有
-    const cfg = await loadConfig(db, { FILE_R2: c.env.FILE_R2 });
+    const cfg = await loadConfig(db);
     if (cfg.installed !== 1 && sess.storageType) {
       console.log('[files-from-source] auto-apply storage from session:', sess.storageType);
       await updateConfig(db, 'storage', sess.storageType);
