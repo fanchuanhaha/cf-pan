@@ -1,20 +1,14 @@
-// 彩虹外链网盘 - 安装/恢复向导路由
+﻿// 彩虹外链网盘 - 安装/恢复向导路由
 // 首次部署/存储未配置时自动跳转到此页
 // 整合：全新安装 + 从原 PHP 备份恢复（不再有 /admin/restore）
 
 import { Hono } from 'hono';
-import { R2Storage } from '../storage/R2Storage';
-import { S3Storage } from '../storage/S3Storage';
-import { GitHubApiStorage } from '../storage/GitHubApiStorage';
-import { WebDavStorage } from '../storage/WebDavStorage';
-import { QiniuStorage } from '../storage/QiniuStorage';
-import { UpYunStorage } from '../storage/UpYunStorage';
 import type { AppEnv } from '../middleware';
-import { getDB, getConf, getStorOrThrow } from '../middleware';
-import { isStorageConfigured } from '../storage/factory';
+import { getDB } from '../middleware';
+import { createStorage } from '../storage/factory';
 import { updateConfig, clearConfigCache, loadConfig } from '../config';
 import { jsonResult, jsonError } from '../utils/response';
-import { extractFromSql, filterPreConfigForApply, detectStorageFromPreConfig } from '../services/restorePreExtract';
+import { extractFromSql, filterPreConfigForApply } from '../services/restorePreExtract';
 import {
   createInstallSession,
   getInstallSession,
@@ -267,7 +261,6 @@ const state = {
   sessionId: '',        // 恢复流程的会话
   selectedConfig: {},   // 勾选的 pre_config
   preExtract: null,
-  storageDetection: null, // 智能识别的存储类型
   fileTaskId: '',
   filePollTimer: null,
 };
@@ -302,10 +295,8 @@ function showStep(n) {
   next.style.display = '';
   if (n === 1 && state.mode === 'fresh') {
     next.innerHTML = '<i class="fa fa-check"></i> 完成安装';
-  } else if (n === 2 && state.mode === 'restore') {
-    next.innerHTML = '<i class="fa fa-check"></i> 应用配置并继续';
-  } else if (n === 3 && state.mode === 'restore') {
-    next.innerHTML = '<i class="fa fa-check"></i> 完成';
+  } else if (n === 3) {
+    next.innerHTML = '<i class="fa fa-check"></i> 应用配置并完成';
   } else {
     next.innerHTML = '下一步 <i class="fa fa-arrow-right"></i>';
   }
@@ -325,15 +316,9 @@ async function nextStep() {
     await submitFresh();
     return;
   }
-  if (state.step === 2 && state.mode === 'restore') {
-    // step 2r → 3r：先应用配置再进入文件下载步骤
-    const ok = await applyConfigAndComplete();
-    if (ok) showStep(3);
-    return;
-  }
   if (state.step === 3 && state.mode === 'restore') {
-    // step 3r → step 4：完成
-    showStep(5);
+    // 应用配置并完成
+    await applyConfigAndComplete();
     return;
   }
   showStep(state.step + 1);
@@ -347,14 +332,7 @@ function goFreshInstall() {
 
 async function submitFresh() {
   const form = document.getElementById('formFresh');
-  const rawFd = new FormData(form);
-  const fd = new FormData();
-  // 去掉 fresh- 前缀，避免服务端按裸字段名查不到
-  for (const [k, v] of rawFd.entries()) {
-    const key = String(k);
-    const cleanKey = key.startsWith('fresh-') ? key.slice('fresh-'.length) : key;
-    fd.append(cleanKey, v);
-  }
+  const fd = new FormData(form);
   const testRes = document.getElementById('freshTestResult');
   testRes.style.display = 'block';
   testRes.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在保存配置...';
@@ -393,7 +371,6 @@ async function uploadSql() {
     if (json.code !== 0) throw new Error(json.msg || '上传失败');
     state.sessionId = json.data.sessionId;
     state.preExtract = json.data.preExtract;
-    state.storageDetection = json.data.storageDetection;
     state.selectedConfig = {};
     for (const k of Object.keys(state.preExtract.preConfig || {})) {
       if (k === 'storage') continue;
@@ -405,30 +382,11 @@ async function uploadSql() {
     renderConfigList();
     renderWarnings();
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
-    // 智能预填存储配置（即使 storage=local 也能从其它字段推断）
-    if (state.storageDetection && state.storageDetection.type) {
-      const sd = state.storageDetection;
-      result.innerHTML += '<br><i class="fa fa-magic"></i> 检测到原系统使用 <b>' + sd.type + '</b> 存储（' + sd.source + '，置信度 ' + sd.confidence + '），已自动填入下方表单';
-      autoFillStorageForm(sd.type, sd.fields);
-    }
     showStep(2);
   } catch (e) {
     result.className = 'alert alert-danger';
     result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
   }
-}
-
-function autoFillStorageForm(storageType, fields) {
-  // 切换到对应 Tab
-  const tab = document.querySelector('#restoreStorageTabs .storage-tab[data-target="restore-form-' + storageType + '"]');
-  if (tab) tab.click();
-  // 填字段
-  setTimeout(() => {
-    for (const [k, v] of Object.entries(fields || {})) {
-      const inp = document.querySelector('#step-2r input[name="restore-' + k + '"]');
-      if (inp) inp.value = String(v);
-    }
-  }, 50);
 }
 
 function renderWarnings() {
@@ -481,9 +439,8 @@ function toggleConfig(cb) {
 async function setStorage(prefix) {
   const form = document.getElementById('step-' + (prefix === 'fresh-' ? '1f' : '2r'));
   const fd = new FormData();
-  const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
-  fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
-  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix + '"]').forEach(inp => {
+  fd.set('storage_type', storageTypeEl(prefix).value);
+  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
   return fd;
@@ -508,18 +465,15 @@ async function applyConfigAndComplete() {
     if (state.preExtract.fileCount > 0) {
       // 跳到 step 3r 输入原站点
       showStep(3);
-      return true;
     } else {
       // 没有文件，直接完成
       const sum = document.getElementById('doneSummary');
       sum.innerText = '存储: ' + document.getElementById('restore_storage_type').value + '，已应用 ' + Object.keys(cfg).length + ' 条配置';
       showStep(5);
-      return true;
     }
   } catch (e) {
     result.className = 'alert alert-danger';
     result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
-    return false;
   }
 }
 
@@ -583,19 +537,25 @@ function pollFileStatus() {
   }, 1000);
 }
 
+/* 根据 prefix 获取 hidden storage_type 元素（HTML id 用下划线） */
+function storageTypeEl(prefix) {
+  return document.getElementById(prefix.replace(/-$/, '') + '_storage_type');
+}
+
 /* ==================== 存储测试 ==================== */
 async function testStorage(prefix) {
-  const btn = document.querySelector('#' + (prefix === 'fresh-' ? 'fresh' : 'restore') + 'StorageTabs').parentElement.querySelector('[onclick*="testStorage"]');
   const div = document.getElementById(prefix + 'testResult');
   if (!div) return;
   div.className = 'alert alert-info';
   div.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 测试中...';
-  const storageTypeEl = document.getElementById((prefix === 'fresh-' ? 'fresh_' : 'restore_') + 'storage_type');
   const fd = new FormData();
-  fd.set('storage_type', storageTypeEl ? storageTypeEl.value : '');
-  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix + '"]').forEach(inp => {
+  fd.set('storage_type', storageTypeEl(prefix).value);
+  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
     if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
   });
+  // 上传一个真实测试文件（后端写存储后读取验证并删除）
+  const testContent = 'install-test-' + Date.now();
+  fd.set('test_file', new Blob([testContent], { type: 'text/plain' }), '_install_test_' + Date.now() + '.txt');
   try {
     const res = await fetch('/install/test', { method: 'POST', body: fd, credentials: 'same-origin' });
     const json = await res.json();
@@ -623,7 +583,7 @@ function bindStorageTabs(prefix) {
       const root = document.getElementById(target.split('-')[0] === 'fresh' ? 'step-1f' : 'step-2r');
       root.querySelectorAll('.storage-form').forEach(f => f.classList.remove('active'));
       document.getElementById(target).classList.add('active');
-      const hidden = document.getElementById(prefix + 'storage_type');
+      const hidden = storageTypeEl(prefix);
       hidden.value = target.replace(prefix + 'form-', '');
     });
   });
@@ -785,175 +745,41 @@ install.post('/save', async (c) => {
   }
 });
 
-/** POST /install/test - 真实测试存储连接 + 读写 */
+/** POST /install/test - 真实测试存储连接 + 读写（上传真实文件） */
 install.post('/test', async (c) => {
   try {
-    const body = await c.req.parseBody<Record<string, string>>();
-    const storageType = String(body['storage_type'] || '');
+    const formData = await c.req.formData();
+    const storageType = String(formData.get('storage_type') || '');
+    const testFile = formData.get('test_file') as File | null;
     if (!storageType) return jsonError(c, '请选择存储类型');
+    if (!testFile || testFile.size === 0) return jsonError(c, '缺少测试文件');
 
-    // 统一响应包装：{ code:0, data:{ ok, message } } / { code:-1, data:{ ok:false, message } }
-    const wrap = (ok: boolean, message: string) =>
-      jsonResult(c, { code: ok ? 0 : -1, data: { ok, message } });
-
-    // R2: 用 wrangler.toml 绑定的 env 绑定测试
-    if (storageType === 'r2') {
-      const bucket = (c.env as any).FILE_R2;
-      if (!bucket) {
-        return wrap(false, 'R2 未绑定（请在 wrangler.toml 配置 FILE_R2 绑定）');
-      }
-      const testKey = '_install_test_' + Date.now() + '.txt';
-      const testData = 'test-' + Date.now();
-      try {
-        await bucket.put(testKey, testData);
-        const obj = await bucket.get(testKey);
-        if (!obj) {
-          return wrap(false, 'R2 写入成功但读取失败');
-        }
-        const text = await obj.text();
-        await bucket.delete(testKey);
-        if (text !== testData) {
-          return wrap(false, 'R2 读取内容不一致');
-        }
-        return wrap(true, 'R2 读写测试通过');
-      } catch (e: any) {
-        return wrap(false, 'R2 测试失败: ' + (e.message || e));
-      }
+    // 构造最小 AppConfig 传给 createStorage
+    const cfg: Record<string, string> = { storage: storageType };
+    for (const [k, v] of formData.entries()) {
+      if (k === 'storage_type' || k === 'test_file') continue;
+      cfg[k] = String(v);
+    }
+    const stor = createStorage(cfg as any, { FILE_R2: (c.env as any).FILE_R2 });
+    if (!stor) {
+      return jsonResult(c, { ok: false, message: '无法创建存储实例，请检查配置和 R2 绑定' });
     }
 
-    // S3
-    if (storageType === 's3') {
-      try {
-        const cfg = {
-          endpoint: String(body['s3_endpoint'] || ''),
-          region: String(body['s3_region'] || 'us-east-1'),
-          bucket: String(body['s3_bucket'] || ''),
-          accessKeyId: String(body['s3_ak'] || ''),
-          secretAccessKey: String(body['s3_sk'] || ''),
-        };
-        if (!cfg.endpoint || !cfg.bucket || !cfg.accessKeyId || !cfg.secretAccessKey) {
-          return wrap(false, '请填写完整的 S3 配置（endpoint/bucket/ak/sk）');
-        }
-        const stor = new S3Storage(cfg as any);
-        const testKey = '_install_test_' + Date.now() + '.txt';
-        const testData = 'test-' + Date.now();
-        await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
-        const got = await stor.get(testKey);
-        if (!got) return wrap(false, 'S3 写入成功但读取失败');
-        const text = await new Response(got.body).text();
-        await stor.delete(testKey);
-        if (text !== testData) return wrap(false, 'S3 读取内容不一致');
-        return wrap(true, 'S3 读写测试通过');
-      } catch (e: any) {
-        return wrap(false, 'S3 测试失败: ' + (e.message || e));
-      }
+    const testKey = '_install_test_' + Date.now() + '.txt';
+    const testBuf = await testFile.arrayBuffer();
+    const expected = await testFile.text();
+    try {
+      const ok = await stor.upload(testKey, testBuf, testFile.type || 'text/plain');
+      if (!ok) return jsonResult(c, { ok: false, message: '写入失败，请检查配置' });
+      const got = await stor.get(testKey);
+      if (!got) return jsonResult(c, { ok: false, message: '写入成功但读取失败' });
+      const text = await new Response(got.body).text();
+      await stor.delete(testKey);
+      if (text !== expected) return jsonResult(c, { ok: false, message: '读取内容不一致' });
+      return jsonResult(c, { ok: true, message: '读写测试通过' });
+    } catch (e: any) {
+      return jsonResult(c, { ok: false, message: '测试失败: ' + (e.message || e) });
     }
-
-    // GitHub
-    if (storageType === 'github') {
-      try {
-        const cfg = {
-          owner: String(body['gh_owner'] || ''),
-          repo: String(body['gh_repo'] || ''),
-          token: String(body['gh_token'] || ''),
-          ref: String(body['gh_ref'] || 'main'),
-          apiBase: String(body['gh_api_base'] || 'https://api.github.com'),
-        };
-        if (!cfg.owner || !cfg.repo || !cfg.token) {
-          return wrap(false, '请填写完整的 GitHub 配置（owner/repo/token）');
-        }
-        const result = await GitHubApiStorage.testConnection(cfg as any);
-        return jsonResult(c, { code: result.ok ? 0 : -1, data: result });
-      } catch (e: any) {
-        return wrap(false, 'GitHub 测试失败: ' + (e.message || e));
-      }
-    }
-
-    // WebDAV
-    if (storageType === 'webdav') {
-      try {
-        const cfg = {
-          endpoint: String(body['webdav_endpoint'] || ''),
-          user: String(body['webdav_user'] || ''),
-          pass: String(body['webdav_pass'] || ''),
-          folder: String(body['webdav_folder'] || 'file'),
-        };
-        if (!cfg.endpoint || !cfg.user || !cfg.pass) {
-          return wrap(false, '请填写完整的 WebDAV 配置（endpoint/user/pass）');
-        }
-        const stor = new WebDavStorage(cfg as any);
-        const testKey = '_install_test_' + Date.now() + '.txt';
-        const testData = 'test-' + Date.now();
-        await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
-        const got = await stor.get(testKey);
-        if (!got) return wrap(false, 'WebDAV 写入成功但读取失败');
-        const text = await new Response(got.body).text();
-        await stor.delete(testKey);
-        if (text !== testData) return wrap(false, 'WebDAV 读取内容不一致');
-        return wrap(true, 'WebDAV 读写测试通过');
-      } catch (e: any) {
-        return wrap(false, 'WebDAV 测试失败: ' + (e.message || e));
-      }
-    }
-
-    // 又拍云
-    if (storageType === 'upyun') {
-      try {
-        const cfg = {
-          bucket: String(body['upyun_bucket'] || ''),
-          operator: String(body['upyun_operator'] || ''),
-          password: String(body['upyun_password'] || ''),
-          endpoint: String(body['upyun_endpoint'] || 'http://v0.api.upyun.com'),
-          domain: String(body['upyun_domain'] || ''),
-          folder: String(body['upyun_folder'] || 'file'),
-        };
-        if (!cfg.bucket || !cfg.operator || !cfg.password) {
-          return wrap(false, '请填写完整的又拍云配置（bucket/operator/password）');
-        }
-        const stor = new UpYunStorage(cfg as any);
-        const testKey = '_install_test_' + Date.now() + '.txt';
-        const testData = 'test-' + Date.now();
-        await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
-        const got = await stor.get(testKey);
-        if (!got) return wrap(false, '又拍云写入成功但读取失败');
-        const text = await new Response(got.body).text();
-        await stor.delete(testKey);
-        if (text !== testData) return wrap(false, '又拍云读取内容不一致');
-        return wrap(true, '又拍云读写测试通过');
-      } catch (e: any) {
-        return wrap(false, '又拍云测试失败: ' + (e.message || e));
-      }
-    }
-
-    // 七牛云
-    if (storageType === 'qiniu') {
-      try {
-        const cfg = {
-          accessKey: String(body['qiniu_ak'] || ''),
-          secretKey: String(body['qiniu_sk'] || ''),
-          bucket: String(body['qiniu_bucket'] || ''),
-          domain: String(body['qiniu_domain'] || ''),
-          folder: String(body['qiniu_folder'] || 'file'),
-        };
-        if (!cfg.accessKey || !cfg.secretKey || !cfg.bucket) {
-          return wrap(false, '请填写完整的七牛云配置（ak/sk/bucket）');
-        }
-        const stor = new QiniuStorage(cfg as any);
-        const testKey = '_install_test_' + Date.now() + '.txt';
-        const testData = 'test-' + Date.now();
-        await stor.upload(testKey, new TextEncoder().encode(testData).buffer as ArrayBuffer);
-        const got = await stor.get(testKey);
-        if (!got) return wrap(false, '七牛云写入成功但读取失败');
-        const text = await new Response(got.body).text();
-        await stor.delete(testKey);
-        if (text !== testData) return wrap(false, '七牛云读取内容不一致');
-        return wrap(true, '七牛云读写测试通过');
-      } catch (e: any) {
-        return wrap(false, '七牛云测试失败: ' + (e.message || e));
-      }
-    }
-
-    return jsonError(c, '未知的存储类型: ' + storageType);
   } catch (e: any) {
     return jsonError(c, '测试失败: ' + (e.message || e));
   }
@@ -980,8 +806,6 @@ install.post('/api/sql-preview', async (c) => {
       return jsonError(c, 'SQL 文件内容为空');
     }
     const preExtract = extractFromSql(sqlText);
-    // 智能识别原系统使用的存储后端（即使 storage=local 也能从其它字段推断）
-    const storageDetection = detectStorageFromPreConfig(preExtract.preConfig);
     // 写入 D1（跨实例可用）
     const sess = await createInstallSession(db, { sqlText, preExtract, freshInstall: false });
     return new Response(JSON.stringify({
@@ -989,7 +813,6 @@ install.post('/api/sql-preview', async (c) => {
       data: {
         sessionId: sess.id,
         preExtract,
-        storageDetection,
       },
     }), {
       status: 200,
@@ -1125,23 +948,12 @@ install.post('/api/files-from-source', async (c) => {
     const sess = await getInstallSession(db, sessionId);
     if (!sess) return jsonError(c, '会话不存在或已过期（30分钟），请重新上传 SQL');
 
-    // 兼容：用户可能没走 "应用配置" 步骤直接点开始下载
-    // 此时 D1 里 storage 还没配置，但 session 里有
-    const cfg = await loadConfig(db);
-    if (cfg.installed !== 1 && sess.storageType) {
-      console.log('[files-from-source] auto-apply storage from session:', sess.storageType);
-      await updateConfig(db, 'storage', sess.storageType);
-      for (const [k, v] of Object.entries(sess.storageFields || {})) {
-        await updateConfig(db, k, v);
-      }
-      for (const [k, v] of Object.entries(sess.selectedConfig || {})) {
-        await updateConfig(db, k, v);
-      }
-      await updateConfig(db, 'installed', '1');
-      clearConfigCache();
+    // config-apply 写入配置后，中间件里的 c.var.stor 仍是旧缓存，必须重新加载
+    const freshConfig = await loadConfig(db);
+    const stor = createStorage(freshConfig, { FILE_R2: (c.env as any).FILE_R2 });
+    if (!stor) {
+      return jsonError(c, 'Storage not configured: storage="' + freshConfig.storage + '"（配置刚写入但存储实例创建失败，请检查对应存储配置或 R2 绑定）');
     }
-
-    const stor = getStorOrThrow(c);
     const taskId = 'inst_dl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     createRestoreTask(taskId);
     await updateInstallSession(db, sessionId, { sourceUrl });
