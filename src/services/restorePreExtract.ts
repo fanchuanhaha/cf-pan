@@ -15,6 +15,10 @@ export interface SqlPreExtractResult {
   warnings: string[];
   /** 无法解析的 INSERT pre_config 语句数（用于提示用户） */
   unparseableConfigCount: number;
+  /** 推测的存储类型（当 storage=local 但其他存储字段有完整配置时） */
+  suggestedStorage?: string;
+  /** 推测存储类型对应的字段（用于自动填表） */
+  suggestedStorageFields?: Record<string, string>;
 }
 
 /**
@@ -272,12 +276,44 @@ export function extractFromSql(sqlText: string): SqlPreExtractResult {
     warnings.push('未在 SQL 中检测到 pre_file 表数据，可能无法从原站点下载文件。');
   }
 
-  return {
+  // 智能推测存储类型：若 storage=local 但其他存储有完整配置，提示用户切换
+  const result: SqlPreExtractResult = {
     preConfig,
     fileCount,
     warnings,
     unparseableConfigCount,
   };
+  if (preConfig['storage'] === 'local' || !preConfig['storage']) {
+    // 检测各存储类型是否字段完整
+    const checks: Array<{ name: string; required: string[] }> = [
+      { name: 'r2', required: [] }, // R2 不需要额外字段
+      { name: 'qiniu', required: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'] },
+      { name: 'upyun', required: ['upyun_bucket', 'upyun_operator', 'upyun_password'] },
+      { name: 'webdav', required: ['webdav_endpoint', 'webdav_user', 'webdav_pass'] },
+      { name: 's3', required: ['s3_endpoint', 's3_bucket', 's3_ak', 's3_sk'] },
+      { name: 'github', required: ['gh_owner', 'gh_repo', 'gh_token'] },
+    ];
+    for (const c of checks) {
+      const missing = c.required.filter(k => !preConfig[k]);
+      if (c.required.length > 0 && missing.length === 0) {
+        // 找到完整配置的存储类型
+        result.suggestedStorage = c.name;
+        result.suggestedStorageFields = {};
+        const prefixMap: Record<string, string> = {
+          qiniu: 'qiniu_', upyun: 'upyun_', webdav: 'webdav_',
+          s3: 's3_', github: 'gh_',
+        };
+        const p = prefixMap[c.name] || '';
+        for (const k of Object.keys(preConfig)) {
+          if (k === 'storage') continue;
+          if (k.startsWith(p) && preConfig[k]) result.suggestedStorageFields![k] = preConfig[k];
+        }
+        break; // 只取第一个匹配的
+      }
+    }
+  }
+
+  return result;
 }
 
 /**

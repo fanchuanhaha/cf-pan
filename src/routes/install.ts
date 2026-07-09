@@ -263,6 +263,7 @@ const state = {
   preExtract: null,
   fileTaskId: '',
   filePollTimer: null,
+  confirmedStorage: '', // 用户在 step-2r/fresh 中点"确定使用"后存到这
 };
 
 /* ==================== 步骤导航 ==================== */
@@ -383,7 +384,20 @@ async function uploadSql() {
     renderWarnings();
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
     showStep(2);
+    // 智能建议：检测到原系统配置了非 local 存储时，提示用户
+    if (state.preExtract.suggestedStorage) {
+      const sug = state.preExtract.suggestedStorage;
+      const fields = state.preExtract.suggestedStorageFields || {};
+      const fieldSummary = Object.keys(fields).length + ' 个字段（' + Object.keys(fields).join(', ') + '）';
+      console.log('[install] 检测到原系统 storage=local 但有完整 ' + sug + ' 配置:', fields);
+      if (confirm('检测到您的原系统虽然 storage=local，但配置了完整的 ' + sug + '（' + fieldSummary + '）。\n\n是否切换到 ' + sug + ' 并自动填充这些配置？\n（点"取消"则继续手动选择其他存储）')) {
+        applySuggestedStorage(sug, fields);
+      } else {
+        console.log('[install] 用户取消了存储自动填充，保持手动选择');
+      }
+    }
   } catch (e) {
+    console.error('[install] uploadSql error:', e);
     result.className = 'alert alert-danger';
     result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
   }
@@ -398,6 +412,40 @@ function renderWarnings() {
   box.innerHTML = state.preExtract.warnings.map(w =>
     '<div class="alert alert-warning" style="padding:8px 12px; margin:4px 0; font-size:13px"><i class="fa fa-exclamation-triangle"></i> ' + w + '</div>'
   ).join('');
+}
+
+/* 把 SQL 里检测到的存储配置自动填到对应 tab 的表单，并切换到该 tab */
+function applySuggestedStorage(storageType, fields) {
+  console.log('[install] applySuggestedStorage:', storageType, fields);
+  // 1) 切到对应 tab
+  const tab = document.querySelector('#restoreStorageTabs .storage-tab[data-target="restore-form-' + storageType + '"]');
+  if (tab) {
+    document.querySelectorAll('#restoreStorageTabs .storage-tab').forEach(x => x.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('#step-2r .storage-form').forEach(f => f.classList.remove('active'));
+    document.getElementById('restore-form-' + storageType).classList.add('active');
+    storageTypeEl('restore-').value = storageType;
+    console.log('[install] 切换到 tab:', storageType, ', hidden storage_type =', storageTypeEl('restore-').value);
+  } else {
+    console.warn('[install] 找不到 tab: restore-form-' + storageType);
+  }
+  // 2) 填字段
+  for (const [k, v] of Object.entries(fields)) {
+    const inp = document.querySelector('#step-2r input[name="restore_' + k + '"]');
+    if (inp) {
+      inp.value = v;
+      console.log('[install] 填充字段', k, '=', v.length > 40 ? v.substring(0, 40) + '...' : v);
+    } else {
+      console.warn('[install] 找不到 input: restore_' + k);
+    }
+  }
+  // 3) 提示用户
+  const tip = document.getElementById('restoreTestResult');
+  if (tip) {
+    tip.style.display = 'block';
+    tip.className = 'alert alert-info';
+    tip.innerHTML = '<i class="fa fa-info-circle"></i> 已自动从原 SQL 填入 ' + storageType + ' 配置（' + Object.keys(fields).length + ' 个字段）。请检查后点"测试读写"，或继续点"确定"使用。';
+  }
 }
 
 function renderConfigList() {
@@ -437,20 +485,36 @@ function toggleConfig(cb) {
 }
 
 async function setStorage(prefix) {
-  const form = document.getElementById('step-' + (prefix === 'fresh-' ? '1f' : '2r'));
   const fd = new FormData();
-  fd.set('storage_type', storageTypeEl(prefix).value);
+  const storageType = storageTypeEl(prefix).value;
+  fd.set('storage_type', storageType);
+  console.log('[install] setStorage: prefix=' + prefix + ', storageType=' + storageType);
+  const fields = [];
   document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
-    if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
+    if (inp.name) {
+      fd.set(inp.name.replace(prefix, ''), inp.value);
+      fields.push(inp.name.replace(prefix, '') + '=' + (inp.value ? (inp.name.includes('token') || inp.name.includes('sk') || inp.name.includes('pass') ? '***' : inp.value) : '(空)'));
+    }
   });
+  console.log('[install] setStorage: 收集到', fields.length, '个字段:', fields);
   return fd;
 }
 
 async function applyConfigAndComplete() {
   const cfg = state.selectedConfig;
+  // 检查 storage 是否已"确定"
+  if (!state.confirmedStorage) {
+    const result = document.getElementById('restoreTestResult');
+    result.style.display = 'block';
+    result.className = 'alert alert-warning';
+    result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> 请先选择一个存储 tab，点"测试读写"验证后点"确定使用"再继续。';
+    return;
+  }
+  console.log('[install] applyConfigAndComplete: confirmedStorage=' + state.confirmedStorage + ', selectedConfig keys=' + Object.keys(cfg).length);
   const fd = await setStorage('restore-');
   fd.set('sessionId', state.sessionId);
   fd.set('config_json', JSON.stringify(cfg));
+  console.log('[install] applyConfigAndComplete: fd 中 storage_type=' + fd.get('storage_type'));
   const result = document.getElementById('restoreTestResult');
   result.style.display = 'block';
   result.className = 'alert alert-info';
@@ -545,20 +609,34 @@ function storageTypeEl(prefix) {
 /* ==================== 存储测试 ==================== */
 async function testStorage(prefix) {
   const div = document.getElementById(prefix + 'testResult');
-  if (!div) return;
+  if (!div) {
+    console.error('[install] testStorage: 找不到 div #' + prefix + 'testResult');
+    return;
+  }
+  console.log('[install] testStorage: prefix=' + prefix + ', storageType=' + storageTypeEl(prefix).value);
   div.className = 'alert alert-info';
-  div.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 测试中...';
+  div.style.display = 'block';
+  div.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 测试中（已发送 fetch，请观察浏览器 Network 标签和 F12 Console）...';
   const fd = new FormData();
   fd.set('storage_type', storageTypeEl(prefix).value);
+  const fields = [];
   document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
-    if (inp.name) fd.set(inp.name.replace(prefix, ''), inp.value);
+    if (inp.name) {
+      fd.set(inp.name.replace(prefix, ''), inp.value);
+      fields.push(inp.name + '=' + (inp.value ? '***' : '(空)'));
+    }
   });
+  console.log('[install] testStorage: 收集到字段', fields);
   // 上传一个真实测试文件（后端写存储后读取验证并删除）
   const testContent = 'install-test-' + Date.now();
-  fd.set('test_file', new Blob([testContent], { type: 'text/plain' }), '_install_test_' + Date.now() + '.txt');
+  const testBlob = new Blob([testContent], { type: 'text/plain' });
+  fd.set('test_file', testBlob, '_install_test_' + Date.now() + '.txt');
+  console.log('[install] testStorage: 发送 fetch /install/test');
   try {
     const res = await fetch('/install/test', { method: 'POST', body: fd, credentials: 'same-origin' });
+    console.log('[install] testStorage: 响应 status=' + res.status);
     const json = await res.json();
+    console.log('[install] testStorage: 响应 JSON', json);
     if (json.code === 0 && json.data && json.data.ok) {
       div.className = 'alert alert-success';
       div.innerHTML = '<i class="fa fa-check"></i> ' + (json.data.message || '测试通过');
@@ -567,8 +645,31 @@ async function testStorage(prefix) {
       div.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + (json.msg || json.data?.message || '测试失败');
     }
   } catch (e) {
+    console.error('[install] testStorage: fetch 异常', e);
     div.className = 'alert alert-danger';
     div.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+  }
+}
+
+/* 用户点击"确定使用"按钮：把当前 tab 的 storageType 锁定为已确认 */
+function confirmStorage(prefix) {
+  const type = storageTypeEl(prefix).value;
+  console.log('[install] confirmStorage: prefix=' + prefix + ', type=' + type);
+  if (!type) {
+    alert('请先选择存储类型');
+    return;
+  }
+  state.confirmedStorage = type;
+  // 显示"已确认"角标
+  document.querySelectorAll('[id$="confirmedBadge"]').forEach(b => b.style.display = 'none');
+  const badge = document.getElementById(prefix + 'confirmedBadge');
+  if (badge) badge.style.display = 'inline';
+  // 在结果区显示
+  const div = document.getElementById(prefix + 'testResult');
+  if (div) {
+    div.style.display = 'block';
+    div.className = 'alert alert-success';
+    div.innerHTML = '<i class="fa fa-check-circle"></i> 已确认使用 ' + type + '，可点"下一步"继续。';
   }
 }
 
@@ -609,7 +710,7 @@ function renderStorageForms(prefix: string): string {
   return `
     <div class="storage-form active" id="${prefix}form-r2">
       <div class="alert alert-info">R2 存储桶需在 Cloudflare Dashboard 中手动创建，wrangler.toml 中已绑定 <code>FILE_R2</code>。</div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-s3">
@@ -623,7 +724,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}s3_ak" class="form-control"></div>
       <div class="form-group"><label>SecretAccessKey <span class="required">*</span></label>
         <input type="password" name="${prefix}s3_sk" class="form-control"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-github">
@@ -638,7 +739,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}gh_ref" class="form-control" placeholder="main"></div>
       <div class="form-group"><label>API Base</label>
         <input type="text" name="${prefix}gh_api_base" class="form-control" value="https://api.github.com"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-webdav">
@@ -650,7 +751,7 @@ function renderStorageForms(prefix: string): string {
         <input type="password" name="${prefix}webdav_pass" class="form-control"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}webdav_folder" class="form-control" value="file"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-upyun">
@@ -666,7 +767,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}upyun_folder" class="form-control" value="file"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
     <div class="storage-form" id="${prefix}form-qiniu">
@@ -680,7 +781,7 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${prefix}qiniu_domain" class="form-control" placeholder="https://cdn.example.com"></div>
       <div class="form-group"><label>存储子目录</label>
         <input type="text" name="${prefix}qiniu_folder" class="form-control" value="file"></div>
-      <button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button>
+      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
     </div>
   `;
@@ -908,12 +1009,15 @@ install.post('/api/config-apply', async (c) => {
     const filtered = filterPreConfigForApply(selected);
 
     // 1) 写存储配置
+    console.log('[install] config-apply: storageType =', storageType, 'storageFields =', JSON.stringify(storageFields));
     await updateConfig(db, 'storage', storageType);
     for (const [k, v] of Object.entries(storageFields)) {
+      console.log('[install] config-apply: updateConfig', k, '=', v);
       await updateConfig(db, k, v);
     }
     // 2) 写用户勾选的 pre_config
     for (const [k, v] of Object.entries(filtered)) {
+      console.log('[install] config-apply: updateConfig (selected)', k, '=', v);
       await updateConfig(db, k, v);
     }
     // 3) 写回原 SQL 中的其它表（pre_file / pre_user 等），跳过 pre_config
