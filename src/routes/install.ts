@@ -760,9 +760,25 @@ install.post('/test', async (c) => {
       if (k === 'storage_type' || k === 'test_file') continue;
       cfg[k] = String(v);
     }
-    const stor = createStorage(cfg as any, { FILE_R2: (c.env as any).FILE_R2 });
+    // 传完整 c.env（factory 内部可能读 env 上的其它绑定）
+    const stor = createStorage(cfg as any, c.env as any);
     if (!stor) {
-      return jsonResult(c, { ok: false, message: '无法创建存储实例，请检查配置和 R2 绑定' });
+      let extra = '';
+      if (storageType === 'r2' && !(c.env as any).FILE_R2) {
+        extra = '（R2 绑定 FILE_R2 未找到，请检查 wrangler.toml 或 Cloudflare Dashboard 中的绑定配置）';
+      } else {
+        const missing: string[] = [];
+        const req: Record<string, string[]> = {
+          s3: ['s3_endpoint', 's3_bucket', 's3_ak', 's3_sk'],
+          github: ['gh_owner', 'gh_repo', 'gh_token'],
+          webdav: ['webdav_endpoint', 'webdav_user', 'webdav_pass'],
+          upyun: ['upyun_bucket', 'upyun_operator', 'upyun_password'],
+          qiniu: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'],
+        };
+        for (const k of req[storageType] || []) if (!cfg[k]) missing.push(k);
+        if (missing.length) extra = '（缺少必填字段: ' + missing.join(', ') + '）';
+      }
+      return jsonResult(c, { ok: false, message: '无法创建存储实例，请检查配置' + extra });
     }
 
     const testKey = '_install_test_' + Date.now() + '.txt';
@@ -950,9 +966,26 @@ install.post('/api/files-from-source', async (c) => {
 
     // config-apply 写入配置后，中间件里的 c.var.stor 仍是旧缓存，必须重新加载
     const freshConfig = await loadConfig(db);
-    const stor = createStorage(freshConfig, { FILE_R2: (c.env as any).FILE_R2 });
+    // 传完整 c.env（factory 内部可能读 env 上的其它绑定）
+    const stor = createStorage(freshConfig, c.env as any);
     if (!stor) {
-      return jsonError(c, 'Storage not configured: storage="' + freshConfig.storage + '"（配置刚写入但存储实例创建失败，请检查对应存储配置或 R2 绑定）');
+      const type = freshConfig.storage;
+      let extra = '';
+      if (type === 'r2' && !(c.env as any).FILE_R2) {
+        extra = '（R2 绑定 FILE_R2 未找到，请检查 wrangler.toml 或 Cloudflare Dashboard 中的绑定配置）';
+      } else {
+        const missing: string[] = [];
+        const req: Record<string, string[]> = {
+          s3: ['s3_endpoint', 's3_bucket', 's3_ak', 's3_sk'],
+          github: ['gh_owner', 'gh_repo', 'gh_token'],
+          webdav: ['webdav_endpoint', 'webdav_user', 'webdav_pass'],
+          upyun: ['upyun_bucket', 'upyun_operator', 'upyun_password'],
+          qiniu: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'],
+        };
+        for (const k of req[type] || []) if (!(freshConfig as any)[k]) missing.push(k);
+        if (missing.length) extra = '（D1 中缺少必填字段: ' + missing.join(', ') + '）';
+      }
+      return jsonError(c, 'Storage not configured: storage="' + type + '"' + extra);
     }
     const taskId = 'inst_dl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     createRestoreTask(taskId);
