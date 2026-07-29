@@ -457,6 +457,19 @@ export async function restoreFilesFromSource(
       task.currentItem = file.name;
       task.message = `正在下载 (${i + 1}/${fileList.length}): ${file.name}`;
     }
+
+    if (!/^[0-9a-f]{32}$/i.test(file.hash)) {
+      const error = `${file.name}: SQL 中的 hash 格式错误（应为 32 位 MD5，实际为 ${file.hash.length} 位），无法拼接源站 URL`;
+      result.failed++;
+      result.errors.push(error);
+      task?.errors.push(error);
+      log(error);
+      if (task) {
+        task.failed = result.failed;
+        task.processed = result.success + result.skipped.length + result.failed;
+      }
+      continue;
+    }
     
     const startTime = Date.now();
     try {
@@ -500,6 +513,7 @@ export async function restoreFilesFromSource(
         }
         continue;
       }
+
       
       // 读取长度只用于进度显示；上传必须尽量保持流式，避免 Worker
       // 为 100 MiB 文件同时保留多个 ArrayBuffer 副本。

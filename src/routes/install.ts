@@ -325,6 +325,8 @@ const state = {
   filePollTimer: null,
   applyInProgress: false,
   confirmedStorage: '', // 用户在 step-2r/fresh 中点"确定使用"后存到这
+  storageSaved: false,  // storage-set 已成功写入 D1
+  storageSaveInProgress: false,
   suggestedStorageName: '', // 检测到的推荐存储类型（如 qiniu）
   suggestedStorageFields: {}, // 推荐存储的字段值
   resumed: false,
@@ -354,6 +356,7 @@ async function restoreInstallSession() {
     state.preExtract = data.preExtract;
     state.selectedConfig = data.selectedConfig || {};
     state.confirmedStorage = data.storageType || '';
+    state.storageSaved = data.storageType === 'r2' || Object.keys(data.storageFields || {}).length > 0;
     state.fileTaskId = data.taskId || '';
     renderConfigList();
     renderWarnings();
@@ -361,6 +364,7 @@ async function restoreInstallSession() {
     if (data.storageType) {
       applySuggestedStorage(data.storageType, data.storageFields || {});
       state.confirmedStorage = data.storageType;
+      state.storageSaved = data.storageType === 'r2' || Object.keys(data.storageFields || {}).length > 0;
     }
     if (data.sourceUrl) document.querySelector('#formSource input[name="source_url"]').value = data.sourceUrl;
     if (data.taskId) {
@@ -466,6 +470,24 @@ async function nextStep() {
     await applyConfigAndComplete();
     return;
   }
+  if (state.step === 2 && state.mode === 'restore') {
+    if (!state.storageSaved || !state.confirmedStorage) {
+      const next = document.getElementById('btnNext');
+      next.innerHTML = '<i class="fa fa-exclamation-triangle"></i> 请先点击“确定使用”保存存储';
+      const tip = document.getElementById('restoreTestResult');
+      if (tip) {
+        tip.style.display = 'block';
+        tip.className = 'alert alert-warning';
+        tip.innerHTML = '<i class="fa fa-exclamation-triangle"></i> 存储配置尚未保存到数据库，请先点击当前存储页的“确定使用”。';
+      }
+      setTimeout(() => {
+        if (!state.applyInProgress && !state.storageSaveInProgress) {
+          next.innerHTML = '下一步 <i class="fa fa-arrow-right"></i>';
+        }
+      }, 2500);
+      return;
+    }
+  }
   showStep(state.step + 1);
 }
 
@@ -557,7 +579,10 @@ function renderWarnings() {
 /* 把 SQL 里检测到的存储配置自动填到对应 tab 的表单，并切换到该 tab */
 function applySuggestedStorage(storageType, fields) {
   console.log('[install] applySuggestedStorage:', storageType, fields);
-  state.confirmedStorage = storageType;
+  // 自动填表不等于已经保存。必须由 confirmStorage 调用 storage-set 后
+  // 才能允许进入下一步。
+  state.confirmedStorage = '';
+  state.storageSaved = false;
   // 1) 切到对应 tab
   const tab = document.querySelector('#restoreStorageTabs .storage-tab[data-target="restore-form-' + storageType + '"]');
   if (tab) {
@@ -585,13 +610,13 @@ function applySuggestedStorage(storageType, fields) {
   // 3) 显示已确认角标
   document.querySelectorAll('[id$="confirmedBadge"]').forEach(b => b.style.display = 'none');
   const badge = document.getElementById('restore-confirmedBadge');
-  if (badge) badge.style.display = 'inline';
+  if (badge) badge.style.display = 'none';
   // 4) 提示用户
   const tip = document.getElementById('restoreTestResult');
   if (tip) {
     tip.style.display = 'block';
-    tip.className = 'alert alert-success';
-    tip.innerHTML = '<i class="fa fa-check"></i> 已自动从原 SQL 填入 ' + storageType + ' 配置（' + filled + ' 个字段）。可直接点"下一步"继续。';
+    tip.className = 'alert alert-info';
+    tip.innerHTML = '<i class="fa fa-info-circle"></i> 已自动填入 ' + storageType + ' 配置（' + filled + ' 个字段），请点击“确定使用”保存后再继续。';
   }
 }
 
@@ -964,6 +989,9 @@ async function confirmStorage(prefix) {
       confirmBtn.disabled = true;
       confirmBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 保存中...';
     }
+    state.storageSaveInProgress = true;
+    state.storageSaved = false;
+    state.confirmedStorage = '';
     try {
       const fd = await setStorage(prefix);
       fd.set('sessionId', state.sessionId);
@@ -974,6 +1002,8 @@ async function confirmStorage(prefix) {
       });
       const json = await res.json();
       if (json.code !== 0) throw new Error(json.msg || '保存存储配置失败');
+      state.storageSaved = true;
+      state.confirmedStorage = type;
     } catch (e) {
       console.error('[install] confirmStorage: 保存失败', e);
       if (confirmBtn) {
@@ -984,10 +1014,13 @@ async function confirmStorage(prefix) {
         confirmBtn.className = 'btn btn-sm btn-danger';
         confirmBtn.innerHTML = '<i class="fa fa-times"></i> 保存失败';
       }
+      state.storageSaveInProgress = false;
       return;
     }
+    state.storageSaveInProgress = false;
   }
   state.confirmedStorage = type;
+  if (prefix !== 'restore-') state.storageSaved = true;
   document.querySelectorAll('#' + rootId + ' [id$="confirmedBadge"]').forEach(b => b.style.display = 'none');
   const badge = activeForm && activeForm.querySelector('[id$="confirmedBadge"]');
   if (badge) badge.style.display = 'inline';
@@ -1017,6 +1050,12 @@ function bindStorageTabs(prefix) {
       document.getElementById(target).classList.add('active');
       const hidden = storageTypeEl(prefix);
       hidden.value = target.replace(prefix + 'form-', '');
+      if (prefix === 'restore-') {
+        state.confirmedStorage = '';
+        state.storageSaved = false;
+        const badge = document.querySelector('#step-2r [id$="confirmedBadge"]');
+        if (badge) badge.style.display = 'none';
+      }
     });
   });
 }
@@ -1431,6 +1470,9 @@ install.post('/api/config-apply', async (c) => {
     const sess = await getInstallSession(db, sessionId);
     if (!sess) return jsonError(c, '会话不存在或已过期（30分钟），请重新上传 SQL');
     if (!storageType) return jsonError(c, '请先选择存储类型');
+    if (sess.storageType !== storageType || (storageType !== 'r2' && (!sess.storageFields || Object.keys(sess.storageFields).length === 0))) {
+      return jsonError(c, '存储配置尚未确认保存，请先在第二步点击“确定使用”');
+    }
 
     // 收集 storage 字段
     const storageFields: Record<string, string> = {};
@@ -1656,18 +1698,23 @@ install.get('/api/diag', async (c) => {
   if (!url) return jsonError(c, '缺少 url 参数');
   const start = Date.now();
   try {
-    const res = await fetch(url, {
-      method: 'HEAD',
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      cf: { cacheTtl: -1 },
-    });
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      Range: 'bytes=0-0',
+    };
+    const res = await fetch(url, { method: 'GET', headers, cf: { cacheTtl: -1 } });
     const elapsed = Date.now() - start;
+    const contentLength = res.headers.get('content-length');
+    const contentRange = res.headers.get('content-range');
+    if (res.body) await res.body.cancel();
     return jsonResult(c, {
       ok: res.ok,
       status: res.status,
       statusText: res.statusText,
       contentType: res.headers.get('content-type'),
-      contentLength: res.headers.get('content-length'),
+      contentLength,
+      contentRange,
+      responseBody: res.body ? 'stream' : 'empty',
       elapsed: `${elapsed}ms`,
       headers: Object.fromEntries([...res.headers].slice(0, 10)),
     });
