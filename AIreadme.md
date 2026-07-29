@@ -214,6 +214,30 @@ https://d.802213.xyz/file/c46ba69394e7937c60538208bb887a9d
 - `src/routes/install.ts:105` - 将嵌套模板字面量改为字符串拼接 (修复 "从备份恢复" 按钮无响应)
 - `AIreadme.md` - 当前文件 (项目上下文记录)
 
+## 诊断端点 (install api diag)
+- `GET /install/api/diag?url=xxx` 用于测试 Worker 到源站的连通性。
+- 返回 `{ ok, status, contentType, contentLength, elapsed, error }` 结构化诊断信息。
+- Workers 上下载失败时先用此端点排查源站是否屏蔽 Cloudflare 出口 IP。
+- 404 表示源站无此文件（hash 错误或文件已删除）；连接失败表示源站拒绝或屏蔽了 Worker 请求。
+
+## Workers 下载源站文件排查
+- 本地正常但 Workers 上下载为 0，通常是以下原因之一：
+  1. **源站屏蔽 Cloudflare IP** — 源站防火墙拦截了 Workers 出口 IP 段。用 diag 端点验证。
+  2. **响应体未透传** — 代码中对 `response.body` 做了 `await text()`/`arrayBuffer()` 再转发，超过 128MB 会 OOM。
+  3. **fetch 异常被吞** — `fetch()` 抛出 `NetworkError` 时如果没有 try/catch，任务静默失败，前端只显示"未知错误"。
+- `restore.ts` 已对 `fetch(downloadUrl)` 加了独立 try/catch，网络错误会记录到任务日志并显示在前端。
+
+## 移动端搜索穿模修复
+- 首页搜索框 `searchbox` span 的 `style="float:right"` 内联样式会覆盖 CSS media query `@media (min-width:767px){.searchbox{float:right}}`，导致移动端搜索框强制右浮动与标题重叠。
+- 已移除内联样式，由 CSS 媒体查询控制：桌面端右浮动，移动端正常流式布局。
+
+## Footer 样式修复
+- 暗色模式下 `.footer` 原有独立背景色 `#1e1e1e` 和边框，与页面背景不一致显得突兀。
+- 改为 `background-color: transparent` 和 `border-top: none`，footer 融入页面背景。
+
+## Observability 配置
+- `wrangler.spa.toml` 添加了 `[observability.logs]` 配置节，启用 `invocation_logs` 便于在 Cloudflare Dashboard 查看请求级日志。
+
 ## 开发命令
 - `npm run dev`: 本地开发 (wrangler dev)
 - `npm run deploy`: 部署到 Cloudflare Workers
@@ -222,3 +246,8 @@ https://d.802213.xyz/file/c46ba69394e7937c60538208bb887a9d
 - `wrangler.spa.toml`: Wrangler 部署配置
 - `tsconfig.json`: TypeScript 配置
 - `schema.sql`: D1 数据库 schema
+
+## GitHub Actions 部署
+- `.github/workflows/deploy.yml` 使用 `cloudflare/wrangler-action` 自动部署到 Workers。
+- 工作流步骤名称已翻译为中文（拉取代码、安装Node.js、安装依赖、构建并部署等）。
+- 注意：GitHub Token 需要 `workflow` 权限才能推送 workflow 文件变更。
