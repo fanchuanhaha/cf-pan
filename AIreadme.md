@@ -219,6 +219,7 @@ https://d.802213.xyz/file/c46ba69394e7937c60538208bb887a9d
 - 返回 `{ ok, status, contentType, contentLength, elapsed, error }` 结构化诊断信息。
 - Workers 上下载失败时先用此端点排查源站是否屏蔽 Cloudflare 出口 IP。
 - 404 表示源站无此文件（hash 错误或文件已删除）；连接失败表示源站拒绝或屏蔽了 Worker 请求。
+- 恢复源站地址支持两种模式：填写根地址时访问 `/file/{hash}`；填写以 `/down.php` 结尾的地址时访问 `/down.php/{hash}.{type}`。诊断 URL 必须使用与恢复任务相同的模式。
 
 ## Workers 下载源站文件排查
 - 本地正常但 Workers 上下载为 0，通常是以下原因之一：
@@ -226,6 +227,7 @@ https://d.802213.xyz/file/c46ba69394e7937c60538208bb887a9d
   2. **响应体未透传** — 代码中对 `response.body` 做了 `await text()`/`arrayBuffer()` 再转发，超过 128MB 会 OOM。
   3. **fetch 异常被吞** — `fetch()` 抛出 `NetworkError` 时如果没有 try/catch，任务静默失败，前端只显示"未知错误"。
 - `restore.ts` 已对 `fetch(downloadUrl)` 加了独立 try/catch，网络错误会记录到任务日志并显示在前端。
+- 恢复文件上传改为响应流直接传给目标存储，七牛云使用分片流式上传；不再先把 100 MiB 文件合并成多个 ArrayBuffer。
 
 ## 移动端搜索穿模修复
 - 首页搜索框 `searchbox` span 的 `style="float:right"` 内联样式会覆盖 CSS media query `@media (min-width:767px){.searchbox{float:right}}`，导致移动端搜索框强制右浮动与标题重叠。

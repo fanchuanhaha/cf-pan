@@ -5,6 +5,34 @@ import type { IStorage } from '../storage/IStorage';
 import { extractPreFileRecords, type PreFileRecord } from './restorePreExtract';
 import { QiniuStorage } from '../storage/QiniuStorage';
 
+function buildSourceFileUrl(sourceBaseUrl: string, hash: string, type: string): string {
+  const input = new URL(sourceBaseUrl);
+  const path = input.pathname.replace(/\/+$/, '');
+  const extension = type ? `.${type.replace(/^\./, '')}` : '.file';
+
+  // The original PHP site serves files through down.php, while some sites
+  // expose the physical file/ directory directly.
+  if (/\/down\.php$/i.test(path)) {
+    input.pathname = `${path}/${hash}${extension}`;
+  } else if (/\/file$/i.test(path)) {
+    input.pathname = `${path}/${hash}`;
+  } else {
+    input.pathname = `${path}/file/${hash}`;
+  }
+  return input.toString();
+}
+
+function normalizeSourceBaseUrl(sourceBaseUrl: string): string {
+  const input = new URL(sourceBaseUrl);
+  const match = input.pathname.match(/^(.*\/down\.php)(?:\/.*)?$/i);
+  if (match) {
+    input.pathname = match[1];
+    input.search = '';
+    input.hash = '';
+  }
+  return input.toString().replace(/\/+$/, '');
+}
+
 export type RestoreStage = 'download' | 'extract' | 'database' | 'files' | 'done';
 
 export interface RestoreProgress {
@@ -356,7 +384,11 @@ export async function restoreFilesFromSource(
   if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
     baseUrl = 'http://' + baseUrl;
   }
-  baseUrl = baseUrl.replace(/\/+$/, '');
+  try {
+    baseUrl = normalizeSourceBaseUrl(baseUrl);
+  } catch {
+    throw new Error(`原站点 URL 无效: ${sourceBaseUrl}`);
+  }
   
   // 标准化 folder（去掉首尾斜杠和 file/ 前缀，确保最终拼接路径干净）
   const cleanFolder = (folder || 'file').replace(/^\/+|\/+$/g, '');
@@ -414,8 +446,10 @@ export async function restoreFilesFromSource(
     if (task && task.status === 'cancelled') break;
     
     const file = fileList[i];
-    // 从原站点下载的 URL：{原站点}/{folder}/{hash}
-    const downloadUrl = `${baseUrl}/${cleanFolder}/${file.hash}`;
+    // 默认兼容原 PHP 的 file/ 目录，也支持输入原站点的 /down.php。
+    const downloadUrl = /\/down\.php\/?$/i.test(baseUrl)
+      ? buildSourceFileUrl(baseUrl, file.hash, file.type)
+      : `${baseUrl}/${cleanFolder}/${file.hash}`;
     log(`文件 ${i + 1}/${fileList.length} 开始下载: ${file.name} hash=${file.hash} url=${downloadUrl}`);
     
     if (task) {
@@ -467,10 +501,11 @@ export async function restoreFilesFromSource(
         continue;
       }
       
-      // 流式读取以便实时更新下载进度
+      // 读取长度只用于进度显示；上传必须尽量保持流式，避免 Worker
+      // 为 100 MiB 文件同时保留多个 ArrayBuffer 副本。
       const contentLength = parseInt(res.headers.get('Content-Length') || '0');
       const expectedSize = contentLength || Number(file.size) || 0;
-      const useChunkedUpload = stor instanceof QiniuStorage && expectedSize > 128 * 1024 * 1024;
+      const useChunkedUpload = stor instanceof QiniuStorage;
 
       // 七牛大文件走分片上传，避免把整个响应读入 ArrayBuffer/Blob。
       if (useChunkedUpload && res.body) {
@@ -506,88 +541,77 @@ export async function restoreFilesFromSource(
         continue;
       }
 
-      const reader = res.body?.getReader();
+      if (!res.body) throw new Error('源站响应没有响应体');
       if (task) task.currentFileChunked = false;
-      const chunks: Uint8Array[] = [];
-      let received = 0;
-      let lastUpdate = 0;
-      
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          received += value.byteLength;
-          // 每 200ms 更新一次进度
-          const now = Date.now();
-          if (now - lastUpdate > 200 && task) {
-            lastUpdate = now;
-            const speed = received / Math.max(1, (now - startTime) / 1000);
-            // processed 只表示文件计数（i+1 = 当前正在处理的文件数），不要混入字节级小数
-            // 当前文件字节级进度放在 currentFileReceived/currentFileTotal
-            task.processed = i;
-            task.currentFileReceived = received;
-            task.currentFileTotal = expectedSize;
-            task.currentFileStage = 'download';
-            task.currentFileSpeed = speed;
-            task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + received;
-            task.message = `正在下载 (${i + 1}/${fileList.length}): ${file.name} - ${formatSize(received)}${contentLength ? ` / ${formatSize(contentLength)}` : ''} (${formatSize(speed)}/s)`;
+
+      const uploadStream = async (stream: ReadableStream): Promise<boolean> => {
+        let received = 0;
+        let lastUpdate = 0;
+        const input = stream.getReader();
+        const output = new TransformStream<Uint8Array, Uint8Array>();
+        const writer = output.writable.getWriter();
+        const pump = (async () => {
+          try {
+            while (true) {
+              const part = await input.read();
+              if (part.done) break;
+              received += part.value.byteLength;
+              const now = Date.now();
+              if (task && now - lastUpdate > 200) {
+                lastUpdate = now;
+                task.processed = i;
+                task.currentFileReceived = received;
+                task.currentFileTotal = expectedSize || received;
+                task.currentFileStage = 'upload';
+                task.currentFileSpeed = received / Math.max(1, (now - startTime) / 1000);
+                task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + received;
+                task.message = `正在上传 (${i + 1}/${fileList.length}): ${file.name} - ${formatSize(received)}${expectedSize ? ` / ${formatSize(expectedSize)}` : ''}`;
+              }
+              await writer.write(part.value);
+            }
+            await writer.close();
+          } catch (e) {
+            await writer.abort(e);
+            throw e;
           }
-        }
-        // 合并 chunks
-        const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
-        const data = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of chunks) {
-          data.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        var buf = data.buffer;
+        })();
+        const uploaded = await Promise.all([
+          // @ts-ignore IStorage accepts a ReadableStream, while some drivers
+          // may internally buffer when their provider API requires it.
+          stor.upload(file.hash, output.readable, file.type || 'application/octet-stream'),
+          pump,
+        ]).then(([ok]) => ok as boolean);
         if (task) {
-          task.currentFileReceived = data.byteLength;
-          task.currentFileTotal = expectedSize || data.byteLength;
-          task.currentFileStage = 'download';
-          task.currentFileSpeed = data.byteLength / Math.max(1, (Date.now() - startTime) / 1000);
-          task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + data.byteLength;
+          task.currentFileReceived = received;
+          task.currentFileTotal = expectedSize || received;
+          task.currentFileStage = 'upload';
+          task.currentFileSpeed = received / Math.max(1, (Date.now() - startTime) / 1000);
         }
-      } else {
-        var buf = await res.arrayBuffer();
-        if (task) {
-          task.currentFileReceived = buf.byteLength;
-          task.currentFileTotal = expectedSize || buf.byteLength;
-          task.currentFileStage = 'download';
-          task.currentFileSpeed = buf.byteLength / Math.max(1, (Date.now() - startTime) / 1000);
-          task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + buf.byteLength;
-        }
-      }
-      
-      const data = buf;
-      log(`文件 ${file.name} 下载完成: ${data.byteLength} bytes，开始上传 hash=${file.hash}`);
-      const elapsed = (Date.now() - startTime) / 1000;
-      const speed = data.byteLength / elapsed;
-      
-      // 上传到目标存储（只需传 hash，hashToKey 会加上 file/ 前缀）
+        return uploaded;
+      };
+
+      log(`文件 ${file.name} 开始流式上传 hash=${file.hash}`);
+
+      // 上传到目标存储。R2/S3/WebDAV/又拍云直接消费响应流；七牛使用分片流式上传。
       try {
         if (task) {
           task.currentFileStage = 'upload';
-          task.currentFileReceived = data.byteLength;
-          task.currentFileTotal = data.byteLength;
-          task.currentFileSpeed = data.byteLength / Math.max(1, elapsed);
-          task.message = `正在上传到存储 (${i + 1}/${fileList.length}): ${file.name} (${formatSize(data.byteLength)})`;
+          task.message = `正在上传到存储 (${i + 1}/${fileList.length}): ${file.name}`;
         }
-        // @ts-ignore
-        const ok = await stor.upload(file.hash, data);
+        const ok = useChunkedUpload
+          ? await (stor as QiniuStorage).uploadStream(file.hash, res.body, undefined, expectedSize, file.type || 'application/octet-stream')
+          : await uploadStream(res.body);
         if (ok) {
           result.success++;
-          result.totalSize += data.byteLength;
+          result.totalSize += expectedSize || Number(file.size) || 0;
           if (task) {
             task.processed = i + 1;
             task.success = result.success;
             task.failed = result.failed;
             task.processedBytes = fileList.slice(0, i + 1).reduce((sum, item) => sum + (Number(item.size) || 0), 0);
-            task.message = `已完成 ${i + 1}/${fileList.length}: ${file.name} (${formatSize(data.byteLength)} / ${formatSize(speed)}/s)`;
+            task.message = `已完成 ${i + 1}/${fileList.length}: ${file.name}`;
           }
-          log(`文件 ${file.name} 上传成功: ${data.byteLength} bytes`);
+          log(`文件 ${file.name} 上传成功: ${expectedSize || Number(file.size) || 0} bytes`);
         } else {
           result.failed++;
           const error = `${file.name}: 上传到存储失败 (hash=${file.hash})`;

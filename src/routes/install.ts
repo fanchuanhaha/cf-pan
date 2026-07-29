@@ -251,12 +251,12 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
     <!-- Step 3R: 输入原站点 + 文件下载进度 -->
     <div class="step" id="step-3r">
       <h3 style="margin-top:0">从备份恢复 - 输入原站点地址</h3>
-      <p class="text-muted">系统会从 <code>{原站点}/file/{hash}</code> 批量下载所有文件到刚配置的存储后端。</p>
+      <p class="text-muted">支持输入原站点根地址（系统访问 <code>/file/{hash}</code>），或直接输入原 PHP 下载地址（例如 <code>/down.php</code>，系统会访问 <code>/down.php/{hash}.{type}</code>）。</p>
       <form id="formSource" onsubmit="event.preventDefault(); startFileDownload();">
         <div class="form-group">
           <label>原站点 URL <span class="required">*</span></label>
-          <input type="text" name="source_url" class="form-control" placeholder="http://dl.example.com/" required>
-          <span class="help-block">必须以 <code>http://</code> 或 <code>https://</code> 开头，末尾 <code>/</code> 可选</span>
+          <input type="text" name="source_url" class="form-control" placeholder="http://dl.example.com/down.php" required>
+          <span class="help-block">必须以 <code>http://</code> 或 <code>https://</code> 开头；可填写根地址或以 <code>/down.php</code> 结尾的下载入口</span>
         </div>
         <button type="submit" class="btn-install"><i class="fa fa-download"></i> 开始下载文件</button>
       </form>
