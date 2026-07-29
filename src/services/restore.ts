@@ -427,9 +427,24 @@ export async function restoreFilesFromSource(
     const startTime = Date.now();
     try {
       // 下载文件
-      const res = await fetch(downloadUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 RestoreBot' }
-      });
+      let res: Response;
+      try {
+        res = await fetch(downloadUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          cf: { cacheTtl: -1 },
+        });
+      } catch (fetchErr: any) {
+        const errMsg = `源站连接失败: ${fetchErr?.message || fetchErr} (url=${downloadUrl})`;
+        result.failed++;
+        result.errors.push(errMsg);
+        task?.errors.push(errMsg);
+        log(errMsg);
+        if (task) {
+          task.failed = result.failed;
+          task.processed = result.success + result.skipped.length + result.failed;
+        }
+        continue;
+      }
       
       if (!res.ok) {
         const error = res.status === 404

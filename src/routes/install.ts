@@ -1650,6 +1650,37 @@ install.get('/api/status', async (c) => {
   }});
 });
 
+/** GET /install/api/diag?url=xxx - 诊断源站连通性 */
+install.get('/api/diag', async (c) => {
+  const url = c.req.query('url') || '';
+  if (!url) return jsonError(c, '缺少 url 参数');
+  const start = Date.now();
+  try {
+    const res = await fetch(url, {
+      method: 'HEAD',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      cf: { cacheTtl: -1 },
+    });
+    const elapsed = Date.now() - start;
+    return jsonResult(c, {
+      ok: res.ok,
+      status: res.status,
+      statusText: res.statusText,
+      contentType: res.headers.get('content-type'),
+      contentLength: res.headers.get('content-length'),
+      elapsed: `${elapsed}ms`,
+      headers: Object.fromEntries([...res.headers].slice(0, 10)),
+    });
+  } catch (e: any) {
+    const elapsed = Date.now() - start;
+    return jsonResult(c, {
+      ok: false,
+      error: e?.message || String(e),
+      elapsed: `${elapsed}ms`,
+    });
+  }
+});
+
 /** POST /install/api/cancel - 取消任务 */
 install.post('/api/cancel', async (c) => {
   try {

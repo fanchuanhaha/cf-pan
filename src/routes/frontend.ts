@@ -299,7 +299,7 @@ frontend.get('/', async (c) => {
   const body = `<div class="container">
 <div class="well bs-component">
   <h2>${htext}
-    <span class="searchbox" style="float:right">
+    <span class="searchbox">
       <form class="form-inline" action="./" method="GET">
         ${isMine ? '<input name="m" type="hidden" value="mine">' : ''}
         <input name="kw" class="form-control" type="search" placeholder="请输入搜索关键词" value="${htmlspecialchars(kw)}">

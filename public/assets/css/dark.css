@@ -299,9 +299,9 @@
 
   /* === Footer === */
   .footer {
-    background-color: var(--dark-nav, #1e1e1e) !important;
-    border-top-color: var(--dark-border, #333) !important;
-    color: #777 !important;
+    background-color: transparent !important;
+    border-top: none !important;
+    color: #666 !important;
   }
   .footer a { color: var(--dark-link, #8ab4d8) !important; }
 
