@@ -701,28 +701,29 @@ body{background:linear-gradient(to right,#49bdad,#6a67c7) fixed}
 </div>
 </div>
 <script>
-document.getElementById('loginForm').onsubmit = async function(e){
+document.getElementById('loginForm').onsubmit = function(e){
   e.preventDefault();
   var user = document.getElementById('username').value;
   var pwd = document.getElementById('password').value;
   var button = document.querySelector('#loginForm button[type="submit"]');
   button.disabled = true;
   button.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 登录中...';
-  try {
-    var res = await fetch('/admin/ajax/login', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      credentials: 'same-origin',
-      body: JSON.stringify({username: user, password: pwd})
-    }).then(r => r.json());
-    if (res.code === 0) { window.location.href = '/admin'; }
-    else { alert(res.msg || '登录失败'); }
-  } catch (err) {
-    alert('登录请求失败，请检查服务是否正常运行');
-  } finally {
-    button.disabled = false;
-    button.innerHTML = '<i class="fa fa-sign-in"></i> 登录';
-  }
+  $.ajax({
+    url: '/admin/ajax/login',
+    type: 'POST',
+    contentType: 'application/json',
+    data: JSON.stringify({username: user, password: pwd}),
+    dataType: 'json',
+    success: function(res){
+      if (res.code === 0) { window.location.href = '/admin'; }
+      else { alert(res.msg || '登录失败'); }
+    },
+    error: function(){ alert('登录请求失败，请检查服务是否正常运行'); },
+    complete: function(){
+      button.disabled = false;
+      button.innerHTML = '<i class="fa fa-sign-in"></i> 登录';
+    }
+  });
 };
 </script>`;
 
