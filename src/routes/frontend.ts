@@ -100,6 +100,7 @@ function publicLayout(title: string, body: string, siteUrlStr: string, active: '
 <link href="${CDN.ripplesCss}" rel="stylesheet">
 ${isFile ? `<link rel="stylesheet" href="${CDN.aplayerCss}"><link href="assets/css/ckplayer.css" rel="stylesheet">` : ''}
 <link href="assets/css/style.css" rel="stylesheet">
+<link href="assets/css/dark.css" rel="stylesheet">
 <link rel="icon" href="favicon.ico" type="image/x-icon">
 <!--[if lt IE 9]>
 <script src="https://s4.zstatic.net/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
@@ -167,6 +168,7 @@ function adminLayout(title: string, body: string, siteUrlStr: string, active: 'i
 <link href="${CDN.fontAwesome}" rel="stylesheet"/>
 <link href="${CDN.bootstrapTableCss}" rel="stylesheet"/>
 <link href="/assets/css/admin.css" rel="stylesheet"/>
+<link href="/assets/css/dark.css" rel="stylesheet"/>
 <script src="${CDN.jquery2}"></script>
 <script src="${CDN.bootstrapJs}"></script>
 <script src="https://s4.zstatic.net/ajax/libs/layer/2.3/layer.js"></script>

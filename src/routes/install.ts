@@ -1106,6 +1106,13 @@ body { background: #f5f5f5; display: flex; justify-content: center; align-items:
 .install-locked p { color: #777; margin: 8px 0 20px; line-height: 1.6; }
 .install-locked a { color: #3c78a8; text-decoration: none; }
 .install-locked a:hover { text-decoration: underline; }
+@media (prefers-color-scheme: dark) {
+  body { background: #1a1a1a; }
+  .install-locked { background: #2a2a2a; box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+  .install-locked h3 { color: #eee; }
+  .install-locked p { color: #aaa; }
+  .install-locked code { background: #333; color: #f0c674; padding: 2px 6px; border-radius: 3px; }
+}
 </style>
 </head>
 <body>
