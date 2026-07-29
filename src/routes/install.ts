@@ -748,16 +748,31 @@ async function startFileDownload() {
 
 function pollFileStatus() {
   if (state.filePollTimer) clearInterval(state.filePollTimer);
+  var pollFailCount = 0;
   state.filePollTimer = setInterval(async () => {
     try {
-      const res = await fetch('/install/api/status?taskId=' + state.fileTaskId, { credentials: 'same-origin' });
-      const json = await res.json();
-      if (json.code !== 0) {
-        document.getElementById('dpStatus').innerText = '查询失败: ' + json.msg;
-        clearInterval(state.filePollTimer);
+      var res = await fetch('/install/api/status?taskId=' + state.fileTaskId, { credentials: 'same-origin' });
+      if (!res.ok) {
+        pollFailCount++;
+        if (pollFailCount > 30) {
+          document.getElementById('dpStatus').innerText = '轮询失败超过30次，请检查网络';
+          clearInterval(state.filePollTimer);
+        }
         return;
       }
-      const s = json.data;
+      var json = await res.json();
+      pollFailCount = 0;
+      if (json.code !== 0) {
+        // 任务可能还在内存中恢复，不立即停止
+        pollFailCount++;
+        if (pollFailCount > 15) {
+          document.getElementById('dpStatus').innerText = '查询失败: ' + json.msg;
+          clearInterval(state.filePollTimer);
+        }
+        return;
+      }
+      pollFailCount = 0;
+      var s = json.data;
       console.log('[install] files-from-source: status', {
         taskId: state.fileTaskId,
         status: s.status,
@@ -1575,18 +1590,28 @@ install.get('/api/status', async (c) => {
   const taskId = c.req.query('taskId') || '';
   if (!taskId) return jsonError(c, '缺少 taskId');
   const status = getRestoreStatus(taskId);
-  if (!status) {
-    const db = getDB(c);
-    const sessionId = readSessionId(c.req.raw);
-    const sess = sessionId ? await getInstallSession(db, sessionId) : null;
-    if (sess?.taskId === taskId && sess.taskStatus) {
-      return jsonResult(c, { code: 0, data: sess.taskStatus });
-    }
-    console.error('[install/status] task not found:', taskId);
-    return jsonError(c, '任务不存在或当前 Worker 实例没有任务状态（taskId=' + taskId + '）');
+  if (status) {
+    console.log('[install/status]', taskId, status.status, status.processed + '/' + status.total, status.message);
+    return jsonResult(c, { code: 0, data: status });
   }
-  console.log('[install/status]', taskId, status.status, status.processed + '/' + status.total, status.message);
-  return jsonResult(c, { code: 0, data: status });
+  // 内存中没有任务（可能 Worker 实例切换了），从 D1 恢复
+  const db = getDB(c);
+  const sessionId = readSessionId(c.req.raw);
+  const sess = sessionId ? await getInstallSession(db, sessionId) : null;
+  if (sess?.taskId === taskId && sess.taskStatus) {
+    return jsonResult(c, { code: 0, data: sess.taskStatus });
+  }
+  // 实在找不到，返回 waiting 让前端继续轮询而不是报错
+  return jsonResult(c, { code: 0, data: {
+    status: 'waiting',
+    stage: 'files',
+    total: 0, processed: 0, success: 0, failed: 0,
+    currentItem: '', errors: [], skipped: [],
+    startTime: Date.now(),
+    message: '任务状态同步中，请等待...',
+    totalBytes: 0, processedBytes: 0,
+    logs: [],
+  }});
 });
 
 /** POST /install/api/cancel - 取消任务 */
