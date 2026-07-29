@@ -48,35 +48,55 @@ export function isView(ext: string): boolean {
 
 /** 返回 Font Awesome 图标类名 */
 export function typeToIcon(ext: string): string {
-  const iconMap: Record<string, string> = {
-    'jpg': 'fa-file-image-o', 'jpeg': 'fa-file-image-o', 'png': 'fa-file-image-o',
-    'gif': 'fa-file-image-o', 'webp': 'fa-file-image-o', 'bmp': 'fa-file-image-o',
-    'svg': 'fa-file-image-o',
-    'mp3': 'fa-file-audio-o', 'wav': 'fa-file-audio-o', 'ogg': 'fa-file-audio-o',
-    'flac': 'fa-file-audio-o', 'm4a': 'fa-file-audio-o', 'aac': 'fa-file-audio-o',
-    'mp4': 'fa-file-video-o', 'webm': 'fa-file-video-o', 'mov': 'fa-file-video-o',
-    'flv': 'fa-file-video-o', 'avi': 'fa-file-video-o', 'mkv': 'fa-file-video-o',
-    'pdf': 'fa-file-pdf-o',
-    'doc': 'fa-file-word-o', 'docx': 'fa-file-word-o',
-    'xls': 'fa-file-excel-o', 'xlsx': 'fa-file-excel-o',
-    'ppt': 'fa-file-powerpoint-o', 'pptx': 'fa-file-powerpoint-o',
-    'zip': 'fa-file-archive-o', 'rar': 'fa-file-archive-o',
-    '7z': 'fa-file-archive-o', 'gz': 'fa-file-archive-o',
-    'txt': 'fa-file-text-o', 'html': 'fa-file-code-o',
-    'css': 'fa-file-code-o', 'js': 'fa-file-code-o',
-    'md': 'fa-file-text-o',
-  };
-  return iconMap[ext.toLowerCase()] || 'fa-file-o';
+  const e = ext.toLowerCase();
+  const image = ['png','jpg','jpeg','gif','bmp','webp','ico','svg','svgz','tif','tiff','heic','psd','exif','pcx','tga','fpx','cdr','pcd','eps','ai','wmf','raw','ufo','jpc','jp2','jpx','xbm','wbmp','avif'];
+  const audio = ['mp3','wav','wma','ogg','m4a','flac','ape','aac','ra','cda','midi','mid','aif','au','voc'];
+  const video = ['mp4','webm','flv','f4v','mov','3gp','3gpp','avi','mpg','mpeg','wmv','mkv','ts','dat','asf','rm','rmvb','ram','divx','vob','qt','fli','flc','mod','m2t','swf','mts','m2ts','mpe','div','lavf','m3u8','m4v','ogm','ogv'];
+  const text = ['txt','text','log','md','yaml','yml','conf','config','ini'];
+  const code = ['c','cpp','cxx','rc','php','py','cs','h','htm','html','css','less','js','hdml','dtd','wml','xml','vbs','vb','rtx','xsd','dpr','sql','java','go','jsp','asp','aspx','asa','asax','pl','bat','cmd','rb','reg','sh','json','lua','r','mm','mak','swift','tpl'];
+  const archive = ['zip','7z','rar','tgz','gz','xz','tar','jar','iso','z','zipx','cab','bz2','arj','lz','lzh'];
+  const word = ['doc','docx','xps','rtf','wps','odt'];
+  const excel = ['xls','xlsx','ods'];
+  const pdf = ['pdf'];
+  const powerpoint = ['ppt','pptx','pptm'];
+  const android = ['apk'];
+  const apple = ['ipa','dmg'];
+  const windows = ['exe','appx','msi'];
+  const linux = ['deb','rpm'];
+  if (image.includes(e)) return 'fa-file-image-o';
+  if (audio.includes(e)) return 'fa-file-audio-o';
+  if (video.includes(e)) return 'fa-file-video-o';
+  if (text.includes(e)) return 'fa-file-text-o';
+  if (code.includes(e)) return 'fa-file-code-o';
+  if (archive.includes(e)) return 'fa-file-archive-o';
+  if (word.includes(e)) return 'fa-file-word-o';
+  if (excel.includes(e)) return 'fa-file-excel-o';
+  if (pdf.includes(e)) return 'fa-file-pdf-o';
+  if (powerpoint.includes(e)) return 'fa-file-powerpoint-o';
+  if (android.includes(e)) return 'fa-android';
+  if (apple.includes(e)) return 'fa-apple';
+  if (windows.includes(e)) return 'fa-windows';
+  if (linux.includes(e)) return 'fa-linux';
+  return 'fa-file-o';
 }
 
 /** 文件大小格式化 */
 export function sizeFormat(bytes: number | string): string {
-  const size = typeof bytes === 'string' ? parseInt(bytes) : bytes;
+  let size = typeof bytes === 'string' ? parseInt(bytes) : bytes;
   if (isNaN(size)) return '0 B';
-  if (size >= 1073741824) return (size / 1073741824).toFixed(2) + ' GB';
-  if (size >= 1048576) return (size / 1048576).toFixed(2) + ' MB';
-  if (size >= 1024) return (size / 1024).toFixed(2) + ' KB';
-  return size + ' B';
+  if (size < 1024) {
+    return size + ' B';
+  }
+  size /= 1024;
+  if (size < 1024) {
+    return Math.round(size * 100) / 100 + ' KB';
+  }
+  size /= 1024;
+  if (size < 1024) {
+    return Math.round(size * 100) / 100 + ' MB';
+  }
+  size /= 1024;
+  return Math.round(size * 100) / 100 + ' GB';
 }
 
 /** 获取文件扩展名 */

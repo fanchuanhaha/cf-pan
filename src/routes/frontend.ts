@@ -12,8 +12,8 @@ import { getDB, getConf, getStor, getStorOrThrow } from '../middleware';
 import { updateConfig, clearConfigCache } from '../config';
 import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileCountByDateRange } from '../db';
 import { verifyAdminToken, signAdminToken } from '../auth/admin';
-import { getViewType, sizeFormat, typeToIcon } from '../utils/mime';
-import { htmlspecialchars, generateCsrfToken } from '../utils/response';
+import { getViewType, sizeFormat, typeToIcon, isView } from '../utils/mime';
+import { htmlspecialchars, generateCsrfToken, jsonResult, jsonError } from '../utils/response';
 
 const frontend = new Hono<AppEnv>();
 
@@ -137,20 +137,21 @@ function adminLayout(title: string, body: string, siteUrlStr: string, active: 'i
   <div id="navbar" class="collapse navbar-collapse">
     <ul class="nav navbar-nav navbar-right">
       <li class="${cls('index')}"><a href="/admin"><i class="fa fa-home"></i> 后台首页</a></li>
-      <li class="${cls('file')}"><a href="/admin/file"><i class="fa fa-folder-open"></i> 文件管理</a></li>
-      <li class="dropdown ${cls('set')}">
+       <li class="${cls('file')}"><a href="/admin/file"><i class="fa fa-folder-open"></i> 文件管理</a></li>
+       <li class="${cls('user')}"><a href="/admin/user"><i class="fa fa-users"></i> 用户管理</a></li>
+    <li class="dropdown ${cls('set')}" id="admin-settings-menu">
         <a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false"><i class="fa fa-cog"></i> 系统设置 <span class="caret"></span></a>
         <ul class="dropdown-menu">
           <li><a href="/admin/set?mod=site"><i class="fa fa-info-circle"></i> 网站信息设置</a></li>
           <li><a href="/admin/set?mod=user"><i class="fa fa-users"></i> 用户登录设置</a></li>
           <li><a href="/admin/set?mod=stor"><i class="fa fa-database"></i> 存储类型设置</a></li>
           <li><a href="/admin/set?mod=file"><i class="fa fa-upload"></i> 文件上传设置</a></li>
-          <li><a href="/admin/set?mod=green"><i class="fa fa-image"></i> 图片检测设置/a></li>
+           <li><a href="/admin/set?mod=green"><i class="fa fa-image"></i> 图片检测设置</a></li>
           <li><a href="/admin/set?mod=api"><i class="fa fa-code"></i> 上传API设置</a></li>
-          <li><a href="/admin/set?mod=account"><i class="fa fa-user-secret"></i> 管理员账号设置/a></li>
+           <li><a href="/admin/set?mod=account"><i class="fa fa-user-secret"></i> 管理员账号设置</a></li>
         </ul>
       </li>
-      <li><a href="/admin/login?logout=1" onclick="return confirm('您您确定要退退出登录录？')"><i class="fa fa-sign-out"></i> 退退出登录录/a></li>
+       <li><a href="/admin/login?logout=1" onclick="return confirm('确定退出登录吗？')"><i class="fa fa-sign-out"></i> 退出登录</a></li>
     </ul>
   </div>
 </div>
@@ -165,7 +166,7 @@ function adminLayout(title: string, body: string, siteUrlStr: string, active: 'i
 <link href="${CDN.bootstrapCss}" rel="stylesheet"/>
 <link href="${CDN.fontAwesome}" rel="stylesheet"/>
 <link href="${CDN.bootstrapTableCss}" rel="stylesheet"/>
-<link href="assets/css/admin.css" rel="stylesheet"/>
+<link href="/assets/css/admin.css" rel="stylesheet"/>
 <script src="${CDN.jquery2}"></script>
 <script src="${CDN.bootstrapJs}"></script>
 <script src="https://s4.zstatic.net/ajax/libs/layer/2.3/layer.js"></script>
@@ -254,7 +255,7 @@ frontend.get('/', async (c) => {
     const icon = typeToIcon(res.type);
     return `<tr>
 <td><b>${offset + i + 1}</b></td>
-<td><a href="${fileurl}">下载</a>，<a href="${viewurl}">查看</a></td>
+<td><a href="${fileurl}">下载</a>｜<a href="${viewurl}">查看</a></td>
 <td><i class="fa ${icon} fa-fw"></i>${htmlspecialchars(res.name)}</td>
 <td>${sizeFormat(res.size)}</td>
 <td><font color="blue">${res.type || '未知类型'}</font></td>
@@ -439,7 +440,8 @@ if (pwd!=null && pwd!="")
 请刷新页面或[ <a href="javascript:history.back();">返回上一页</a> ]`);
   }
 
-  // 增加下载计数 + 设置 file_ids cookie（用于）我的文件"，  await touchFile(db, row.id);
+  // 增加下载计数
+  await touchFile(db, row.id);
   const cookie = c.req.header('cookie') || '';
   const match = cookie.match(/file_ids=([^;]+)/);
   let ids: number[] = [];
@@ -448,11 +450,7 @@ if (pwd!=null && pwd!="")
       ids = atob(decodeURIComponent(match[1])).split(',').map(s => parseInt(s)).filter(n => !isNaN(n));
     } catch {}
   }
-  if (!ids.includes(row.id)) {
-    ids.unshift(row.id);
-    if (ids.length > 60) ids = ids.slice(0, 60);
-  }
-  c.header('Set-Cookie', `file_ids=${encodeURIComponent(btoa(ids.join(',')))}; Path=/; Max-Age=604800; SameSite=Lax`);
+  const isMine = ids.includes(row.id);
 
   const downurl = `down.php/${row.hash}.${row.type || 'file'}`;
   const viewurl = `view.php/${row.hash}.${row.type || 'file'}`;
@@ -506,8 +504,7 @@ if (pwd!=null && pwd!="")
   } else {
     const icon = typeToIcon(row.type);
     fileContent = `<div class="view"><div class="elseview"><div class="tubiao"><i class="fa ${icon}"></i></div></div>
-<div class="elsetext"><p>${htmlspecialchars(row.name)} </p>
-<p>{sizeFormat(row.size)}</p>
+<div class="elsetext"><p>${htmlspecialchars(row.name)}（${sizeFormat(row.size)}）</p>
 <a href="${downurl}" class="btn btn-raised btn-primary btn-lg"><i class="fa fa-download" aria-hidden="true"></i> 下载文件<div class="ripple-container"></div></a>
 </div></div>`;
   }
@@ -525,7 +522,7 @@ if (pwd!=null && pwd!="")
         <li class="active"><a href="#link" data-toggle="tab"><i class="fa fa-link"></i> 文件外链</a></li>
         <li><a href="#code" data-toggle="tab"><i class="fa fa-code"></i> 代码调用</a></li>
         <li><a href="#info" data-toggle="tab"><i class="fa fa-info-circle"></i> 文件详情</a></li>
-        <li><a href="#manager" data-toggle="tab"><i class="fa fa-cog"></i> 管理</a></li>
+        ${isMine ? '<li><a href="#manager" data-toggle="tab"><i class="fa fa-cog"></i> 管理</a></li>' : ''}
       </ul>
       <div id="myTabContent" class="tab-content" style="padding:19px">
         <div class="tab-pane fade active in" id="link">
@@ -582,7 +579,7 @@ if (pwd!=null && pwd!="")
             </table>
           </div>
         </div>
-        <div class="tab-pane fade" id="manager">
+        ${isMine ? `<div class="tab-pane fade" id="manager">
           <div class="row" align="center">
             <div class="col-md-12">
               <input type="hidden" id="hash" value="${hash}">
@@ -590,7 +587,7 @@ if (pwd!=null && pwd!="")
               <button onclick="delete_confirm()" class="btn btn-raised btn-danger"><i class="fa fa-close"></i> 删除文件</button>
             </div>
           </div>
-        </div>
+        </div>` : ''}
       </div>
     </div>
   </div>
@@ -630,14 +627,14 @@ function delete_confirm(){
         if(data.code == 0){ layer.alert('删除成功', {icon:1}, function(){window.location.href="./";}); }
         else { layer.alert(data.msg, {icon:2}); }
       },
-      error:function(){ layer.close(ii); layer.msg('服务器错误); }
+      error:function(){ layer.close(ii); layer.msg('服务器错误'); }
     });
   });
 }
 $(function(){
   var clipboard = new ClipboardJS('.copy-btn');
   clipboard.on('success', function(){ layer.msg('复制成功', {icon: 1}); });
-  clipboard.on('error', function(){ layer.msg('复制失败，请长按链接后手动复制', {{icon: 2}); });
+  clipboard.on('error', function(){ layer.msg('复制失败，请长按链接后手动复制', {icon: 2}); });
 });
 ${filetype === 2 ? `
 $(function(){
@@ -681,18 +678,24 @@ frontend.get('/admin/login', async (c) => {
     }
   }
 
-  const body = `<div class="container" style="padding-top:100px">
+  const body = `<style>
+body{background:linear-gradient(to right,#49bdad,#6a67c7) fixed}
+.admin-login-form{background:#fff;text-align:center;padding:50px 30px 30px;box-shadow:12px 12px 0 rgba(0,0,0,.3);margin-top:50%}
+.admin-login-form .heading{color:#555;font-size:30px;font-weight:600;letter-spacing:1px;margin:0 0 50px}
+.admin-login-form .form-group{margin:0 auto 30px;position:relative}
+.admin-login-form .form-group>i{color:#999;position:absolute;left:5px;top:12px}
+.admin-login-form .form-control{color:#7ab6b6;font-size:17px;letter-spacing:1px;height:40px;padding:5px 10px 2px 25px;border:0;border-bottom:1px solid rgba(0,0,0,.1);border-radius:0}
+.admin-login-form .form-control:focus{border-bottom:1px solid #7ab6b6;box-shadow:none}
+.admin-login-form .btn{color:#7ab6b6;background:#edf6f5;font-size:18px;font-weight:700;letter-spacing:1px;border-radius:5px;width:50%;height:45px;margin:0 auto 25px;border:0;display:block}
+.admin-login-form .btn:hover{color:#fff;background:#7ab6b6}
+</style><div class="container">
 <div class="col-md-4 col-md-offset-4">
-<div class="panel panel-primary">
-  <div class="panel-heading"><h3 class="panel-title">管理员登录</h3></div>
-  <div class="panel-body">
-    <form id="loginForm">
-      <div class="form-group"><input class="form-control" id="username" placeholder="用户名" autofocus></div>
-      <div class="form-group"><input type="password" class="form-control" id="password" placeholder="密码"></div>
-      <button type="submit" class="btn btn-primary btn-block">××/button>
+<form id="loginForm" class="admin-login-form">
+  <div class="heading">管理员登录</div>
+      <div class="form-group"><i class="fa fa-user"></i><input class="form-control" id="username" placeholder="用户名" required autofocus></div>
+      <div class="form-group"><i class="fa fa-lock"></i><input type="password" class="form-control" id="password" placeholder="密码" required></div>
+      <button type="submit" class="btn"><i class="fa fa-arrow-right"></i></button>
     </form>
-  </div>
-</div>
 </div>
 </div>
 <script>
@@ -700,17 +703,54 @@ document.getElementById('loginForm').onsubmit = async function(e){
   e.preventDefault();
   var user = document.getElementById('username').value;
   var pwd = document.getElementById('password').value;
-  var res = await fetch('ajax/login', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({username: user, password: pwd})
-  }).then(r => r.json());
-  if (res.code === 0) { window.location.href = './'; }
-  else { alert(res.msg || '登录失败'); }
+  var button = document.querySelector('#loginForm button[type="submit"]');
+  button.disabled = true;
+  button.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 登录中...';
+  try {
+    var res = await fetch('/admin/ajax/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({username: user, password: pwd})
+    }).then(r => r.json());
+    if (res.code === 0) { window.location.href = '/admin'; }
+    else { alert(res.msg || '登录失败'); }
+  } catch (err) {
+    alert('登录请求失败，请检查服务是否正常运行');
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<i class="fa fa-sign-in"></i> 登录';
+  }
 };
 </script>`;
 
   return c.html(adminLayout('管理员登录', body, siteUrlStr, 'index', false, config.title));
+});
+
+// 管理员登录接口必须位于需要 admin_token 的后台 AJAX 鉴权之外。
+frontend.post('/admin/ajax/login', async (c) => {
+  try {
+    const config = getConf(c);
+    let body: { username?: string; password?: string } = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      const form = await c.req.parseBody<Record<string, string>>();
+      body = { username: form.username, password: form.password };
+    }
+    const username = String(body.username || '');
+    const password = String(body.password || '');
+    if (!username || !password) return jsonError(c, '请输入用户名和密码');
+    if (username !== config.admin_user || password !== config.admin_pwd) {
+      return jsonError(c, '用户名或密码错误');
+    }
+    const token = await signAdminToken(config.admin_user, config.admin_pwd, config.syskey, 7);
+    c.header('Set-Cookie', `admin_token=${encodeURIComponent(token)}; Path=/; Max-Age=${7 * 86400}; HttpOnly; SameSite=Lax`);
+    return jsonResult(c, { code: 0, msg: '登录成功' });
+  } catch (e: any) {
+    console.error('[admin/login] error:', e);
+    return jsonError(c, '登录失败: ' + (e.message || e));
+  }
 });
 
 // ===================== 管理后台首页 /admin =====================
@@ -765,7 +805,7 @@ frontend.get('/admin', async (c) => {
         <div class="col-xs-3"><i class="fa fa-hdd-o fa-5x"></i></div>
         <div class="col-xs-9 text-right"><div class="huge" id="count4">0</div><div>存储类型</div></div>
       </div></div>
-      <a href="./setting"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
+       <a href="/admin/set?mod=stor"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
     </div>
   </div>
 </div>
@@ -849,7 +889,7 @@ frontend.get('/admin/file', async (c) => {
             <div class="col-sm-10"><input type="text" class="form-control" id="store_size" disabled></div></div>
           <div class="form-group"><label class="col-sm-2 control-label">文件Hash</label>
             <div class="col-sm-10"><input type="text" class="form-control" id="store_hash" disabled></div></div>
-          <div class="form-group"><label class="col-sm-2 control-label">您隐藏</label>
+          <div class="form-group"><label class="col-sm-2 control-label">隐藏文件</label>
             <div class="col-sm-10"><select id="store_hide" name="hide" class="form-control"><option value="0">0_</option><option value="1">1_</option></select></div></div>
           <div class="form-group"><label class="col-sm-2 control-label">生成密码</label>
             <div class="col-sm-10"><select id="store_ispwd" name="ispwd" class="form-control" onchange="change_ispwd(this)"><option value="0">0_</option><option value="1">1_</option></select></div></div>
@@ -900,6 +940,15 @@ frontend.get('/admin/file', async (c) => {
 <script>
 function change_ispwd(obj){ if($(obj).val()==1) $('#pwd_frame').show(); else $('#pwd_frame').hide(); }
 
+function showPreview(url, type){
+  if(type === 'image'){
+    layer.open({type: 1, title: '图片预览', area: ['90%', '90%'], shadeClose: true,
+      content: '<div style="text-align:center;padding:15px"><img src="'+url+'" style="max-width:100%;max-height:75vh"></div>'});
+  } else {
+    layer.open({type: 2, title: '文件预览', area: ['90%', '90%'], shadeClose: true, content: url});
+  }
+}
+
 var \$_GET = {};
 document.location.search.replace(/\\??(?:(\\w+)=(\\w*)(?:&|$))*/g, function(_, k, v){ \$_GET[k] = v; });
 
@@ -916,7 +965,8 @@ $(function(){
       { field: '', checkbox: true },
       { field: 'id', title: 'ID', formatter: function(v){ return '<b>'+v+'</b>'; } },
       { field: 'name', title: '文件', formatter: function(v, row){
-          var html = '<a href="'+row.fileurl+'" title="点击下载"><i class="fa '+row.icon+' fa-fw"></i>'+v+'</a>';
+           var html = '<a href="'+row.fileurl+'" title="点击下载"><i class="fa '+row.icon+' fa-fw"></i>'+v+'</a>';
+           if(row.view){ html += ' [<a href="javascript:showPreview(\\\''+row.viewurl+'\\\',\\\''+row.view_type+'\\\')">预览</a>]'; }
           return html;
       } },
       { field: 'size', title: '文件大小' },
@@ -937,7 +987,7 @@ $(function(){
 
 function setBlock(id, status) {
   $.ajax({ type:'GET', url:'ajax/setBlock?id='+id+'&status='+status, dataType:'json',
-    success: function(){ searchSubmit(); }, error: function(){ layer.msg('服务器错误); } });
+    success: function(){ searchSubmit(); }, error: function(){ layer.msg('服务器错误'); } });
 }
 function editframe(id){
   var ii = layer.load(2, {shade:[0.1,'#fff']});
@@ -956,7 +1006,7 @@ function editframe(id){
           $('#store_ispwd').val(0); $('#store_pwd').val(''); $('#pwd_frame').hide();
         } else { $('#store_ispwd').val(1); $('#store_pwd').val(data.pwd); $('#pwd_frame').show(); }
       } else layer.alert(data.msg, {icon:2});
-    }, error: function(){ layer.msg('服务器错误); }
+    }, error: function(){ layer.msg('服务器错误'); }
   });
 }
 function saveFile(){
@@ -967,11 +1017,11 @@ function saveFile(){
       layer.close(ii);
       if(data.code==0){ layer.alert(data.msg,{icon:1,closeBtn:false}, function(){ $('#modal-store').modal('hide'); searchSubmit(); }); }
       else layer.alert(data.msg, {icon:2});
-    }, error: function(){ layer.msg('服务器错误); }
+    }, error: function(){ layer.msg('服务器错误'); }
   });
 }
 function delFile(id){
-  layer.confirm('你确定要删除此文件吗？, { btn:['您确定要','取消'], icon:0 }, function(){
+  layer.confirm('你确定要删除此文件吗？', { btn:['确定','取消'], icon:0 }, function(){
     $.ajax({ type:'GET', url:'ajax/delFile?id='+id, dataType:'json',
       success: function(d){ if(d.code==0){ layer.msg('删除成功',{icon:1}); searchSubmit(); } else layer.alert(d.msg,{icon:2}); }
     });
@@ -981,7 +1031,7 @@ function operation(status){
   var sel = $('#listTable').bootstrapTable('getSelections');
   if(sel.length==0){ layer.msg('请先选择文件'); return; }
   var ids = sel.map(function(r){ return r.id; });
-  layer.confirm('您确定要对选中'+ids.length+' 个文件执行此操作？, { btn:['您确定要','取消'], icon:0 }, function(){
+  layer.confirm('您确定要对选中'+ids.length+' 个文件执行此操作？', { btn:['确定','取消'], icon:0 }, function(){
     $.ajax({ type:'POST', url:'ajax/operation', data: { status: status, ids: ids.join(',') }, dataType:'json',
       success: function(d){ if(d.code==0){ layer.msg(d.msg,{icon:1}); searchSubmit(); } else layer.alert(d.msg,{icon:2}); }
     });
@@ -992,6 +1042,34 @@ function searchClear(){ window.location.href = './file'; }
 </script>`;
 
   return c.html(adminLayout('文件管理', body, siteUrlStr, 'file', true, config.title));
+});
+
+// ===================== 管理后台用户管理 /admin/user =====================
+frontend.get('/admin/user', async (c) => {
+  const config = getConf(c);
+  if (!await checkAdmin(c)) return c.html(`<script>window.location.href='/admin/login';</script>`);
+  const body = `<style>.user-table td{vertical-align:middle;word-break:break-all}.user-avatar{width:40px;height:40px;border-radius:50%;margin-right:7px}</style>
+<div class="container" style="padding-top:70px"><div class="col-xs-12 center-block" style="float:none">
+<form id="userSearch" class="form-inline" onsubmit="return loadUsers(1)">
+  <div class="form-group"><label>搜索 </label><select id="userType" class="form-control"><option value="1">UID</option><option value="2">第三方账号UID</option><option value="3">昵称</option><option value="4">登录IP</option></select></div>
+  <div class="form-group"><input id="userKw" class="form-control" placeholder="搜索内容"></div>
+  <div class="form-group"><select id="userStatus" class="form-control"><option value="-1">全部状态</option><option value="1">正常状态</option><option value="0">封禁状态</option></select></div>
+  <button class="btn btn-primary" type="submit"><i class="fa fa-search"></i> 搜索</button>
+  <button class="btn btn-default" type="button" onclick="document.getElementById('userKw').value='';loadUsers(1)"><i class="fa fa-repeat"></i> 重置</button>
+</form>
+<table class="table table-striped table-hover table-bordered user-table" style="margin-top:15px"><thead><tr><th>UID</th><th>头像/昵称</th><th>登录方式/账号</th><th>注册IP/登录IP</th><th>注册时间/最后登录</th><th>权限</th><th>状态</th><th>操作</th></tr></thead><tbody id="userRows"><tr><td colspan="8" class="text-center">加载中...</td></tr></tbody></table>
+<div class="text-center"><button id="userPrev" class="btn btn-default btn-sm" onclick="loadUsers(userPage-1)">上一页</button> <span id="userPageText">第 1 页</span> <button id="userNext" class="btn btn-default btn-sm" onclick="loadUsers(userPage+1)">下一页</button></div>
+</div></div>
+<script>
+var userPage=1;
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+async function loadUsers(page){if(page<1)return false;var rowsEl=document.getElementById('userRows');rowsEl.innerHTML='<tr><td colspan="8" class="text-center">加载中...</td></tr>';var fd=new FormData();fd.set('type',document.getElementById('userType').value);fd.set('kw',document.getElementById('userKw').value);fd.set('dstatus',document.getElementById('userStatus').value);fd.set('offset',String((page-1)*15));fd.set('limit','15');try{var response=await fetch('/admin/ajax/userList',{method:'POST',body:fd,credentials:'same-origin'});var r=await response.json();if(!response.ok||r.code<0)throw new Error(r.msg||'加载失败');userPage=page;var rows=Array.isArray(r.rows)?r.rows:[];rowsEl.innerHTML=rows.length?rows.map(function(u){return '<tr><td><b>'+u.uid+'</b></td><td>'+(u.faceimg?'<img class="user-avatar" src="'+esc(u.faceimg)+'">':'')+esc(u.nickname)+'</td><td><b>'+esc(u.type)+'</b><br>'+esc(u.openid)+'</td><td>'+esc(u.regip)+'<br>'+esc(u.loginip)+'</td><td>'+esc(u.addtime)+'<br>'+esc(u.lasttime)+'</td><td><button class="btn btn-xs btn-link" onclick="setLevel('+u.uid+','+(u.level?0:1)+')">'+(u.level?'高级':'普通')+'</button></td><td><button class="btn btn-xs '+(u.enable?'btn-success':'btn-danger')+'" onclick="setEnable('+u.uid+','+(u.enable?0:1)+')">'+(u.enable?'正常':'封禁')+'</button></td><td><a class="btn btn-xs btn-info" href="/admin/file?uid='+u.uid+'">文件</a> <button class="btn btn-xs btn-danger" onclick="delUser('+u.uid+')">删除</button></td></tr>';}).join(''):'<tr><td colspan="8" class="text-center text-muted">没有找到匹配的记录</td></tr>';document.getElementById('userPageText').innerText='第 '+page+' 页，共 '+(r.total||0)+' 个用户';document.getElementById('userPrev').disabled=page<=1;document.getElementById('userNext').disabled=page*15>=(r.total||0);}catch(e){rowsEl.innerHTML='<tr><td colspan="8" class="text-center text-danger">加载失败：'+esc(e.message||e)+'</td></tr>';}return false;}
+async function setEnable(uid,enable){var fd=new FormData();fd.set('uid',uid);fd.set('enable',enable);await fetch('/admin/ajax/setUserEnable',{method:'POST',body:fd,credentials:'same-origin'});loadUsers(userPage);}
+async function setLevel(uid,level){var fd=new FormData();fd.set('uid',uid);fd.set('level',level);await fetch('/admin/ajax/saveUserInfo',{method:'POST',body:fd,credentials:'same-origin'});loadUsers(userPage);}
+async function delUser(uid){if(!confirm('确定删除此用户吗？'))return;var fd=new FormData();fd.set('uid',uid);await fetch('/admin/ajax/delUser',{method:'POST',body:fd,credentials:'same-origin'});loadUsers(userPage);}
+loadUsers(1);
+</script>`;
+  return c.html(adminLayout('用户管理', body, siteUrl(c), 'user', true, config.title));
 });
 
 // ===================== 管理后台设置 /admin/set =====================
@@ -1016,7 +1094,7 @@ function saveSetting(obj){
   var ii = layer.load(2, {shade:[0.1,'#fff']});
   $.ajax({
     type : 'POST',
-    url : '/admin/ajax/set',
+     url : '/admin/ajax/saveSetting',
     data : $(obj).serialize(),
     dataType : 'json',
     success : function(data) {
@@ -1027,7 +1105,7 @@ function saveSetting(obj){
         layer.alert(data.msg, {icon: 2});
       }
     },
-    error:function(){ layer.msg('服务器错误); }
+    error:function(){ layer.msg('服务器错误'); }
   });
   return false;
 }
@@ -1057,7 +1135,7 @@ function saveSetting(obj){
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">首页公告</label>
-    <div class="col-sm-10"><textarea class="form-control" name="gonggao" rows="3" placeholder="不填写则不显示首页公?>${config.gonggao}</textarea></div>
+    <div class="col-sm-10"><textarea class="form-control" name="gonggao" rows="3" placeholder="不填写则不显示首页公告">${htmlspecialchars(config.gonggao)}</textarea></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">文件查看页公告</label>
@@ -1065,7 +1143,7 @@ function saveSetting(obj){
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">统计代码</label>
-    <div class="col-sm-10"><textarea class="form-control" name="tongji" rows="3" placeholder="不填写则不显示统计代码?>${config.tongji}</textarea></div>
+    <div class="col-sm-10"><textarea class="form-control" name="tongji" rows="3" placeholder="不填写则不显示统计代码">${htmlspecialchars(config.tongji)}</textarea></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">文件搜索功能</label>
@@ -1141,14 +1219,14 @@ function saveSetting(obj){
       <label class="col-sm-3 control-label">切换存储类型</label>
       <div class="col-sm-9"><select class="form-control" name="storage" default="${config.storage}">${storOptions(config.storage)}</select><font color="green">已有文件的情况下请勿随意变更，否则之前上传的文件全部无法下载</font></div>
     </div><br/>
-    <div id="cloud_stor" style="${config.storage === 'r2' ? '' : 'display:none;'}">
+    <div id="cloud_stor">
     <div class="form-group">
       <label class="col-sm-3 control-label">文件上传方式</label>
-      <div class="col-sm-9"><select class="form-control" name="uploadfile_type" default="${config.uploadfile_type}"><option value="0">网站跳转</option><option value="1">直接链接</option></select></div>
+       <div class="col-sm-9"><select class="form-control" name="uploadfile_type" default="${config.uploadfile_type}"><option value="0">网站中转</option><option value="1">直接链接</option></select></div>
     </div><br/>
     <div class="form-group">
       <label class="col-sm-3 control-label">文件下载方式</label>
-      <div class="col-sm-9"><select class="form-control" name="downfile_type" default="${config.downfile_type}"><option value="0">网站跳转</option><option value="1">直接链接</option></select></div>
+       <div class="col-sm-9"><select class="form-control" name="downfile_type" default="${config.downfile_type}"><option value="0">网站中转</option><option value="1">直接链接</option></select></div>
     </div><br/>
     <div class="form-group" id="downfile_type_form" style="${config.downfile_type !== 1 ? 'display:none;' : ''}">
       <label class="col-sm-3 control-label">文件下载域名</label>
@@ -1351,11 +1429,7 @@ function saveSetting(obj){
 
 <script>
 $("select[name='storage']").change(function(){
-  if($(this).val() == 'r2'){
-    $("#cloud_stor").show();
-  }else{
-    $("#cloud_stor").hide();
-  }
+  $("#cloud_stor").show();
 });
 $("select[name='downfile_type']").change(function(){
   if($(this).val() == '1'){ $("#downfile_type_form").show(); }
@@ -1366,7 +1440,7 @@ function startMigrate(){
   var targetType = $("select[name='storage']").val();
   var currentStorage = '${config.storage}';
   if(targetType === currentStorage){
-    layer.alert('您选择的存储类型与当前相同, {icon: 2});
+    layer.alert('您选择的存储类型与当前相同', {icon: 2});
     return;
   }
   var dialogContent = ''
@@ -1608,7 +1682,7 @@ downurl - 下载地址
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">旧密码</label>
-    <div class="col-sm-10"><input type="password" name="oldpwd" value="" class="form-control" placeholder="请输入当前的管理员密码<//div>
+    <div class="col-sm-10"><input type="password" name="oldpwd" value="" class="form-control" placeholder="请输入当前的管理员密码"/></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">新密码</label>
@@ -1707,7 +1781,8 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     const db = getDB(c);
     const config = getConf(c);
 
-    // 文件总数：按 max(id) 取最新一个id 作为显示：    let total = 0;
+    // 文件总数：按 max(id) 取最新一个 id 作为显示。
+    let total = 0;
     try {
       const r = await db.prepare('SELECT MAX(id) as c FROM pre_file').first<{ c: number }>();
       total = r?.c ?? 0;
@@ -1715,14 +1790,16 @@ frontend.get('/admin/ajax/getcount', async (c) => {
       console.error('[getcount] getFileTotal(max id) failed:', e?.message || e);
     }
 
-    // 抽样选几条验证    let sample: any = null;
+    // 抽样选一条验证。
+    let sample: any = null;
     try {
       sample = await db.prepare('SELECT id, name, hash, addtime FROM pre_file ORDER BY id DESC LIMIT 1').first();
     } catch (e: any) {
       console.error('[getcount] sample failed:', e?.message || e);
     }
 
-    // 日期边界（全部使用 UTC，因为 Workers 运行在 UTC 时区    const isoNow = new Date().toISOString(); // e.g. "2026-07-01T15:30:00.000Z"
+    // 日期边界全部使用 UTC，因为 Workers 运行在 UTC 时区。
+    const isoNow = new Date().toISOString();
     const todayStr = isoNow.substring(0, 10);
     const todayBoundary = todayStr + ' 00:00:00';
 
@@ -1758,7 +1835,11 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     const count1 = total;
     const count2 = todayCount;
     const count3 = yCount;
-    const count4 = config.storage.toUpperCase();
+    const storageNames: Record<string, string> = {
+      r2: 'Cloudflare R2', s3: 'S3', github: 'GitHub API',
+      webdav: 'WebDAV', upyun: '又拍云', qiniu: '七牛云',
+    };
+    const count4 = storageNames[config.storage] || config.storage || '未配置';
 
     console.log(`[getcount] total=${count1} today=${count2} yesterday=${count3} storage=${count4} sample=${sample ? sample.id + ':' + sample.name : 'none'} todayBoundary=${todayBoundary} tomorrow=${tomorrowBoundary} yesterday=${yesterdayBoundary}`);
 
@@ -1816,6 +1897,8 @@ frontend.post('/admin/ajax/fileList', async (c) => {
     ...r,
     size: sizeFormat(r.size),
     icon: typeToIcon(r.type),
+    view: isView(r.type),
+    view_type: getViewType(r.type),
     fileurl: `../down.php/${r.hash}.${r.type || 'file'}`,
     viewurl: `../view.php/${r.hash}.${r.type || 'file'}`,
     pageurl: `../file.php?hash=${r.hash}${r.pwd ? '&pwd=' + r.pwd : ''}`,

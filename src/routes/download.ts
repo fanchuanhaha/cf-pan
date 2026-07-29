@@ -5,6 +5,7 @@ import type { AppEnv } from '../middleware';
 import { getDB, getStorOrThrow } from '../middleware';
 import { getFileByHash, touchFile } from '../db';
 import { fileOutput } from '../services/upload';
+import { getConfig } from '../config';
 
 const download = new Hono<AppEnv>();
 
@@ -12,6 +13,7 @@ const download = new Hono<AppEnv>();
 download.get('/*', async (c) => {
   const db = getDB(c);
   const stor = getStorOrThrow(c);
+  const config = getConfig();
 
   const path = c.req.path.replace(/^\/down\.php\//, '');
   const parts = path.split('&');
@@ -36,7 +38,7 @@ download.get('/*', async (c) => {
 
   // 密码校验
   if (row.pwd !== null && row.pwd !== '' && row.pwd !== pwd) {
-    return new Response(`
+    return c.html(`
       <meta http-equiv="content-type" content="text/html;charset=utf-8"/>
       <title>请输入密码下载文件</title>
       <script type="text/javascript">
@@ -47,10 +49,7 @@ download.get('/*', async (c) => {
       }
       </script>
       请刷新页面，或[ <a href="javascript:history.back();">返回上一页</a> ]
-    `, {
-      status: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
+    `);
   }
 
   // 检查文件是否在存储中存在
@@ -58,6 +57,17 @@ download.get('/*', async (c) => {
   if (!exists) return new Response('File Not Found', { status: 404 });
 
   await touchFile(db, row.id);
+
+  // 直连模式：302 跳转到存储直链
+  if (config.downfile_type === 1 && stor.getDownUrl) {
+    const directUrl = await stor.getDownUrl(hash, row.name);
+    if (directUrl) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: directUrl },
+      });
+    }
+  }
 
   return fileOutput(c, stor, hash, row.type, row.size, row.name, true);
 });

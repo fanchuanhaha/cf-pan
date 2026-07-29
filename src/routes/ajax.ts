@@ -169,6 +169,21 @@ async function handleUploadPart(c: any) {
     }
   }
 
+  // 记录上传的文件ID到cookie（用于"我的文件"和管理权限）
+  const cookie = c.req.header('cookie') || '';
+  const match = cookie.match(/file_ids=([^;]+)/);
+  let ids: number[] = [];
+  if (match) {
+    try {
+      ids = atob(decodeURIComponent(match[1])).split(',').map(s => parseInt(s)).filter(n => !isNaN(n));
+    } catch {}
+  }
+  if (!ids.includes(id)) {
+    ids.unshift(id);
+    if (ids.length > 60) ids = ids.slice(0, 60);
+  }
+  c.header('Set-Cookie', `file_ids=${encodeURIComponent(btoa(ids.join(',')))}; Path=/; Max-Age=604800; SameSite=Lax`);
+
   delete csrfTokens[ip];
   return jsonResult(c, {
     code: 1, msg: '文件上传成功！', exists: 0, hash, name: realName, size: realSize, type: ext, id,
