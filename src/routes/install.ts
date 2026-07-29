@@ -603,15 +603,49 @@ function renderConfigList() {
     box.innerHTML = '<div style="padding:20px; text-align:center; color:#999">SQL 中未检测到 pre_config 数据</div>';
     return;
   }
+  const labelMap: Record<string, string> = {
+    title: '网站标题', logo: '网站Logo', keywords: '网站关键词', description: '网站描述',
+    upload_size: '上传大小限制(MB)', upload_type: '允许上传的文件类型', type_image: '图片格式',
+    type_audio: '音频格式', type_video: '视频格式', type_block: '禁止上传的格式',
+    name_block: '禁止上传的文件名', downfile_type: '下载方式(0中转/1直连)',
+    downfile_protocol: '下载协议(0http/1https)', downfile_domain: '下载域名',
+    uploadfile_type: '上传方式(0中转/1直传)', uploadfile_protocol: '上传协议',
+    uploadfile_domain: '上传域名', upload_size: '上传大小限制(MB)',
+    storage: '存储类型', storage_local_path: '本地存储路径',
+    qiniu_ak: '七牛AccessKey', qiniu_sk: '七牛SecretKey', qiniu_bucket: '七牛存储桶',
+    qiniu_domain: '七牛域名', qiniu_region: '七牛区域',
+    upyun_bucket: '又拍存储桶', upyun_operator: '又拍操作员', upyun_password: '又拍密码',
+    upyun_domain: '又拍域名',
+    s3_endpoint: 'S3端点', s3_region: 'S3区域', s3_bucket: 'S3存储桶',
+    s3_ak: 'S3 AccessKey', s3_sk: 'S3 SecretKey', s3_domain: 'S3域名',
+    gh_owner: 'GitHub仓库拥有者', gh_repo: 'GitHub仓库名', gh_token: 'GitHub Token',
+    gh_branch: 'GitHub分支', gh_domain: 'GitHub域名',
+    webdav_endpoint: 'WebDAV地址', webdav_user: 'WebDAV用户名',
+    webdav_pass: 'WebDAV密码', webdav_domain: 'WebDAV域名',
+    green_check: '图片鉴黄(0关/1开)', green_apikey: '鉴黄API密钥',
+    videoreview: '视频审核(0关/1开)',
+    api_open: '上传API(0关/1开)', api_key: 'API密钥',
+    admin_user: '管理员用户名', admin_pwd: '管理员密码',
+    bg_color: '背景颜色', notice: '首页公告', tongji: '统计代码',
+    login_qq: 'QQ登录(0关/1开)', login_wx: '微信登录(0关/1开)',
+    installed: '是否已安装', syskey: '系统密钥',
+    index_title: '首页标题', index_content: '首页内容',
+    type_text: '文本格式', type_code: '代码格式', type_archive: '压缩包格式',
+    type_word: 'Word格式', type_excel: 'Excel格式', type_pdf: 'PDF格式',
+    type_powerpoint: 'PPT格式', type_android: '安卓应用', type_apple: '苹果应用',
+    type_windows: 'Windows程序', type_linux: 'Linux安装包',
+    page_size: '每页显示数量',
+  };
   const hasRestoredConfig = state.resumed;
   const restoredConfig = state.selectedConfig || {};
   state.selectedConfig = {};
-  let html = '<table class="table table-condensed table-hover"><thead><tr><th style="width:40px">使用</th><th>键</th><th>值</th></tr></thead><tbody>';
+  let html = '<table class="table table-condensed table-hover"><thead><tr><th style="width:40px">使用</th><th>键</th><th>用途</th><th>值</th></tr></thead><tbody>';
   for (const k of keys) {
     if (k === 'storage') {
       html += '<tr class="text-muted">' +
         '<td><input type="checkbox" disabled></td>' +
         '<td><code>' + escapeHtml(k) + '</code></td>' +
+        '<td style="font-size:12px;color:#999">存储类型</td>' +
         '<td><span style="font-size:12px">（不导入，请在下方重新选择存储类型）</span></td>' +
         '</tr>';
       continue;
@@ -623,9 +657,11 @@ function renderConfigList() {
       state.selectedConfig[k] = v;
     }
     const checked = Object.prototype.hasOwnProperty.call(state.selectedConfig, k);
+    const label = labelMap[k] || '';
     html += '<tr class="selected">' +
       '<td><input type="checkbox" data-key="' + escapeHtml(k) + '"' + (checked ? ' checked' : '') + ' onchange="toggleConfig(this)"></td>' +
       '<td><code>' + escapeHtml(k) + '</code></td>' +
+      '<td style="font-size:12px;color:#888">' + escapeHtml(label) + '</td>' +
       '<td><input type="text" class="form-control input-sm" data-key="' + escapeHtml(k) + '" value="' + escapeHtml(state.selectedConfig[k]) + '" oninput="editConfigValue(this)"></td>' +
       '</tr>';
   }
