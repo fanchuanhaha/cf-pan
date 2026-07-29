@@ -2,6 +2,8 @@
 // 从原 PHP 项目恢复数据：SQL 文件 + 站点目录压缩包
 
 import type { IStorage } from '../storage/IStorage';
+import { extractPreFileRecords, type PreFileRecord } from './restorePreExtract';
+import { QiniuStorage } from '../storage/QiniuStorage';
 
 export type RestoreStage = 'download' | 'extract' | 'database' | 'files' | 'done';
 
@@ -14,6 +16,7 @@ export interface RestoreProgress {
   currentItem: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting';
   errors: string[];
+  skipped: string[];
   startTime: number;
   endTime?: number;
   message?: string;
@@ -21,6 +24,12 @@ export interface RestoreProgress {
   currentFileReceived?: number;
   /** 当前文件总字节（用于二级进度条，仅在单文件下载阶段有值） */
   currentFileTotal?: number;
+  totalBytes: number;
+  processedBytes: number;
+  currentFileStage?: 'download' | 'upload';
+  currentFileSpeed?: number;
+  currentFileChunked?: boolean;
+  logs: string[];
 }
 
 const restoreTasks: Map<string, RestoreProgress> = new Map();
@@ -46,8 +55,12 @@ export function createRestoreTask(taskId: string): RestoreProgress {
     currentItem: '',
     status: 'waiting',
     errors: [],
+    skipped: [],
     startTime: Date.now(),
     message: '等待开始',
+    totalBytes: 0,
+    processedBytes: 0,
+    logs: [],
   };
   restoreTasks.set(taskId, task);
   return task;
@@ -326,9 +339,17 @@ export async function restoreFilesFromSource(
   stor: IStorage,
   sourceBaseUrl: string,
   taskId: string,
-  folder: string = 'file'
+  folder: string = 'file',
+  sqlText?: string
 ): Promise<{ fileCount: number; success: number; failed: number; errors: string[]; totalSize: number }> {
   const task = restoreTasks.get(taskId);
+  const log = (message: string) => {
+    console.log(`[restore:${taskId}] ${message}`);
+    if (task) {
+      task.logs.push(new Date().toISOString() + ' ' + message);
+      if (task.logs.length > 100) task.logs.shift();
+    }
+  };
   
   // 标准化 URL
   let baseUrl = sourceBaseUrl.trim();
@@ -341,25 +362,53 @@ export async function restoreFilesFromSource(
   const cleanFolder = (folder || 'file').replace(/^\/+|\/+$/g, '');
   
   // 查询所有文件
-  const { results: files } = await db.prepare('SELECT id, name, hash, size FROM pre_file').all();
-  const fileList = (files as any[]) || [];
+  const { results: files } = await db.prepare('SELECT id, name, hash, size FROM pre_file ORDER BY id').all();
+  let fileList = (files as PreFileRecord[]) || [];
+  if (fileList.length === 0 && sqlText) {
+    fileList = extractPreFileRecords(sqlText);
+    console.warn(`[restoreFilesFromSource] pre_file is empty in D1, using ${fileList.length} records parsed from SQL`);
+    // 不能只在内存中使用解析结果，否则文件虽然能下载，安装完成后 D1 仍没有文件元数据。
+    for (const file of fileList) {
+      await db.prepare(
+        `INSERT OR REPLACE INTO pre_file
+          (id, name, type, size, hash, addtime, lasttime, ip, hide, pwd, block, count, uid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        file.id, file.name, file.type || '', file.size || 0, file.hash,
+        file.addtime, file.lasttime, file.ip, file.hide, file.pwd, file.block, file.count, file.uid,
+      ).run();
+    }
+  }
 
-  console.log(`[restoreFilesFromSource] taskId=${taskId} baseUrl=${baseUrl} folder=${cleanFolder} fileCount=${fileList.length}`);
+  log(`开始任务 baseUrl=${baseUrl} folder=${cleanFolder} fileCount=${fileList.length}`);
   
   if (task) {
     task.stage = 'files';
     task.total = fileList.length;
     task.status = 'running';
     task.message = `开始从 ${baseUrl} 下载 ${fileList.length} 个文件`;
+    task.totalBytes = fileList.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
+    task.processedBytes = 0;
   }
   
-  const result: { fileCount: number; success: number; failed: number; errors: string[]; totalSize: number } = {
+  const result: { fileCount: number; success: number; failed: number; errors: string[]; skipped: string[]; totalSize: number } = {
     fileCount: fileList.length,
     success: 0,
     failed: 0,
     errors: [],
+    skipped: [],
     totalSize: 0,
   };
+
+  if (fileList.length === 0) {
+    if (task) {
+      task.status = 'failed';
+      task.message = 'pre_file 中没有可恢复的文件记录';
+      task.errors.push('pre_file 中没有可恢复的文件记录');
+      log('失败: pre_file 中没有可恢复的文件记录');
+    }
+    return result;
+  }
   
   for (let i = 0; i < fileList.length; i++) {
     if (task && task.status === 'cancelled') break;
@@ -367,6 +416,7 @@ export async function restoreFilesFromSource(
     const file = fileList[i];
     // 从原站点下载的 URL：{原站点}/{folder}/{hash}
     const downloadUrl = `${baseUrl}/${cleanFolder}/${file.hash}`;
+    log(`文件 ${i + 1}/${fileList.length} 开始下载: ${file.name} hash=${file.hash} url=${downloadUrl}`);
     
     if (task) {
       task.processed = i;
@@ -382,10 +432,21 @@ export async function restoreFilesFromSource(
       });
       
       if (!res.ok) {
-        result.failed++;
-        result.errors.push(`${file.name}: HTTP ${res.status}`);
+        const error = res.status === 404
+          ? `${file.name}: 源站文件不存在 HTTP 404，hash=${file.hash}，URL=${downloadUrl}`
+          : `${file.name}: 源站下载失败 HTTP ${res.status}，URL=${downloadUrl}`;
+        if (res.status === 404) {
+          result.skipped.push(error);
+          task?.skipped.push(error);
+          log('跳过文件: ' + error);
+        } else {
+          result.failed++;
+          result.errors.push(error);
+          task?.errors.push(error);
+          log(error + ` content-type=${res.headers.get('content-type') || ''}`);
+        }
         if (task) {
-          task.processed = i + 1;
+          task.processed = result.success + result.skipped.length + result.failed;
           task.failed = result.failed;
         }
         continue;
@@ -393,7 +454,45 @@ export async function restoreFilesFromSource(
       
       // 流式读取以便实时更新下载进度
       const contentLength = parseInt(res.headers.get('Content-Length') || '0');
+      const expectedSize = contentLength || Number(file.size) || 0;
+      const useChunkedUpload = stor instanceof QiniuStorage && expectedSize > 128 * 1024 * 1024;
+
+      // 七牛大文件走分片上传，避免把整个响应读入 ArrayBuffer/Blob。
+      if (useChunkedUpload && res.body) {
+        if (task) {
+          task.currentFileChunked = true;
+          task.currentFileStage = 'upload';
+          task.currentFileReceived = 0;
+          task.currentFileTotal = expectedSize;
+          task.currentFileSpeed = 0;
+          task.message = `正在分片上传到七牛云 (${i + 1}/${fileList.length}): ${file.name}`;
+        }
+        log(`文件 ${file.name} 开始七牛分片上传: ${file.hash}`);
+        const uploadStart = Date.now();
+        await stor.uploadStream(file.hash, res.body, (uploaded, total) => {
+          if (!task) return;
+          task.currentFileStage = 'upload';
+          task.currentFileReceived = uploaded;
+          task.currentFileTotal = total;
+          task.currentFileSpeed = uploaded / Math.max(1, (Date.now() - uploadStart) / 1000);
+          task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + uploaded;
+          task.message = `正在分片上传 (${i + 1}/${fileList.length}): ${file.name} - ${formatSize(uploaded)} / ${formatSize(total)}`;
+        }, expectedSize, file.type || 'application/octet-stream');
+        result.success++;
+        result.totalSize += Number(file.size) || expectedSize;
+        if (task) {
+          task.processed = result.success + result.skipped.length + result.failed;
+          task.success = result.success;
+          task.failed = result.failed;
+          task.processedBytes = fileList.slice(0, i + 1).reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+          task.message = `已完成 ${i + 1}/${fileList.length}: ${file.name}`;
+        }
+        log(`文件 ${file.name} 七牛分片上传成功`);
+        continue;
+      }
+
       const reader = res.body?.getReader();
+      if (task) task.currentFileChunked = false;
       const chunks: Uint8Array[] = [];
       let received = 0;
       let lastUpdate = 0;
@@ -411,9 +510,12 @@ export async function restoreFilesFromSource(
             const speed = received / Math.max(1, (now - startTime) / 1000);
             // processed 只表示文件计数（i+1 = 当前正在处理的文件数），不要混入字节级小数
             // 当前文件字节级进度放在 currentFileReceived/currentFileTotal
-            task.processed = i + 1;
+            task.processed = i;
             task.currentFileReceived = received;
-            task.currentFileTotal = contentLength;
+            task.currentFileTotal = expectedSize;
+            task.currentFileStage = 'download';
+            task.currentFileSpeed = speed;
+            task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + received;
             task.message = `正在下载 (${i + 1}/${fileList.length}): ${file.name} - ${formatSize(received)}${contentLength ? ` / ${formatSize(contentLength)}` : ''} (${formatSize(speed)}/s)`;
           }
         }
@@ -426,17 +528,36 @@ export async function restoreFilesFromSource(
           offset += chunk.byteLength;
         }
         var buf = data.buffer;
+        if (task) {
+          task.currentFileReceived = data.byteLength;
+          task.currentFileTotal = expectedSize || data.byteLength;
+          task.currentFileStage = 'download';
+          task.currentFileSpeed = data.byteLength / Math.max(1, (Date.now() - startTime) / 1000);
+          task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + data.byteLength;
+        }
       } else {
         var buf = await res.arrayBuffer();
+        if (task) {
+          task.currentFileReceived = buf.byteLength;
+          task.currentFileTotal = expectedSize || buf.byteLength;
+          task.currentFileStage = 'download';
+          task.currentFileSpeed = buf.byteLength / Math.max(1, (Date.now() - startTime) / 1000);
+          task.processedBytes = fileList.slice(0, i).reduce((sum, item) => sum + (Number(item.size) || 0), 0) + buf.byteLength;
+        }
       }
       
       const data = buf;
+      log(`文件 ${file.name} 下载完成: ${data.byteLength} bytes，开始上传 hash=${file.hash}`);
       const elapsed = (Date.now() - startTime) / 1000;
       const speed = data.byteLength / elapsed;
       
       // 上传到目标存储（只需传 hash，hashToKey 会加上 file/ 前缀）
       try {
         if (task) {
+          task.currentFileStage = 'upload';
+          task.currentFileReceived = data.byteLength;
+          task.currentFileTotal = data.byteLength;
+          task.currentFileSpeed = data.byteLength / Math.max(1, elapsed);
           task.message = `正在上传到存储 (${i + 1}/${fileList.length}): ${file.name} (${formatSize(data.byteLength)})`;
         }
         // @ts-ignore
@@ -448,31 +569,58 @@ export async function restoreFilesFromSource(
             task.processed = i + 1;
             task.success = result.success;
             task.failed = result.failed;
+            task.processedBytes = fileList.slice(0, i + 1).reduce((sum, item) => sum + (Number(item.size) || 0), 0);
             task.message = `已完成 ${i + 1}/${fileList.length}: ${file.name} (${formatSize(data.byteLength)} / ${formatSize(speed)}/s)`;
           }
+          log(`文件 ${file.name} 上传成功: ${data.byteLength} bytes`);
         } else {
           result.failed++;
-          result.errors.push(`${file.name}: 上传到存储失败`);
-          if (task) task.failed = result.failed;
+          const error = `${file.name}: 上传到存储失败 (hash=${file.hash})`;
+          result.errors.push(error);
+          task?.errors.push(error);
+          log(error);
+          if (task) {
+            task.failed = result.failed;
+            task.processed = result.success + result.skipped.length + result.failed;
+          }
         }
       } catch (e: any) {
         result.failed++;
-        result.errors.push(`${file.name}: 上传失败 ${(e.message || e).substring(0, 100)}`);
-        if (task) task.failed = result.failed;
+        const error = `${file.name}: 上传失败 ${String(e?.message || e || '未知异常').substring(0, 200)}`;
+        result.errors.push(error);
+        task?.errors.push(error);
+        log(error);
+        if (task) {
+          task.failed = result.failed;
+          task.processed = result.success + result.skipped.length + result.failed;
+        }
       }
     } catch (e: any) {
       result.failed++;
-      result.errors.push(`${file.name}: ${(e.message || e).substring(0, 100)}`);
-      if (task) task.failed = result.failed;
+      const error = `${file.name}: 文件处理异常 ${String(e?.message || e || '未知异常').substring(0, 400)} (url=${downloadUrl})`;
+      result.errors.push(error);
+      task?.errors.push(error);
+      log(error);
+      if (task) {
+        task.failed = result.failed;
+        task.processed = result.success + result.skipped.length + result.failed;
+      }
     }
   }
   
   if (task) {
-    task.processed = fileList.length;
+    task.processed = result.success + result.skipped.length + result.failed;
     task.success = result.success;
     task.failed = result.failed;
     task.currentItem = '';
-    task.message = `下载完成: 成功 ${result.success}, 失败 ${result.failed}`;
+    task.currentFileReceived = 0;
+    task.currentFileTotal = 0;
+    task.currentFileStage = undefined;
+    task.message = result.failed > 0
+      ? `处理完成: 上传成功 ${result.success}, 跳过 ${result.skipped.length}, 失败 ${result.failed}`
+      : `下载并上传完成: 成功 ${result.success}, 跳过 ${result.skipped.length}`;
+    if (result.failed > 0) task.status = 'failed';
+    log(`任务结束: success=${result.success} failed=${result.failed} total=${fileList.length}`);
   }
   
   return result;

@@ -90,7 +90,7 @@ export interface AppConfig {
   installed: number;
 }
 
-const defaults: AppConfig = {
+export const defaults: AppConfig = {
   title: '彩虹外链网盘',
   keywords: '',
   description: '',

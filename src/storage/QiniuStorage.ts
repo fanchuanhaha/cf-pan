@@ -28,6 +28,7 @@ interface QiniuRegion {
 const DEFAULT_FOLDER = 'file';
 const UC_QUERY_URL = 'https://api.qiniu.com/v2/query';
 const MANAGEMENT_CONTENT_TYPE = 'application/x-www-form-urlencoded';
+const RESUMABLE_BLOCK_SIZE = 4 * 1024 * 1024;
 
 export class QiniuStorage implements IStorage {
   private cfg: QiniuConfig;
@@ -274,6 +275,83 @@ export class QiniuStorage implements IStorage {
       errors.push(`https://${host} status=${res.status} body=${(await res.text()).substring(0, 300)}`);
     }
     throw new Error(`七牛云上传失败（${errors.length} 个 host 均失败）: ${errors.join(' | ')}`);
+  }
+
+  /**
+   * 使用七牛分片上传，避免 Worker 为大文件创建超过 128 MiB 的 Blob。
+   * 七牛在 mkfile 后会把所有分片合并为一个完整对象。
+   */
+  async uploadStream(
+    name: string,
+    stream: ReadableStream,
+    onProgress?: (uploaded: number, total: number) => void,
+    total = 0,
+    contentType = 'application/octet-stream',
+  ): Promise<boolean> {
+    const region = await this.ensureRegion();
+    const token = await this.makeUploadToken();
+    const hosts = [...region.cdnUpHosts, ...region.srcUpHosts];
+    const reader = stream.getReader();
+    const contexts: string[] = [];
+    let uploaded = 0;
+    let pending = new Uint8Array(0);
+
+    const uploadRequest = async (path: string, body: ArrayBuffer): Promise<any> => {
+      const errors: string[] = [];
+      for (const host of hosts) {
+        const url = `https://${host}${path}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            Authorization: 'UpToken ' + token,
+            'Content-Type': 'application/octet-stream',
+          },
+          body,
+        });
+        const text = await res.text();
+        if (res.ok) {
+          try { return JSON.parse(text); } catch { return {}; }
+        }
+        errors.push(`${url} status=${res.status} body=${text.substring(0, 300)}`);
+      }
+      throw new Error('七牛分片上传失败: ' + errors.join(' | '));
+    };
+
+    const uploadBlock = async (block: Uint8Array): Promise<void> => {
+      if (!block.byteLength) return;
+      const blockBody = block.slice().buffer as ArrayBuffer;
+      // 每个不超过 4 MiB 的文件块独立调用 mkblk；bput 只用于同一块内部的片续传。
+      const created = await uploadRequest(`/mkblk/${block.byteLength}`, blockBody);
+      if (!created || !created.ctx) throw new Error('七牛 mkblk 未返回 ctx');
+      contexts.push(created.ctx);
+      uploaded += block.byteLength;
+      if (onProgress) onProgress(uploaded, total || uploaded);
+    };
+
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      const value = part.value as Uint8Array;
+      const combined = new Uint8Array(pending.byteLength + value.byteLength);
+      combined.set(pending);
+      combined.set(value, pending.byteLength);
+      pending = combined;
+      while (pending.byteLength >= RESUMABLE_BLOCK_SIZE) {
+        await uploadBlock(pending.slice(0, RESUMABLE_BLOCK_SIZE));
+        pending = pending.slice(RESUMABLE_BLOCK_SIZE);
+      }
+    }
+    if (pending.byteLength) await uploadBlock(pending);
+    if (!contexts.length) throw new Error('七牛分片上传没有收到文件内容');
+
+    const key = this.hashToKey(name);
+    const encodedKey = this.base64UrlEncode(key);
+    const merged = await uploadRequest(
+      `/mkfile/${uploaded}/key/${encodedKey}` + (contentType ? `/mimeType/${this.base64UrlEncode(contentType)}` : ''),
+      new TextEncoder().encode(contexts.join(',')).buffer as ArrayBuffer,
+    );
+    if (!merged) throw new Error('七牛 mkfile 合并失败');
+    return true;
   }
 
   async savefile(name: string, tmpfile: string, contentType?: string): Promise<boolean> {

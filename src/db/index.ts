@@ -184,6 +184,46 @@ export async function getUserById(db: D1Database, uid: number): Promise<UserRow 
   return db.prepare('SELECT * FROM pre_user WHERE uid = ? LIMIT 1').bind(uid).first<UserRow>();
 }
 
+export async function getUserList(db: D1Database, options: {
+  search?: string; type?: string; enable?: number; offset: number; limit: number;
+}): Promise<{ total: number; rows: UserRow[] }> {
+  let where = '1=1';
+  const params: unknown[] = [];
+  if (options.enable !== undefined && options.enable >= 0) {
+    where += ' AND enable = ?';
+    params.push(options.enable);
+  }
+  if (options.search) {
+    if (options.type === 'uid') {
+      where += ' AND uid = ?';
+      params.push(Number(options.search) || 0);
+    } else if (options.type === 'openid') {
+      where += ' AND openid LIKE ?';
+      params.push(`%${options.search}%`);
+    } else if (options.type === 'ip') {
+      where += ' AND loginip LIKE ?';
+      params.push(`%${options.search}%`);
+    } else {
+      where += ' AND nickname LIKE ?';
+      params.push(`%${options.search}%`);
+    }
+  }
+  const count = await db.prepare(`SELECT COUNT(*) AS c FROM pre_user WHERE ${where}`).bind(...params).first<{ c: number }>();
+  const rows = await db.prepare(`SELECT * FROM pre_user WHERE ${where} ORDER BY uid DESC LIMIT ? OFFSET ?`)
+    .bind(...params, options.limit, options.offset).all<UserRow>();
+  return { total: count?.c || 0, rows: rows.results };
+}
+
+export async function updateUser(db: D1Database, uid: number, data: { level?: number; enable?: number }): Promise<void> {
+  if (data.level !== undefined) await db.prepare('UPDATE pre_user SET level = ? WHERE uid = ?').bind(data.level, uid).run();
+  if (data.enable !== undefined) await db.prepare('UPDATE pre_user SET enable = ? WHERE uid = ?').bind(data.enable, uid).run();
+}
+
+export async function deleteUser(db: D1Database, uid: number): Promise<boolean> {
+  const result = await db.prepare('DELETE FROM pre_user WHERE uid = ?').bind(uid).run();
+  return result.meta.changes > 0;
+}
+
 /** 更新用户登录信息 */
 export async function updateUserLogin(db: D1Database, uid: number, ip: string): Promise<void> {
   await db.prepare(

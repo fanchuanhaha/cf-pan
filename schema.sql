@@ -104,6 +104,8 @@ CREATE TABLE IF NOT EXISTS install_session (
   storage_fields TEXT,
   selected_config TEXT,
   source_url TEXT,
-  fresh_install INTEGER DEFAULT 0
+  fresh_install INTEGER DEFAULT 0,
+  task_id TEXT,
+  task_status TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_install_session_created_at ON install_session(created_at);

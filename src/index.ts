@@ -5,7 +5,7 @@ import { cors } from 'hono/cors';
 import { initApp, getStor, isStorageReady } from './middleware';
 import type { AppEnv } from './middleware';
 
-// 导入路由
+// 导入 路由
 import ajaxRoutes from './routes/ajax';
 import apiRoutes from './routes/api';
 import downloadRoutes from './routes/download';

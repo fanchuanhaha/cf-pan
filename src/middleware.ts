@@ -2,6 +2,7 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import type { IStorage } from './storage/IStorage';
 import type { AppConfig } from './config';
+import { defaults } from './config';
 import { loadConfig } from './config';
 import { createStorage, isStorageConfigured } from './storage/factory';
 
@@ -31,9 +32,20 @@ export type AppContext = Context<AppEnv>;
 export const initApp = (): MiddlewareHandler<AppEnv> => {
   return async (c, next) => {
     const db = c.env.DB;
-    const config = await loadConfig(db);
+    let config: AppConfig;
+    let storageOk = false;
+
+    try {
+      config = await loadConfig(db);
+      storageOk = isStorageConfigured(config, { FILE_R2: c.env.FILE_R2 });
+    } catch (e) {
+      // 表不存在或其他数据库错误，使用默认配置，允许跳转到安装页
+      console.log('[initApp] loadConfig error, using defaults:', e);
+      config = { ...defaults };
+      storageOk = false;
+    }
+
     const stor = createStorage(config, { FILE_R2: c.env.FILE_R2 });
-    const storageOk = isStorageConfigured(config, { FILE_R2: c.env.FILE_R2 });
 
     c.set('db', db);
     c.set('stor', stor);

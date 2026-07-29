@@ -21,6 +21,22 @@ export interface SqlPreExtractResult {
   suggestedStorageFields?: Record<string, string>;
 }
 
+export interface PreFileRecord {
+  id: number;
+  name: string;
+  type: string;
+  size: number;
+  hash: string;
+  addtime: string;
+  lasttime: string;
+  ip: string;
+  hide: number;
+  pwd: string | null;
+  block: number;
+  count: number;
+  uid: number;
+}
+
 /**
  * 把 SQL 文本切成语句数组（按分号，且忽略字符串内的分号）
  * 同时去除行首 -- 注释
@@ -225,6 +241,42 @@ function countPreFileRows(stmt: string): number {
   if (!m) return 0;
   const groups = splitTopLevelCommas(m[1]);
   return groups.length;
+}
+
+/** 从 SQL 中提取 pre_file 记录，供恢复任务在 D1 尚未写入时使用。 */
+export function extractPreFileRecords(sqlText: string): PreFileRecord[] {
+  const records: PreFileRecord[] = [];
+  for (const stmt of splitStatements(sqlText)) {
+    const match = stmt.match(/^INSERT\s+INTO\s+[`"]?pre_file[`"]?\s*(?:\(([^)]+)\))?\s*VALUES\s*(.+)$/is);
+    if (!match) continue;
+    const columns = (match[1] || 'id,name,type,size,hash').split(',')
+      .map(c => c.trim().replace(/^[`"]|[`"]$/g, '').toLowerCase());
+    for (const group of splitTopLevelCommas(match[2])) {
+      const values = parseTuple(group);
+      const value = (column: string) => {
+        const index = columns.indexOf(column);
+        return index >= 0 && index < values.length ? unquote(values[index]) || '' : '';
+      };
+      const hash = value('hash');
+      if (!hash) continue;
+      records.push({
+        id: Number(value('id')) || records.length + 1,
+        name: value('name') || hash,
+        type: value('type'),
+        size: Number(value('size')) || 0,
+        hash,
+        addtime: value('addtime'),
+        lasttime: value('lasttime'),
+        ip: value('ip'),
+        hide: Number(value('hide')) || 0,
+        pwd: value('pwd') || null,
+        block: Number(value('block')) || 0,
+        count: Number(value('count')) || 0,
+        uid: Number(value('uid')) || 0,
+      });
+    }
+  }
+  return records;
 }
 
 /**

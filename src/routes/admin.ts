@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
 import { getDB, getStorOrThrow, getConf } from '../middleware';
-import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock } from '../db';
+import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock, getUserList, updateUser, deleteUser } from '../db';
 import { updateConfig, clearConfigCache } from '../config';
 import { verifyAdminToken } from '../auth/admin';
 import { typeToIcon, isView, getViewType, sizeFormat } from '../utils/mime';
@@ -55,6 +55,40 @@ adminAjax.post('/fileList', async (c) => {
   }));
 
   return jsonResult(c, { total, rows: rowsWithIcon });
+});
+
+adminAjax.post('/userList', async (c) => {
+  const db = getDB(c);
+  const body = await c.req.parseBody<Record<string, string>>();
+  const typeMap: Record<string, string> = { '1': 'uid', '2': 'openid', '3': 'nickname', '4': 'ip' };
+  const result = await getUserList(db, {
+    search: body.kw || '', type: typeMap[body.type || '3'],
+    enable: parseInt(body.dstatus ?? '-1'), offset: parseInt(body.offset || '0'), limit: parseInt(body.limit || '15'),
+  });
+  return jsonResult(c, result);
+});
+
+adminAjax.post('/setUserEnable', async (c) => {
+  const body = await c.req.parseBody<Record<string, string>>();
+  const uid = parseInt(body.uid || '0');
+  if (!uid) return jsonError(c, '参数错误');
+  await updateUser(getDB(c), uid, { enable: parseInt(body.enable || '0') });
+  return jsonResult(c, { code: 0, msg: '状态已更新' });
+});
+
+adminAjax.post('/saveUserInfo', async (c) => {
+  const body = await c.req.parseBody<Record<string, string>>();
+  const uid = parseInt(body.uid || '0');
+  if (!uid) return jsonError(c, '参数错误');
+  await updateUser(getDB(c), uid, { level: parseInt(body.level || '0') });
+  return jsonResult(c, { code: 0, msg: '用户信息已保存' });
+});
+
+adminAjax.post('/delUser', async (c) => {
+  const body = await c.req.parseBody<Record<string, string>>();
+  const uid = parseInt(body.uid || '0');
+  if (!uid) return jsonError(c, '参数错误');
+  return jsonResult(c, { code: 0, msg: (await deleteUser(getDB(c), uid)) ? '删除成功' : '用户不存在' });
 });
 
 // 封禁/解封文件
@@ -112,6 +146,18 @@ adminAjax.post('/operation', async (c) => {
 adminAjax.post('/saveSetting', async (c) => {
   const db = getDB(c);
   const body = await c.req.parseBody<Record<string, string>>();
+  if (body.oldpwd !== undefined || body.newpwd !== undefined || body.newpwd2 !== undefined) {
+    const config = getConf(c);
+    if (body.oldpwd !== config.admin_pwd) return jsonError(c, '当前管理员密码错误');
+    if (body.newpwd || body.newpwd2) {
+      if (body.newpwd !== body.newpwd2) return jsonError(c, '两次输入的新密码不一致');
+      if (body.newpwd.length < 4) return jsonError(c, '新密码至少需要 4 位');
+      await updateConfig(db, 'admin_pwd', body.newpwd);
+    }
+    if (body.admin_user) await updateConfig(db, 'admin_user', body.admin_user);
+    clearConfigCache();
+    return jsonResult(c, { code: 0, msg: '管理员账号已更新，请重新登录' });
+  }
   for (const [k, v] of Object.entries(body)) {
     if (k === 'submit') continue;
     await updateConfig(db, k, v);

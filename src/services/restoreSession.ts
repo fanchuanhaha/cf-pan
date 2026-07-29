@@ -28,6 +28,9 @@ export interface InstallSession {
   sourceUrl?: string;
   /** 是否走"全新安装"流程（不写 SQL） */
   freshInstall: boolean;
+  /** 已启动的文件恢复任务 ID */
+  taskId?: string;
+  taskStatus?: Record<string, unknown>;
 }
 
 const cache = new Map<string, InstallSession>();
@@ -47,6 +50,22 @@ interface DbSessionRow {
   selected_config: string | null;
   source_url: string | null;
   fresh_install: number;
+  task_id?: string | null;
+  task_status?: string | null;
+}
+
+/** 兼容已经创建过的本地/远程 install_session 表。 */
+async function ensureSessionSchema(db: D1Database): Promise<void> {
+  try {
+    await db.prepare('ALTER TABLE install_session ADD COLUMN task_id TEXT').run();
+  } catch {
+    // 字段已经存在时 SQLite/D1 会报错，忽略即可。
+  }
+  try {
+    await db.prepare('ALTER TABLE install_session ADD COLUMN task_status TEXT').run();
+  } catch {
+    // 字段已经存在时忽略。
+  }
 }
 
 function rowToSession(row: DbSessionRow): InstallSession {
@@ -60,6 +79,8 @@ function rowToSession(row: DbSessionRow): InstallSession {
     selectedConfig: row.selected_config ? JSON.parse(row.selected_config) : {},
     sourceUrl: row.source_url || undefined,
     freshInstall: row.fresh_install === 1,
+    taskId: row.task_id || undefined,
+    taskStatus: row.task_status ? JSON.parse(row.task_status) : undefined,
   };
 }
 
@@ -74,11 +95,14 @@ function sessionToRow(s: InstallSession): DbSessionRow {
     selected_config: JSON.stringify(s.selectedConfig || {}),
     source_url: s.sourceUrl || null,
     fresh_install: s.freshInstall ? 1 : 0,
+    task_id: s.taskId || null,
+    task_status: s.taskStatus ? JSON.stringify(s.taskStatus) : null,
   };
 }
 
 /** 从 D1 读取 session（自动检查过期） */
 async function loadFromDb(db: D1Database, id: string): Promise<InstallSession | null> {
+  await ensureSessionSchema(db);
   // 顺手清理过期记录（每 100 次调用清理一次）
   if (Math.random() < 0.01) {
     try {
@@ -100,14 +124,15 @@ async function loadFromDb(db: D1Database, id: string): Promise<InstallSession | 
 
 /** 把 session 写入 D1（覆盖） */
 async function saveToDb(db: D1Database, s: InstallSession): Promise<void> {
+  await ensureSessionSchema(db);
   const r = sessionToRow(s);
   await db.prepare(
-    `INSERT OR REPLACE INTO install_session
-       (id, created_at, sql_text, pre_extract, storage_type, storage_fields, selected_config, source_url, fresh_install)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     `INSERT OR REPLACE INTO install_session
+        (id, created_at, sql_text, pre_extract, storage_type, storage_fields, selected_config, source_url, fresh_install, task_id, task_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     r.id, r.created_at, r.sql_text, r.pre_extract,
-    r.storage_type, r.storage_fields, r.selected_config, r.source_url, r.fresh_install
+    r.storage_type, r.storage_fields, r.selected_config, r.source_url, r.fresh_install, r.task_id, r.task_status
   ).run();
 }
 
@@ -117,6 +142,10 @@ export async function createInstallSession(db: D1Database, opts: {
   preExtract: SqlPreExtractResult;
   freshInstall?: boolean;
 }): Promise<InstallSession> {
+  const selectedConfig: Record<string, string> = {};
+  for (const [key, value] of Object.entries(opts.preExtract.preConfig || {})) {
+    if (key !== 'storage') selectedConfig[key] = value;
+  }
   const sess: InstallSession = {
     id: genId(),
     createdAt: Date.now(),
@@ -124,7 +153,7 @@ export async function createInstallSession(db: D1Database, opts: {
     preExtract: opts.preExtract,
     storageType: '',
     storageFields: {},
-    selectedConfig: {},
+    selectedConfig,
     sourceUrl: undefined,
     freshInstall: !!opts.freshInstall,
   };
