@@ -8,7 +8,7 @@ import { getDB } from '../middleware';
 import { createStorage } from '../storage/factory';
 import { updateConfig, clearConfigCache, loadConfig } from '../config';
 import { jsonResult, jsonError } from '../utils/response';
-import { extractFromSql, filterPreConfigForApply } from '../services/restorePreExtract';
+import { extractFromSql, extractPreFileRecords, filterPreConfigForApply } from '../services/restorePreExtract';
 import {
   createInstallSession,
   getInstallSession,
@@ -47,44 +47,78 @@ function wizardPage(errorMsg: string = ''): string {
 <link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
 <link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css">
 <style>
-body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height: 100vh; padding: 20px 0; }
-.wizard-container { max-width: 820px; margin: 0 auto; background: #fff; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); overflow: hidden; }
-.wizard-header { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); color: #fff; padding: 24px 30px; }
-.wizard-header h2 { margin: 0 0 6px 0; font-weight: 400; font-size: 22px; }
-.wizard-header small { color: rgba(255,255,255,0.85); }
-.wizard-body { padding: 30px; min-height: 400px; }
-.wizard-footer { padding: 16px 30px; border-top: 1px solid #eee; display: flex; justify-content: space-between; }
-.steps-indicator { display: flex; padding: 12px 30px; background: #f8f9fa; border-bottom: 1px solid #eee; }
-.step-pill { flex: 1; text-align: center; font-size: 12px; color: #999; padding: 6px 0; position: relative; }
-.step-pill .num { display: inline-block; width: 22px; height: 22px; line-height: 22px; border-radius: 50%; background: #ddd; color: #fff; margin-right: 6px; }
-.step-pill.active { color: #2e8bcc; font-weight: 600; }
-.step-pill.active .num { background: #2e8bcc; }
-.step-pill.done { color: #5cb85c; }
-.step-pill.done .num { background: #5cb85c; }
+html, body { height: 100%; }
+body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; font-family: Arial, "Microsoft YaHei", sans-serif; }
+.wizard-container { width: 100%; min-height: 100%; margin: 0; background: #fff; border: 0; }
+.wizard-header { background: #3c78a8; color: #fff; padding: 14px 20px; border-bottom: 4px solid #28577d; }
+.wizard-header h2 { margin: 0 0 5px 0; font-weight: bold; font-size: 20px; }
+.wizard-header small { color: #e5edf4; }
+.wizard-body { padding: 20px 28px; min-height: 400px; }
+.wizard-footer { padding: 10px 20px; border-top: 1px solid #ccc; background: #f7f7f7; overflow: hidden; }
+.wizard-footer > * { float: left; }
+.wizard-footer > div { float: right; }
+.steps-indicator { padding: 0; background: #e9e9e9; border-bottom: 1px solid #bbb; overflow: hidden; }
+.step-pill { float: left; width: 25%; text-align: center; font-size: 12px; color: #777; padding: 9px 0; border-right: 1px solid #ccc; }
+.step-pill .num { display: inline-block; width: 20px; height: 20px; line-height: 20px; border-radius: 2px; background: #aaa; color: #fff; margin-right: 5px; }
+.step-pill.active { color: #245b85; font-weight: bold; background: #fff; }
+.step-pill.active .num { background: #3c78a8; }
+.step-pill.done { color: #38733e; background: #f5faf5; }
+.step-pill.done .num { background: #5b9661; }
 .step { display: none; }
-.step.active { display: block; animation: fadeIn 0.3s; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.choose-card { border: 2px solid #e7e7e7; border-radius: 8px; padding: 24px; cursor: pointer; transition: all 0.2s; height: 100%; text-align: center; background: #fff; }
-.choose-card:hover { border-color: #2e8bcc; box-shadow: 0 4px 12px rgba(46,139,204,0.15); }
-.choose-card i { font-size: 48px; color: #2e8bcc; margin-bottom: 12px; }
+.step.active { display: block; }
+.choose-card { border: 1px solid #bbb; padding: 18px; cursor: pointer; height: 100%; text-align: center; background: #fafafa; }
+.choose-card:hover { border-color: #3c78a8; background: #f0f6fb; }
+.choose-card i { font-size: 36px; color: #3c78a8; margin-bottom: 8px; }
 .choose-card h4 { margin: 8px 0; color: #333; }
 .choose-card p { color: #777; font-size: 13px; margin: 0; }
-.storage-tabs { display: flex; border-bottom: 2px solid #eee; margin-bottom: 20px; flex-wrap: wrap; }
-.storage-tab { padding: 10px 16px; cursor: pointer; background: #f8f9fa; color: #666; border: 1px solid #e7e7e7; border-bottom: none; transition: all 0.2s; font-size: 13px; }
-.storage-tab.active { background: #fff; color: #2e8bcc; font-weight: bold; border-bottom: 3px solid #2e8bcc; margin-bottom: -2px; }
+.storage-tabs { border-bottom: 1px solid #aaa; margin-bottom: 15px; overflow: hidden; }
+.storage-tab { float: left; padding: 7px 13px; cursor: pointer; background: #e9e9e9; color: #555; border: 1px solid #bbb; border-bottom: none; font-size: 13px; margin-right: 3px; }
+.storage-tab.active { background: #fff; color: #245b85; font-weight: bold; border-top: 2px solid #3c78a8; padding-top: 6px; }
 .storage-form { display: none; }
 .storage-form.active { display: block; }
 .required { color: #e44; }
-.btn-install { background: #2e8bcc; color: #fff; border: none; padding: 8px 24px; border-radius: 4px; cursor: pointer; }
-.btn-install:hover { background: #2976a8; color: #fff; }
+.btn-install { background: #3c78a8; color: #fff; border: 1px solid #28577d; padding: 6px 18px; cursor: pointer; }
+.btn-install:hover { background: #28577d; color: #fff; }
 .btn-install:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary { background: #6c757d; color: #fff; border: none; padding: 8px 24px; border-radius: 4px; cursor: pointer; }
-.config-list { max-height: 360px; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; }
+.btn-secondary { background: #777; color: #fff; border: 1px solid #555; padding: 6px 18px; cursor: pointer; }
+.config-list { max-height: 360px; overflow-y: auto; border: 1px solid #bbb; }
 .config-list table { margin: 0; }
 .config-list td { vertical-align: middle; font-size: 13px; }
-.config-list tr.selected { background: #f0f8ff; }
+.config-list tr.selected { background: #eef5fb; }
 .progress { margin-top: 8px; }
 .alert-warning { margin-top: 10px; }
+.button-row { overflow: hidden; }
+.button-row .btn { margin-right: 6px; }
+.finish-buttons { text-align: center; margin-top: 20px; }
+.finish-buttons .btn-install { margin: 0 4px; }
+@media (max-width: 640px) { .wizard-body { padding: 12px; } .wizard-header { padding: 12px; } .step-pill { font-size: 11px; } .step-pill .num { display: none; } }
+@media (prefers-color-scheme: dark) {
+  body { background: #000; color: #ddd; }
+  .wizard-container { background: #1d1d1d; color: #ddd; }
+  .wizard-body { background: #1d1d1d; }
+  .wizard-footer { background: #252525; border-color: #444; }
+  .steps-indicator { background: #252525; border-color: #444; }
+  .step-pill { color: #aaa; border-color: #444; }
+  .step-pill.active { background: #1d1d1d; color: #8fc7ef; }
+  .step-pill.done { background: #202a22; color: #8dcc95; }
+  .choose-card { background: #252525; border-color: #555; }
+  .choose-card:hover { background: #303b45; border-color: #6fa9d3; }
+  .choose-card h4, h3, h4, label { color: #ddd; }
+  .choose-card p, .text-muted, .help-block { color: #aaa; }
+  .storage-tab { background: #303030; color: #bbb; border-color: #555; }
+  .storage-tab.active { background: #1d1d1d; color: #8fc7ef; }
+  .form-control { background: #292929; color: #eee; border-color: #555; }
+  .form-control:focus { background: #303030; color: #fff; border-color: #6fa9d3; }
+  .config-list { border-color: #555; }
+  .config-list tr.selected { background: #263746; }
+  .table { color: #ddd; }
+  .table > thead > tr > th, .table > tbody > tr > td { border-color: #555; }
+  code { background: #303030; color: #f0c674; }
+  .alert-info { background: #203746; border-color: #37647c; color: #c6e5f5; }
+  .alert-success { background: #203a28; border-color: #3d744c; color: #c9efcf; }
+  .alert-warning { background: #40361d; border-color: #806b2e; color: #f2df9b; }
+  .alert-danger { background: #432525; border-color: #854545; color: #f3caca; }
+}
 </style>
 </head>
 <body>
@@ -102,7 +136,7 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
   </div>
 
   <div class="wizard-body">
-    ${errorMsg ? `<div class="alert alert-danger"><i class="fa fa-exclamation-triangle"></i> ${errorMsg}</div>` : ''}
+    ${errorMsg ? '<div class="alert alert-danger"><i class="fa fa-exclamation-triangle"></i> ' + errorMsg + '</div>' : ''}
 
     <!-- Step 0: 选择安装类型 -->
     <div class="step active" id="step-0">
@@ -184,6 +218,14 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
     <div class="step" id="step-2r">
       <h3 style="margin-top:0">从备份恢复 - 勾选配置 + 选择存储</h3>
       <div id="configWarnings"></div>
+      <div id="storageSuggestBanner" style="display:none; margin: 12px 0; padding: 14px 18px; border: 2px solid #2e8bcc; border-radius: 6px; background: #f0f8ff;">
+        <div style="font-weight:bold; font-size:14px; margin-bottom:8px; color:#2e8bcc"><i class="fa fa-lightbulb-o"></i> <span id="suggestTitle"></span></div>
+        <div id="suggestDetail" style="font-size:13px; color:#555; margin-bottom:12px"></div>
+        <div class="button-row">
+          <button type="button" class="btn btn-primary btn-sm" onclick="acceptSuggestedStorage()"><i class="fa fa-check"></i> 使用推荐存储</button>
+          <button type="button" class="btn btn-default btn-sm" onclick="dismissSuggestedStorage()"><i class="fa fa-times"></i> 不使用，手动选择</button>
+        </div>
+      </div>
       <h4 style="margin-top:18px"><i class="fa fa-list"></i> SQL 中提取到的 <code>pre_config</code> 项</h4>
       <p class="text-muted" style="font-size:13px">
         默认全部勾选。点击行可切换；<code>storage</code> 永远不导入，必须在下方重新选择。
@@ -220,12 +262,20 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
       </form>
       <div id="downloadProgress" style="display:none; margin-top:20px">
         <h4>下载进度</h4>
-        <div>总文件 / 已下载: <span id="dpTotal">0 / 0</span></div>
+        <div>已下载文件 / 总文件: <span id="dpTotal">0 / 0</span></div>
         <div class="progress"><div id="dpBarTotal" class="progress-bar progress-bar-info" style="width:0%">0%</div></div>
-        <div style="margin-top:8px">当前文件: <span id="dpCurrent">-</span></div>
-        <div class="progress"><div id="dpBarCurrent" class="progress-bar progress-bar-success" style="width:0%">0%</div></div>
+        <span id="dpTransferMode" class="text-muted"></span>
+        <div id="dpBytes" class="text-muted">已下载大小 / 总文件大小: 0 B / 0 B</div>
+        <div id="dpCurrentPanel">
+          <div style="margin-top:8px">当前文件: <span id="dpCurrent">-</span></div>
+          <div class="progress"><div id="dpBarCurrent" class="progress-bar progress-bar-info" style="width:0%">0%</div></div>
+          <div id="dpCurrentDetail" class="text-muted">当前文件: 0 B / 0 B，速度: 0 B/s</div>
+        </div>
         <div>成功 / 失败: <span id="dpResult">0 / 0</span></div>
+        <div>跳过文件: <span id="dpSkipped">0</span></div>
+        <div id="dpSkippedList" class="text-warning" style="margin-top:6px; max-height:180px; overflow:auto; white-space:pre-wrap"></div>
         <div id="dpStatus" class="text-muted" style="margin-top:6px"></div>
+        <div id="dpFailedList" class="text-danger" style="margin-top:6px; max-height:220px; overflow:auto; white-space:pre-wrap"></div>
       </div>
     </div>
 
@@ -235,9 +285,14 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
         <div style="font-size:64px; color:#5cb85c;"><i class="fa fa-check-circle"></i></div>
         <h2 style="margin-top:12px">安装完成！</h2>
         <p id="doneSummary" class="text-muted"></p>
-        <a href="/admin" class="btn-install" style="display:inline-block; text-decoration:none; margin-top:20px;">
-          <i class="fa fa-sign-in"></i> 进入管理后台
-        </a>
+        <div class="finish-buttons">
+          <a href="/" class="btn-install" style="display:inline-block; text-decoration:none;">
+            <i class="fa fa-home"></i> 返回主页
+          </a>
+          <a href="/admin" class="btn-install" style="display:inline-block; text-decoration:none;">
+            <i class="fa fa-sign-in"></i> 进入管理后台
+          </a>
+        </div>
       </div>
     </div>
   </div>
@@ -253,7 +308,12 @@ body { background: linear-gradient(135deg, #5bc0de 0%, #2e8bcc 100%); min-height
   </div>
 </div>
 
-<script>
+<script src="https://cdn.jsdelivr.net/npm/es6-promise@4/dist/es6-promise.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/es6-promise@4/dist/es6-promise.auto.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/core-js-bundle@3.45.1/minified.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/whatwg-fetch@3.6.20/dist/fetch.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.26.5/babel.min.js"></script>
+<script type="text/babel" data-presets="es2015,es2016,es2017">
 /* ==================== 状态 ==================== */
 const state = {
   mode: '',             // 'fresh' | 'restore'
@@ -263,8 +323,91 @@ const state = {
   preExtract: null,
   fileTaskId: '',
   filePollTimer: null,
+  applyInProgress: false,
   confirmedStorage: '', // 用户在 step-2r/fresh 中点"确定使用"后存到这
+  suggestedStorageName: '', // 检测到的推荐存储类型（如 qiniu）
+  suggestedStorageFields: {}, // 推荐存储的字段值
+  resumed: false,
 };
+
+async function saveDraft() {
+  if (!state.sessionId || !state.selectedConfig) return;
+  const fd = new FormData();
+  fd.set('sessionId', state.sessionId);
+  fd.set('config_json', JSON.stringify(state.selectedConfig));
+  try {
+    await fetch('/install/api/draft', { method: 'POST', body: fd, credentials: 'same-origin' });
+  } catch (e) {
+    console.warn('[install] draft save failed:', e);
+  }
+}
+
+async function restoreInstallSession() {
+  try {
+    const res = await fetch('/install/api/session', { credentials: 'same-origin' });
+    const json = await res.json();
+    const data = json.data;
+    if (!data) return;
+    state.resumed = true;
+    state.mode = 'restore';
+    state.sessionId = data.sessionId;
+    state.preExtract = data.preExtract;
+    state.selectedConfig = data.selectedConfig || {};
+    state.confirmedStorage = data.storageType || '';
+    state.fileTaskId = data.taskId || '';
+    renderConfigList();
+    renderWarnings();
+    document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
+    if (data.storageType) {
+      applySuggestedStorage(data.storageType, data.storageFields || {});
+      state.confirmedStorage = data.storageType;
+    }
+    if (data.sourceUrl) document.querySelector('#formSource input[name="source_url"]').value = data.sourceUrl;
+    if (data.taskId) {
+      showStep(3);
+      document.getElementById('downloadProgress').style.display = 'block';
+      const startButton = document.querySelector('#formSource button[type="submit"]');
+      if (startButton) {
+        startButton.disabled = true;
+        startButton.innerHTML = '<i class="fa fa-refresh fa-spin"></i> 已有任务进行中';
+      }
+      document.getElementById('dpStatus').innerText = '正在恢复任务进度...';
+      pollFileStatus();
+    } else if (data.storageType) {
+      showStep(2);
+    } else {
+      showStep(1);
+    }
+  } catch (e) {
+    console.warn('[install] session restore failed:', e);
+  }
+}
+
+/* ==================== 存储推荐提示 ==================== */
+function showStorageSuggest(storageType, fields, fieldSummary) {
+  state.suggestedStorageName = storageType;
+  state.suggestedStorageFields = fields;
+  const banner = document.getElementById('storageSuggestBanner');
+  document.getElementById('suggestTitle').textContent = '检测到备份包含完整的 ' + storageType + ' 配置';
+  document.getElementById('suggestDetail').innerHTML =
+    '虽然备份中 <code>storage=local</code>，但检测到完整的 ' + storageType + ' 云存储配置（' + fieldSummary + '）。是否直接使用这些配置？';
+  banner.style.display = 'block';
+}
+
+function acceptSuggestedStorage() {
+  const sug = state.suggestedStorageName;
+  const fields = state.suggestedStorageFields;
+  if (sug && fields) {
+    applySuggestedStorage(sug, fields);
+  }
+  document.getElementById('storageSuggestBanner').style.display = 'none';
+}
+
+function dismissSuggestedStorage() {
+  document.getElementById('storageSuggestBanner').style.display = 'none';
+  state.suggestedStorageName = '';
+  state.suggestedStorageFields = {};
+}
 
 /* ==================== 步骤导航 ==================== */
 function showStep(n) {
@@ -290,6 +433,7 @@ function showStep(n) {
   // 按钮
   const prev = document.getElementById('btnPrev');
   const next = document.getElementById('btnNext');
+  next.disabled = false;
   prev.style.display = n === 0 || n === 5 ? 'none' : '';
   if (n === 5) { next.style.display = 'none'; return; }
   if (n === 0) { next.style.display = 'none'; return; }
@@ -384,17 +528,13 @@ async function uploadSql() {
     renderWarnings();
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
     showStep(2);
-    // 智能建议：检测到原系统配置了非 local 存储时，提示用户
+    // 智能建议：检测到原系统配置了非 local 存储时，显示选择提示
     if (state.preExtract.suggestedStorage) {
       const sug = state.preExtract.suggestedStorage;
       const fields = state.preExtract.suggestedStorageFields || {};
       const fieldSummary = Object.keys(fields).length + ' 个字段（' + Object.keys(fields).join(', ') + '）';
       console.log('[install] 检测到原系统 storage=local 但有完整 ' + sug + ' 配置:', fields);
-      if (confirm('检测到您的原系统虽然 storage=local，但配置了完整的 ' + sug + '（' + fieldSummary + '）。\n\n是否切换到 ' + sug + ' 并自动填充这些配置？\n（点"取消"则继续手动选择其他存储）')) {
-        applySuggestedStorage(sug, fields);
-      } else {
-        console.log('[install] 用户取消了存储自动填充，保持手动选择');
-      }
+      showStorageSuggest(sug, fields, fieldSummary);
     }
   } catch (e) {
     console.error('[install] uploadSql error:', e);
@@ -417,6 +557,7 @@ function renderWarnings() {
 /* 把 SQL 里检测到的存储配置自动填到对应 tab 的表单，并切换到该 tab */
 function applySuggestedStorage(storageType, fields) {
   console.log('[install] applySuggestedStorage:', storageType, fields);
+  state.confirmedStorage = storageType;
   // 1) 切到对应 tab
   const tab = document.querySelector('#restoreStorageTabs .storage-tab[data-target="restore-form-' + storageType + '"]');
   if (tab) {
@@ -430,21 +571,27 @@ function applySuggestedStorage(storageType, fields) {
     console.warn('[install] 找不到 tab: restore-form-' + storageType);
   }
   // 2) 填字段
+  let filled = 0;
   for (const [k, v] of Object.entries(fields)) {
     const inp = document.querySelector('#step-2r input[name="restore_' + k + '"]');
     if (inp) {
       inp.value = v;
+      filled++;
       console.log('[install] 填充字段', k, '=', v.length > 40 ? v.substring(0, 40) + '...' : v);
     } else {
-      console.warn('[install] 找不到 input: restore_' + k);
+      console.warn('[install] 找不到 input: restore-' + k);
     }
   }
-  // 3) 提示用户
+  // 3) 显示已确认角标
+  document.querySelectorAll('[id$="confirmedBadge"]').forEach(b => b.style.display = 'none');
+  const badge = document.getElementById('restore-confirmedBadge');
+  if (badge) badge.style.display = 'inline';
+  // 4) 提示用户
   const tip = document.getElementById('restoreTestResult');
   if (tip) {
     tip.style.display = 'block';
-    tip.className = 'alert alert-info';
-    tip.innerHTML = '<i class="fa fa-info-circle"></i> 已自动从原 SQL 填入 ' + storageType + ' 配置（' + Object.keys(fields).length + ' 个字段）。请检查后点"测试读写"，或继续点"确定"使用。';
+    tip.className = 'alert alert-success';
+    tip.innerHTML = '<i class="fa fa-check"></i> 已自动从原 SQL 填入 ' + storageType + ' 配置（' + filled + ' 个字段）。可直接点"下一步"继续。';
   }
 }
 
@@ -456,16 +603,30 @@ function renderConfigList() {
     box.innerHTML = '<div style="padding:20px; text-align:center; color:#999">SQL 中未检测到 pre_config 数据</div>';
     return;
   }
+  const hasRestoredConfig = state.resumed;
+  const restoredConfig = state.selectedConfig || {};
+  state.selectedConfig = {};
   let html = '<table class="table table-condensed table-hover"><thead><tr><th style="width:40px">使用</th><th>键</th><th>值</th></tr></thead><tbody>';
   for (const k of keys) {
-    const checked = k === 'storage' ? '' : 'checked';
+    if (k === 'storage') {
+      html += '<tr class="text-muted">' +
+        '<td><input type="checkbox" disabled></td>' +
+        '<td><code>' + escapeHtml(k) + '</code></td>' +
+        '<td><span style="font-size:12px">（不导入，请在下方重新选择存储类型）</span></td>' +
+        '</tr>';
+      continue;
+    }
     const v = (cfg[k] || '').toString();
-    const display = v.length > 60 ? v.substring(0, 60) + '...' : v;
-    const skip = k === 'storage' ? '<span class="text-muted" style="font-size:12px">（不导入）</span>' : '';
-    html += '<tr class="' + (checked ? 'selected' : '') + '">' +
-      '<td><input type="checkbox" data-key="' + k + '" ' + checked + (k === 'storage' ? ' disabled' : '') + ' onchange="toggleConfig(this)"></td>' +
+    if (hasRestoredConfig && Object.prototype.hasOwnProperty.call(restoredConfig, k)) {
+      state.selectedConfig[k] = restoredConfig[k];
+    } else if (!hasRestoredConfig) {
+      state.selectedConfig[k] = v;
+    }
+    const checked = Object.prototype.hasOwnProperty.call(state.selectedConfig, k);
+    html += '<tr class="selected">' +
+      '<td><input type="checkbox" data-key="' + escapeHtml(k) + '"' + (checked ? ' checked' : '') + ' onchange="toggleConfig(this)"></td>' +
       '<td><code>' + escapeHtml(k) + '</code></td>' +
-      '<td><span title="' + escapeHtml(v) + '">' + escapeHtml(display) + '</span> ' + skip + '</td>' +
+      '<td><input type="text" class="form-control input-sm" data-key="' + escapeHtml(k) + '" value="' + escapeHtml(state.selectedConfig[k]) + '" oninput="editConfigValue(this)"></td>' +
       '</tr>';
   }
   html += '</tbody></table>';
@@ -475,12 +636,24 @@ function renderConfigList() {
 function toggleConfig(cb) {
   const k = cb.dataset.key;
   const tr = cb.closest('tr');
+  const inp = tr.querySelector('input[type="text"]');
   if (cb.checked) {
-    state.selectedConfig[k] = state.preExtract.preConfig[k];
+    state.selectedConfig[k] = inp ? inp.value : state.preExtract.preConfig[k];
     tr.classList.add('selected');
   } else {
     delete state.selectedConfig[k];
     tr.classList.remove('selected');
+  }
+  saveDraft();
+}
+
+function editConfigValue(inp) {
+  const k = inp.dataset.key;
+  const cb = inp.closest('tr').querySelector('input[type="checkbox"]');
+  if (cb && cb.checked) {
+    state.selectedConfig[k] = inp.value;
+    saveDraft();
+    saveDraft();
   }
 }
 
@@ -489,42 +662,47 @@ async function setStorage(prefix) {
   const storageType = storageTypeEl(prefix).value;
   fd.set('storage_type', storageType);
   console.log('[install] setStorage: prefix=' + prefix + ', storageType=' + storageType);
+  const activeForm = document.querySelector('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' .storage-form.active');
   const fields = [];
-  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
-    if (inp.name) {
-      fd.set(inp.name.replace(prefix, ''), inp.value);
-      fields.push(inp.name.replace(prefix, '') + '=' + (inp.value ? (inp.name.includes('token') || inp.name.includes('sk') || inp.name.includes('pass') ? '***' : inp.value) : '(空)'));
-    }
-  });
+  if (activeForm) {
+    const stripPrefix = prefix.replace(/-$/, '_');
+    activeForm.querySelectorAll('input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
+      if (inp.name) {
+        fd.set(inp.name.replace(stripPrefix, ''), inp.value);
+        fields.push(inp.name.replace(stripPrefix, '') + '=' + (inp.value ? (inp.name.includes('token') || inp.name.includes('sk') || inp.name.includes('pass') ? '***' : inp.value) : '(空)'));
+      }
+    });
+  }
   console.log('[install] setStorage: 收集到', fields.length, '个字段:', fields);
   return fd;
 }
 
 async function applyConfigAndComplete() {
+  if (state.applyInProgress) {
+    console.warn('[install] applyConfigAndComplete: 请求已在处理中，忽略重复点击');
+    return;
+  }
   const cfg = state.selectedConfig;
   // 检查 storage 是否已"确定"
   if (!state.confirmedStorage) {
-    const result = document.getElementById('restoreTestResult');
-    result.style.display = 'block';
-    result.className = 'alert alert-warning';
-    result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> 请先选择一个存储 tab，点"测试读写"验证后点"确定使用"再继续。';
+    const next = document.getElementById('btnNext');
+    next.innerHTML = '<i class="fa fa-exclamation-triangle"></i> 请先确认存储';
+    setTimeout(() => { if (!state.applyInProgress) next.innerHTML = '应用配置并完成'; }, 2000);
     return;
   }
   console.log('[install] applyConfigAndComplete: confirmedStorage=' + state.confirmedStorage + ', selectedConfig keys=' + Object.keys(cfg).length);
+  state.applyInProgress = true;
+  const next = document.getElementById('btnNext');
+  next.disabled = true;
+  next.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 应用中...';
   const fd = await setStorage('restore-');
   fd.set('sessionId', state.sessionId);
   fd.set('config_json', JSON.stringify(cfg));
   console.log('[install] applyConfigAndComplete: fd 中 storage_type=' + fd.get('storage_type'));
-  const result = document.getElementById('restoreTestResult');
-  result.style.display = 'block';
-  result.className = 'alert alert-info';
-  result.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 正在应用配置、写入 D1...';
   try {
     const res = await fetch('/install/api/config-apply', { method: 'POST', body: fd, credentials: 'same-origin' });
     const json = await res.json();
     if (json.code !== 0) throw new Error(json.msg || '应用失败');
-    result.className = 'alert alert-success';
-    result.innerHTML = '<i class="fa fa-check"></i> 配置已应用';
     // 是否需要下载文件？
     if (state.preExtract.fileCount > 0) {
       // 跳到 step 3r 输入原站点
@@ -536,8 +714,10 @@ async function applyConfigAndComplete() {
       showStep(5);
     }
   } catch (e) {
-    result.className = 'alert alert-danger';
-    result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+    next.innerHTML = '<i class="fa fa-exclamation-triangle"></i> 应用失败';
+    state.applyInProgress = false;
+    next.disabled = false;
+    setTimeout(() => { if (!state.applyInProgress) next.innerHTML = '<i class="fa fa-check"></i> 应用配置并完成'; }, 2000);
   }
 }
 
@@ -548,13 +728,19 @@ async function startFileDownload() {
   const prog = document.getElementById('downloadProgress');
   prog.style.display = 'block';
   document.getElementById('dpStatus').innerText = '正在启动...';
+  console.log('[install] files-from-source: 提交下载任务', {
+    sourceUrl: fd.get('source_url'),
+    sessionId: state.sessionId,
+  });
   try {
     const res = await fetch('/install/api/files-from-source', { method: 'POST', body: fd, credentials: 'same-origin' });
     const json = await res.json();
     if (json.code !== 0) throw new Error(json.msg || '启动失败');
     state.fileTaskId = json.data.taskId;
+    console.log('[install] files-from-source: 任务已启动 taskId=' + state.fileTaskId, json);
     pollFileStatus();
   } catch (e) {
+    console.error('[install] files-from-source: 启动异常', e);
     document.getElementById('dpStatus').innerText = '启动失败: ' + e.message;
     document.getElementById('dpStatus').className = 'text-danger';
   }
@@ -572,31 +758,68 @@ function pollFileStatus() {
         return;
       }
       const s = json.data;
+      console.log('[install] files-from-source: status', {
+        taskId: state.fileTaskId,
+        status: s.status,
+        stage: s.stage,
+        processed: s.processed,
+        total: s.total,
+        success: s.success,
+        failed: s.failed,
+        currentItem: s.currentItem,
+        currentFileStage: s.currentFileStage,
+        currentFileReceived: s.currentFileReceived,
+        currentFileTotal: s.currentFileTotal,
+        message: s.message,
+        errors: s.errors,
+        logs: s.logs,
+      });
       document.getElementById('dpTotal').innerText = s.processed + ' / ' + s.total;
       document.getElementById('dpResult').innerText = s.success + ' / ' + s.failed;
+      document.getElementById('dpSkipped').innerText = (s.skipped && s.skipped.length) || 0;
+      if (s.skipped && s.skipped.length) {
+        document.getElementById('dpSkippedList').innerText = s.skipped.join('\\n');
+      }
+      if (s.errors && s.errors.length) {
+        document.getElementById('dpFailedList').innerText = '失败文件:\\n' + s.errors.join('\\n');
+      }
       const pct = s.total > 0 ? Math.floor(s.processed * 100 / s.total) : 0;
       document.getElementById('dpBarTotal').style.width = pct + '%';
       document.getElementById('dpBarTotal').innerText = pct + '%';
-      if (s.currentFileName) {
-        document.getElementById('dpCurrent').innerText = s.currentFileName;
+      var chunked = !!s.currentFileChunked;
+      document.getElementById('dpCurrentPanel').style.display = 'block';
+      document.getElementById('dpTransferMode').innerText = chunked ? '（文件过大，尝试分片上传）' : '';
+      document.getElementById('dpBytes').innerText = '已下载大小 / 总文件大小: ' + formatSize(s.processedBytes || 0) + ' / ' + formatSize(s.totalBytes || 0);
+      if (s.currentItem) {
+        document.getElementById('dpCurrent').innerText = s.currentItem;
         const cpct = s.currentFileTotal > 0 ? Math.floor(s.currentFileReceived * 100 / s.currentFileTotal) : 0;
         document.getElementById('dpBarCurrent').style.width = cpct + '%';
         document.getElementById('dpBarCurrent').innerText = cpct + '%';
+        document.getElementById('dpBarCurrent').className = 'progress-bar ' + (s.currentFileStage === 'upload' ? 'progress-bar-success' : 'progress-bar-info');
+        document.getElementById('dpCurrentDetail').innerText = (s.currentFileStage === 'upload' ? '上传中: ' : '下载中: ') + formatSize(s.currentFileReceived || 0) + ' / ' + formatSize(s.currentFileTotal || 0) + '，速度: ' + formatSize(s.currentFileSpeed || 0) + '/s';
+        document.getElementById('dpStatus').innerText = s.currentFileStage === 'upload'
+          ? '正在下载并上传到目标存储: ' + s.currentItem
+          : (s.message || '正在从原站点下载: ' + s.currentItem);
       }
       if (s.status === 'completed') {
         clearInterval(state.filePollTimer);
-        document.getElementById('dpStatus').innerText = '下载完成 ✅';
+        document.getElementById('dpStatus').innerText = s.failed > 0 ? '处理完成，但有 ' + s.failed + ' 个文件失败' : '下载并上传完成 ✅';
         const sum = document.getElementById('doneSummary');
-        sum.innerText = '文件下载完成: 成功 ' + s.success + '，失败 ' + s.failed;
-        setTimeout(() => showStep(5), 1200);
+        sum.innerText = '文件处理完成: 上传成功 ' + s.success + '，跳过 ' + ((s.skipped && s.skipped.length) || 0) + '，失败 ' + s.failed;
+        if (s.failed === 0) setTimeout(() => showStep(5), 1200);
       } else if (s.status === 'failed') {
         clearInterval(state.filePollTimer);
-        document.getElementById('dpStatus').innerText = '下载失败: ' + (s.errors && s.errors[0] || '未知错误');
+        const error = s.errors && s.errors.length ? s.errors.join('；') : (s.message || '服务端未返回具体错误');
+        document.getElementById('dpStatus').innerText = '下载失败: ' + error;
+        document.getElementById('dpFailedList').innerText = s.errors && s.errors.length
+          ? '失败文件:\\n' + s.errors.join('\\n')
+          : '失败文件明细未返回，请查看 F12 控制台日志';
+        console.error('[install] files-from-source: 任务失败', { taskId: state.fileTaskId, error, status: s });
       } else {
         document.getElementById('dpStatus').innerText = s.message || ('正在下载 ' + s.processed + '/' + s.total);
       }
     } catch (e) {
-      console.error(e);
+      console.error('[install] files-from-source: 轮询异常', e);
     }
   }, 1000);
 }
@@ -606,28 +829,35 @@ function storageTypeEl(prefix) {
   return document.getElementById(prefix.replace(/-$/, '') + '_storage_type');
 }
 
+function activeStorageForm(prefix) {
+  const rootId = prefix === 'fresh-' ? 'step-1f' : 'step-2r';
+  return document.querySelector('#' + rootId + ' .storage-form.active');
+}
+
 /* ==================== 存储测试 ==================== */
 async function testStorage(prefix) {
-  const div = document.getElementById(prefix + 'testResult');
-  if (!div) {
-    console.error('[install] testStorage: 找不到 div #' + prefix + 'testResult');
+  const activeForm = activeStorageForm(prefix);
+  if (!activeForm) {
+    console.error('[install] testStorage: 找不到当前存储表单 ' + prefix);
     return;
   }
   console.log('[install] testStorage: prefix=' + prefix + ', storageType=' + storageTypeEl(prefix).value);
-  div.className = 'alert alert-info';
-  div.style.display = 'block';
-  div.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 测试中（已发送 fetch，请观察浏览器 Network 标签和 F12 Console）...';
+  const testBtn = activeForm.querySelector('button[onclick*="testStorage"]');
+  if (testBtn) {
+    testBtn.disabled = true;
+    testBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 测试中...';
+  }
   const fd = new FormData();
   fd.set('storage_type', storageTypeEl(prefix).value);
   const fields = [];
-  document.querySelectorAll('#step-' + (prefix === 'fresh-' ? '1f' : '2r') + ' input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
+  const stripPrefix = prefix.replace(/-$/, '_');
+  activeForm.querySelectorAll('input[name^="' + prefix.slice(0, -1) + '_"]').forEach(inp => {
     if (inp.name) {
-      fd.set(inp.name.replace(prefix, ''), inp.value);
-      fields.push(inp.name + '=' + (inp.value ? '***' : '(空)'));
+      fd.set(inp.name.replace(stripPrefix, ''), inp.value);
+      fields.push(inp.name.replace(stripPrefix, '') + '=' + (inp.value ? '***' : '(空)'));
     }
   });
   console.log('[install] testStorage: 收集到字段', fields);
-  // 上传一个真实测试文件（后端写存储后读取验证并删除）
   const testContent = 'install-test-' + Date.now();
   const testBlob = new Blob([testContent], { type: 'text/plain' });
   fd.set('test_file', testBlob, '_install_test_' + Date.now() + '.txt');
@@ -638,38 +868,88 @@ async function testStorage(prefix) {
     const json = await res.json();
     console.log('[install] testStorage: 响应 JSON', json);
     if (json.code === 0 && json.data && json.data.ok) {
-      div.className = 'alert alert-success';
-      div.innerHTML = '<i class="fa fa-check"></i> ' + (json.data.message || '测试通过');
+      if (testBtn) {
+        testBtn.disabled = false;
+        testBtn.className = 'btn btn-sm btn-success';
+        testBtn.innerHTML = '<i class="fa fa-check"></i> 测试成功';
+      }
     } else {
-      div.className = 'alert alert-danger';
-      div.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + (json.msg || json.data?.message || '测试失败');
+      if (testBtn) {
+        testBtn.disabled = false;
+        testBtn.className = 'btn btn-sm btn-danger';
+        testBtn.innerHTML = '<i class="fa fa-times"></i> 测试失败';
+      }
     }
   } catch (e) {
     console.error('[install] testStorage: fetch 异常', e);
-    div.className = 'alert alert-danger';
-    div.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
+    if (testBtn) {
+      testBtn.disabled = false;
+      testBtn.className = 'btn btn-sm btn-danger';
+      testBtn.innerHTML = '<i class="fa fa-times"></i> 测试失败';
+    }
   }
 }
 
 /* 用户点击"确定使用"按钮：把当前 tab 的 storageType 锁定为已确认 */
-function confirmStorage(prefix) {
+async function confirmStorage(prefix) {
   const type = storageTypeEl(prefix).value;
   console.log('[install] confirmStorage: prefix=' + prefix + ', type=' + type);
   if (!type) {
     alert('请先选择存储类型');
     return;
   }
+  const activeForm = activeStorageForm(prefix);
+  const rootId = prefix === 'fresh-' ? 'step-1f' : 'step-2r';
+  const confirmBtn = activeForm && activeForm.querySelector('button[onclick*="confirmStorage"]');
+  if (prefix === 'restore-') {
+    if (!state.sessionId) {
+      if (confirmBtn) {
+        confirmBtn.className = 'btn btn-sm btn-danger';
+        confirmBtn.innerHTML = '<i class="fa fa-times"></i> 会话失效';
+      }
+      return;
+    }
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 保存中...';
+    }
+    try {
+      const fd = await setStorage(prefix);
+      fd.set('sessionId', state.sessionId);
+      const res = await fetch('/install/api/storage-set', {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+      });
+      const json = await res.json();
+      if (json.code !== 0) throw new Error(json.msg || '保存存储配置失败');
+    } catch (e) {
+      console.error('[install] confirmStorage: 保存失败', e);
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = '<i class="fa fa-check"></i> 确定使用';
+      }
+      if (confirmBtn) {
+        confirmBtn.className = 'btn btn-sm btn-danger';
+        confirmBtn.innerHTML = '<i class="fa fa-times"></i> 保存失败';
+      }
+      return;
+    }
+  }
   state.confirmedStorage = type;
-  // 显示"已确认"角标
-  document.querySelectorAll('[id$="confirmedBadge"]').forEach(b => b.style.display = 'none');
-  const badge = document.getElementById(prefix + 'confirmedBadge');
+  document.querySelectorAll('#' + rootId + ' [id$="confirmedBadge"]').forEach(b => b.style.display = 'none');
+  const badge = activeForm && activeForm.querySelector('[id$="confirmedBadge"]');
   if (badge) badge.style.display = 'inline';
-  // 在结果区显示
-  const div = document.getElementById(prefix + 'testResult');
-  if (div) {
-    div.style.display = 'block';
-    div.className = 'alert alert-success';
-    div.innerHTML = '<i class="fa fa-check-circle"></i> 已确认使用 ' + type + '，可点"下一步"继续。';
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.className = 'btn btn-sm btn-success';
+    confirmBtn.innerHTML = '<i class="fa fa-check"></i> 已确认使用';
+  }
+  const testBtn = activeForm && activeForm.querySelector('button[onclick*="testStorage"]');
+  if (testBtn && !testBtn.classList.contains('btn-success')) {
+    testBtn.className = 'btn btn-sm btn-success';
+    testBtn.innerHTML = '<i class="fa fa-check"></i> 测试成功';
+    testBtn.disabled = false;
   }
 }
 
@@ -691,12 +971,25 @@ function bindStorageTabs(prefix) {
 }
 bindStorageTabs('fresh-');
 bindStorageTabs('restore-');
+restoreInstallSession();
 
 /* ==================== 工具 ==================== */
 function escapeHtml(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function formatSize(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = Number(bytes);
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index++;
+  }
+  return (index === 0 ? Math.round(value) : value.toFixed(2)) + ' ' + units[index];
 }
 </script>
 </body>
@@ -707,82 +1000,83 @@ function escapeHtml(s) {
  * 6 个存储表单（共用代码：fresh- 前缀和 restore- 前缀同时渲染）
  * ---------------------------------------------------------------------- */
 function renderStorageForms(prefix: string): string {
+  const p = prefix.replace(/-$/, '_');
   return `
     <div class="storage-form active" id="${prefix}form-r2">
       <div class="alert alert-info">R2 存储桶需在 Cloudflare Dashboard 中手动创建，wrangler.toml 中已绑定 <code>FILE_R2</code>。</div>
-      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
-      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
+      <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
+      <div id="${prefix}testResult" style="display:none"></div>
     </div>
     <div class="storage-form" id="${prefix}form-s3">
       <div class="form-group"><label>Endpoint <span class="required">*</span></label>
-        <input type="text" name="${prefix}s3_endpoint" class="form-control" placeholder="https://s3.amazonaws.com"></div>
+        <input type="text" name="${p}s3_endpoint" class="form-control" placeholder="https://s3.amazonaws.com"></div>
       <div class="form-group"><label>Region <span class="required">*</span></label>
-        <input type="text" name="${prefix}s3_region" class="form-control" placeholder="us-east-1"></div>
+        <input type="text" name="${p}s3_region" class="form-control" placeholder="us-east-1"></div>
       <div class="form-group"><label>Bucket <span class="required">*</span></label>
-        <input type="text" name="${prefix}s3_bucket" class="form-control"></div>
+        <input type="text" name="${p}s3_bucket" class="form-control"></div>
       <div class="form-group"><label>AccessKey ID <span class="required">*</span></label>
-        <input type="text" name="${prefix}s3_ak" class="form-control"></div>
+        <input type="text" name="${p}s3_ak" class="form-control"></div>
       <div class="form-group"><label>SecretAccessKey <span class="required">*</span></label>
-        <input type="password" name="${prefix}s3_sk" class="form-control"></div>
-      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
-      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
+        <input type="password" name="${p}s3_sk" class="form-control"></div>
+      <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
+      <div id="${prefix}testResult" style="display:none"></div>
     </div>
     <div class="storage-form" id="${prefix}form-github">
       <div class="alert alert-info">需要 Token 具备 <code>repo</code> 权限。</div>
       <div class="form-group"><label>仓库 Owner <span class="required">*</span></label>
-        <input type="text" name="${prefix}gh_owner" class="form-control" placeholder="octocat"></div>
+        <input type="text" name="${p}gh_owner" class="form-control" placeholder="octocat"></div>
       <div class="form-group"><label>仓库名 <span class="required">*</span></label>
-        <input type="text" name="${prefix}gh_repo" class="form-control"></div>
+        <input type="text" name="${p}gh_repo" class="form-control"></div>
       <div class="form-group"><label>Personal Access Token <span class="required">*</span></label>
-        <input type="password" name="${prefix}gh_token" class="form-control" placeholder="ghp_xxx"></div>
+        <input type="password" name="${p}gh_token" class="form-control" placeholder="ghp_xxx"></div>
       <div class="form-group"><label>分支（留空用默认）</label>
-        <input type="text" name="${prefix}gh_ref" class="form-control" placeholder="main"></div>
+        <input type="text" name="${p}gh_ref" class="form-control" placeholder="main"></div>
       <div class="form-group"><label>API Base</label>
-        <input type="text" name="${prefix}gh_api_base" class="form-control" value="https://api.github.com"></div>
-      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
-      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
+        <input type="text" name="${p}gh_api_base" class="form-control" value="https://api.github.com"></div>
+      <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
+      <div id="${prefix}testResult" style="display:none"></div>
     </div>
     <div class="storage-form" id="${prefix}form-webdav">
       <div class="form-group"><label>WebDAV 服务地址 <span class="required">*</span></label>
-        <input type="text" name="${prefix}webdav_endpoint" class="form-control" placeholder="https://dav.example.com/remote.php/webdav/"></div>
+        <input type="text" name="${p}webdav_endpoint" class="form-control" placeholder="https://dav.example.com/remote.php/webdav/"></div>
       <div class="form-group"><label>用户名 <span class="required">*</span></label>
-        <input type="text" name="${prefix}webdav_user" class="form-control"></div>
+        <input type="text" name="${p}webdav_user" class="form-control"></div>
       <div class="form-group"><label>密码 <span class="required">*</span></label>
-        <input type="password" name="${prefix}webdav_pass" class="form-control"></div>
+        <input type="password" name="${p}webdav_pass" class="form-control"></div>
       <div class="form-group"><label>存储子目录</label>
-        <input type="text" name="${prefix}webdav_folder" class="form-control" value="file"></div>
-      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
-      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
+        <input type="text" name="${p}webdav_folder" class="form-control" value="file"></div>
+      <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
+      <div id="${prefix}testResult" style="display:none"></div>
     </div>
     <div class="storage-form" id="${prefix}form-upyun">
       <div class="form-group"><label>服务名 (Bucket) <span class="required">*</span></label>
-        <input type="text" name="${prefix}upyun_bucket" class="form-control"></div>
+        <input type="text" name="${p}upyun_bucket" class="form-control"></div>
       <div class="form-group"><label>操作员 <span class="required">*</span></label>
-        <input type="text" name="${prefix}upyun_operator" class="form-control"></div>
+        <input type="text" name="${p}upyun_operator" class="form-control"></div>
       <div class="form-group"><label>操作员密码 <span class="required">*</span></label>
-        <input type="password" name="${prefix}upyun_password" class="form-control"></div>
+        <input type="password" name="${p}upyun_password" class="form-control"></div>
       <div class="form-group"><label>API 端点</label>
-        <input type="text" name="${prefix}upyun_endpoint" class="form-control" value="https://v0.api.upyun.com"></div>
+        <input type="text" name="${p}upyun_endpoint" class="form-control" value="https://v0.api.upyun.com"></div>
       <div class="form-group"><label>加速域名</label>
-        <input type="text" name="${prefix}upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com"></div>
+        <input type="text" name="${p}upyun_domain" class="form-control" placeholder="https://xxx.b0.upaiyun.com"></div>
       <div class="form-group"><label>存储子目录</label>
-        <input type="text" name="${prefix}upyun_folder" class="form-control" value="file"></div>
-      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
-      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
+        <input type="text" name="${p}upyun_folder" class="form-control" value="file"></div>
+      <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
+      <div id="${prefix}testResult" style="display:none"></div>
     </div>
     <div class="storage-form" id="${prefix}form-qiniu">
       <div class="form-group"><label>AccessKey (AK) <span class="required">*</span></label>
-        <input type="text" name="${prefix}qiniu_ak" class="form-control"></div>
+        <input type="text" name="${p}qiniu_ak" class="form-control"></div>
       <div class="form-group"><label>SecretKey (SK) <span class="required">*</span></label>
-        <input type="password" name="${prefix}qiniu_sk" class="form-control"></div>
+        <input type="password" name="${p}qiniu_sk" class="form-control"></div>
       <div class="form-group"><label>Bucket <span class="required">*</span></label>
-        <input type="text" name="${prefix}qiniu_bucket" class="form-control"></div>
+        <input type="text" name="${p}qiniu_bucket" class="form-control"></div>
       <div class="form-group"><label>空间绑定域名</label>
-        <input type="text" name="${prefix}qiniu_domain" class="form-control" placeholder="https://cdn.example.com"></div>
+        <input type="text" name="${p}qiniu_domain" class="form-control" placeholder="https://cdn.example.com"></div>
       <div class="form-group"><label>存储子目录</label>
-        <input type="text" name="${prefix}qiniu_folder" class="form-control" value="file"></div>
-      <div style="display:flex; gap:8px; align-items:center"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
-      <div id="${prefix}testResult" class="text-muted" style="margin-top:8px"></div>
+        <input type="text" name="${p}qiniu_folder" class="form-control" value="file"></div>
+      <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
+      <div id="${prefix}testResult" style="display:none"></div>
     </div>
   `;
 }
@@ -793,12 +1087,96 @@ function renderStorageForms(prefix: string): string {
 
 /** GET /install - 安装向导首页 */
 install.get('/', async (c) => {
+  try {
+    const db = getDB(c);
+    const { results } = await db.prepare("SELECT v FROM pre_config WHERE k='installed'").all<{ v: string }>();
+    if (results[0]?.v === '1') {
+      return c.html(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>已安装 - 彩虹外链网盘</title>
+<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+<link rel="stylesheet" href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css">
+<style>
+body { background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+.install-locked { background: #fff; padding: 40px 50px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.13); text-align: center; max-width: 500px; }
+.install-locked i { font-size: 48px; color: #5b9661; margin-bottom: 15px; }
+.install-locked h3 { margin: 10px 0; color: #333; }
+.install-locked p { color: #777; margin: 8px 0 20px; line-height: 1.6; }
+.install-locked a { color: #3c78a8; text-decoration: none; }
+.install-locked a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="install-locked">
+  <i class="fa fa-check-circle"></i>
+  <h3>你已经成功安装</h3>
+  <p>如需重新安装，请在 Cloudflare D1 数据库中执行以下 SQL 删除安装锁：</p>
+  <code>DELETE FROM pre_config WHERE k='installed';</code>
+  <p style="margin-top:20px"><a href="/"><i class="fa fa-home"></i> 返回首页</a> &nbsp;|&nbsp; <a href="/admin"><i class="fa fa-cog"></i> 管理后台</a></p>
+</div>
+</body>
+</html>`, 200, { 'Content-Type': 'text/html; charset=utf-8' });
+    }
+  } catch {}
   return c.html(wizardPage());
 });
 
 /** GET /install (兼容无尾斜杠) */
 install.get('', async (c) => {
+  try {
+    const db = getDB(c);
+    const { results } = await db.prepare("SELECT v FROM pre_config WHERE k='installed'").all<{ v: string }>();
+    if (results[0]?.v === '1') {
+      return c.redirect('/install/', 302);
+    }
+  } catch {}
   return c.html(wizardPage());
+});
+
+/** GET /install/api/session - 刷新安装向导后恢复会话状态 */
+install.get('/api/session', async (c) => {
+  try {
+    const db = getDB(c);
+    const sessionId = readSessionId(c.req.raw);
+    if (!sessionId) return jsonResult(c, { code: 0, data: null });
+    const sess = await getInstallSession(db, sessionId);
+    if (!sess || sess.freshInstall) return jsonResult(c, { code: 0, data: null });
+    return new Response(JSON.stringify({
+      code: 0,
+      data: {
+        sessionId: sess.id,
+        preExtract: sess.preExtract,
+        storageType: sess.storageType,
+        storageFields: sess.storageFields,
+        selectedConfig: sess.selectedConfig,
+        sourceUrl: sess.sourceUrl || '',
+        taskId: sess.taskId || '',
+        taskStatus: sess.taskStatus || null,
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': sessionSetCookieHeader(sess.id) } });
+  } catch (e: any) {
+    return jsonError(c, '恢复安装会话失败: ' + (e.message || e));
+  }
+});
+
+/** POST /install/api/draft - 保存用户修改的配置勾选和值 */
+install.post('/api/draft', async (c) => {
+  try {
+    const db = getDB(c);
+    const formData = await c.req.formData();
+    const sessionId = String(formData.get('sessionId') || '');
+    const configJson = String(formData.get('config_json') || '{}');
+    if (!sessionId) return jsonError(c, '缺少 sessionId');
+    const selectedConfig = JSON.parse(configJson);
+    if (!selectedConfig || typeof selectedConfig !== 'object') return jsonError(c, 'config_json 格式错误');
+    const sess = await updateInstallSession(db, sessionId, { selectedConfig });
+    if (!sess) return jsonError(c, '会话不存在或已过期');
+    return jsonResult(c, { code: 0, msg: '草稿已保存' });
+  } catch (e: any) {
+    return jsonError(c, '保存草稿失败: ' + (e.message || e));
+  }
 });
 
 /** POST /install/save - 兼容旧的"全新安装"一站式保存 */
@@ -879,7 +1257,7 @@ install.post('/test', async (c) => {
         for (const k of req[storageType] || []) if (!cfg[k]) missing.push(k);
         if (missing.length) extra = '（缺少必填字段: ' + missing.join(', ') + '）';
       }
-      return jsonResult(c, { ok: false, message: '无法创建存储实例，请检查配置' + extra });
+      return jsonResult(c, { code: -1, msg: '无法创建存储实例，请检查配置' + extra, data: { ok: false, message: '无法创建存储实例，请检查配置' + extra } });
     }
 
     const testKey = '_install_test_' + Date.now() + '.txt';
@@ -887,15 +1265,15 @@ install.post('/test', async (c) => {
     const expected = await testFile.text();
     try {
       const ok = await stor.upload(testKey, testBuf, testFile.type || 'text/plain');
-      if (!ok) return jsonResult(c, { ok: false, message: '写入失败，请检查配置' });
+      if (!ok) return jsonResult(c, { code: -1, msg: '写入失败，请检查配置', data: { ok: false, message: '写入失败，请检查配置' } });
       const got = await stor.get(testKey);
-      if (!got) return jsonResult(c, { ok: false, message: '写入成功但读取失败' });
+      if (!got) return jsonResult(c, { code: -1, msg: '写入成功但读取失败', data: { ok: false, message: '写入成功但读取失败' } });
       const text = await new Response(got.body).text();
       await stor.delete(testKey);
-      if (text !== expected) return jsonResult(c, { ok: false, message: '读取内容不一致' });
-      return jsonResult(c, { ok: true, message: '读写测试通过' });
+      if (text !== expected) return jsonResult(c, { code: -1, msg: '读取内容不一致', data: { ok: false, message: '读取内容不一致' } });
+      return jsonResult(c, { code: 0, msg: '读写测试通过', data: { ok: true, message: '读写测试通过' } });
     } catch (e: any) {
-      return jsonResult(c, { ok: false, message: '测试失败: ' + (e.message || e) });
+      return jsonResult(c, { code: -1, msg: '测试失败: ' + (e.message || e), data: { ok: false, message: '测试失败: ' + (e.message || e) } });
     }
   } catch (e: any) {
     return jsonError(c, '测试失败: ' + (e.message || e));
@@ -963,6 +1341,12 @@ install.post('/api/storage-set', async (c) => {
       const val = String(v);
       if (val !== '') fields[key] = val;
     }
+    // 确定使用时先持久化存储配置，后续文件下载请求可直接从 D1 重载。
+    await updateConfig(db, 'storage', storageType);
+    for (const [k, v] of Object.entries(fields)) {
+      await updateConfig(db, k, v);
+    }
+    clearConfigCache();
     await updateInstallSession(db, sessionId, { storageType, storageFields: fields });
     return new Response(JSON.stringify({ code: 0, msg: '已保存' }), {
       status: 200,
@@ -1025,6 +1409,28 @@ install.post('/api/config-apply', async (c) => {
     createRestoreTask(taskId);
     // 同步执行（因为要返回结果）
     const result = await restoreDatabaseFromSql(db, sess.sqlText, taskId, { skipPreConfig: true });
+    // 某些 MySQL 转储的 pre_file INSERT 可能因方言差异无法直接执行，兜底用解析后的字段写入 D1。
+    const fileCountRow = await db.prepare('SELECT COUNT(*) AS count FROM pre_file').first<{ count: number }>();
+    if (sess.preExtract.fileCount > 0) {
+      const records = extractPreFileRecords(sess.sqlText);
+      console.warn('[install] config-apply: 解析 pre_file，D1 当前记录数=' + (fileCountRow?.count || 0) + '，解析记录数=' + records.length);
+      if (records.length === 0) {
+        return jsonError(c, 'SQL 中检测到 ' + sess.preExtract.fileCount + ' 个文件，但无法解析 pre_file 记录，文件元数据未写入 D1');
+      }
+      for (const file of records) {
+        await db.prepare(
+          `INSERT OR REPLACE INTO pre_file (id, name, type, size, hash, addtime, lasttime, ip, hide, pwd, block, count, uid)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          file.id, file.name, file.type, file.size, file.hash,
+          file.addtime, file.lasttime, file.ip, file.hide, file.pwd, file.block, file.count, file.uid,
+        ).run();
+      }
+    }
+    const finalFileCount = await db.prepare('SELECT COUNT(*) AS count FROM pre_file').first<{ count: number }>();
+    if (sess.preExtract.fileCount > 0 && !(finalFileCount?.count || 0)) {
+      return jsonError(c, '文件元数据写入 D1 失败，pre_file 仍为空');
+    }
     // 标记 installed
     await updateConfig(db, 'installed', '1');
     clearConfigCache();
@@ -1039,6 +1445,7 @@ install.post('/api/config-apply', async (c) => {
         appliedConfigCount: Object.keys(filtered).length,
         sqlResult: result,
         fileCount: sess.preExtract.fileCount,
+        databaseFileCount: finalFileCount?.count || 0,
       },
     }), {
       status: 200,
@@ -1068,6 +1475,23 @@ install.post('/api/files-from-source', async (c) => {
     const sess = await getInstallSession(db, sessionId);
     if (!sess) return jsonError(c, '会话不存在或已过期（30分钟），请重新上传 SQL');
 
+    // 防止恢复流程跳过 config-apply：文件任务开始前必须先把管理员和恢复配置写入 D1。
+    const currentConfig = await loadConfig(db);
+    const selectedConfig = sess.selectedConfig || {};
+    if (!currentConfig.admin_user || !currentConfig.admin_pwd || currentConfig.installed !== 1) {
+      const adminUser = selectedConfig.admin_user || currentConfig.admin_user || 'admin';
+      const adminPwd = selectedConfig.admin_pwd || currentConfig.admin_pwd || '';
+      if (!adminPwd) return jsonError(c, '管理员密码未写入，请返回上一步点击“应用配置并完成”');
+      await updateConfig(db, 'admin_user', adminUser);
+      await updateConfig(db, 'admin_pwd', adminPwd);
+      for (const [k, v] of Object.entries(selectedConfig)) {
+        if (k === 'storage' || k === 'installed' || k === 'admin_user' || k === 'admin_pwd') continue;
+        await updateConfig(db, k, String(v));
+      }
+      await updateConfig(db, 'installed', '1');
+      clearConfigCache();
+    }
+
     // config-apply 写入配置后，中间件里的 c.var.stor 仍是旧缓存，必须重新加载
     const freshConfig = await loadConfig(db);
     // 传完整 c.env（factory 内部可能读 env 上的其它绑定）
@@ -1092,18 +1516,33 @@ install.post('/api/files-from-source', async (c) => {
       return jsonError(c, 'Storage not configured: storage="' + type + '"' + extra);
     }
     const taskId = 'inst_dl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    createRestoreTask(taskId);
-    await updateInstallSession(db, sessionId, { sourceUrl });
+    const task = createRestoreTask(taskId);
+    await updateInstallSession(db, sessionId, { sourceUrl, taskId, taskStatus: task as unknown as Record<string, unknown> });
 
     c.executionCtx.waitUntil((async () => {
+      let persistTimer: ReturnType<typeof setInterval> | undefined;
+      const persistTask = async () => {
+        const current = getRestoreStatus(taskId);
+        if (current) await updateInstallSession(db, sessionId, { taskStatus: current as unknown as Record<string, unknown> });
+      };
       try {
-        await restoreFilesFromSource(db, stor, sourceUrl, taskId, 'file');
+        // 任务进度原本只在 Worker 内存中，定期写入 D1，刷新或实例切换后仍可显示。
+        persistTimer = setInterval(() => { void persistTask(); }, 1000);
+        await restoreFilesFromSource(db, stor, sourceUrl, taskId, 'file', sess.sqlText);
         const t = getRestoreStatus(taskId);
-        if (t) { t.status = 'completed'; t.stage = 'done'; }
+        if (t && t.status !== 'failed' && t.status !== 'cancelled') {
+          t.status = 'completed';
+          t.stage = 'done';
+          t.endTime = Date.now();
+        }
+        await persistTask();
       } catch (e: any) {
         console.error('[install/files-from-source] failed:', e?.message || e);
         const t = getRestoreStatus(taskId);
         if (t) { t.status = 'failed'; t.errors.push('下载失败: ' + (e.message || e)); }
+        await persistTask();
+      } finally {
+        if (persistTimer) clearInterval(persistTimer);
       }
     })());
 
@@ -1129,7 +1568,17 @@ install.get('/api/status', async (c) => {
   const taskId = c.req.query('taskId') || '';
   if (!taskId) return jsonError(c, '缺少 taskId');
   const status = getRestoreStatus(taskId);
-  if (!status) return jsonError(c, '任务不存在');
+  if (!status) {
+    const db = getDB(c);
+    const sessionId = readSessionId(c.req.raw);
+    const sess = sessionId ? await getInstallSession(db, sessionId) : null;
+    if (sess?.taskId === taskId && sess.taskStatus) {
+      return jsonResult(c, { code: 0, data: sess.taskStatus });
+    }
+    console.error('[install/status] task not found:', taskId);
+    return jsonError(c, '任务不存在或当前 Worker 实例没有任务状态（taskId=' + taskId + '）');
+  }
+  console.log('[install/status]', taskId, status.status, status.processed + '/' + status.total, status.message);
   return jsonResult(c, { code: 0, data: status });
 });
 
