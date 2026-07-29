@@ -1,9 +1,11 @@
+内容由AI生成，请注意辨别
 # 彩虹外链网盘 - Cloudflare Workers 版
 
 基于 [netcccyun/pan](https://github.com/netcccyun/pan) (PHP 版) 重写为 Cloudflare Workers 一体部署版本，使用 D1 数据库 + R2 对象存储，零服务器，全球 300+ 节点就近响应。
 
 ---
 
+可以使用免费的cloudflare worker和免费的cloudflare D1 和免费的七牛云对象存储 搭建免费的文件分享平台
 ## GitHub Actions 一键部署（推荐）
 
 ### 第一步：Fork 本仓库
@@ -72,10 +74,6 @@
 ## 后台管理
 
 - 后台地址：`https://你的域名/admin`
-- 默认账号：`admin`
-- 默认密码：`123456`
-
-登录后请立即修改密码。
 
 ---
 
