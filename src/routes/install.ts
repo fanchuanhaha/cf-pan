@@ -182,6 +182,44 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
           <label>站点名称</label>
           <input type="text" name="title" class="form-control" value="彩虹外链网盘">
         </div>
+        <h4 style="margin-top:24px"><i class="fa fa-exchange"></i> 文件传输方式</h4>
+        <div class="row">
+          <div class="col-md-6">
+            <div class="form-group">
+              <label>文件上传方式</label>
+              <select name="uploadfile_type" class="form-control">
+                <option value="0" selected>网站代理上传</option>
+                <option value="1">存储直传</option>
+              </select>
+              <span class="help-block">网站代理由 Worker 接收文件后上传；存储直传需要存储后端支持直传。</span>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="form-group">
+              <label>文件下载方式</label>
+              <select name="downfile_type" class="form-control" onchange="toggleFreshDownloadMode(this.value)">
+                <option value="0" selected>网站代理下载</option>
+                <option value="1">存储直链下载</option>
+              </select>
+              <span class="help-block">网站代理支持权限和 Range；存储直链需要配置公开或签名下载地址。</span>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" id="freshDownloadDomainGroup" style="display:none">
+          <label>直链协议和域名</label>
+          <div class="row">
+            <div class="col-xs-4 col-md-3" style="padding-right:0">
+              <select name="downfile_protocol" class="form-control">
+                <option value="0">http://</option>
+                <option value="1" selected>https://</option>
+              </select>
+            </div>
+            <div class="col-xs-8 col-md-9" style="padding-left:0">
+              <input type="text" name="downfile_domain" class="form-control" placeholder="可留空，使用存储默认域名">
+            </div>
+          </div>
+          <span class="help-block">仅在选择“存储直链下载”时使用；留空由存储驱动生成直链。</span>
+        </div>
         <h4 style="margin-top:24px"><i class="fa fa-database"></i> 存储后端</h4>
         <div class="storage-tabs" id="freshStorageTabs">
           <button type="button" class="storage-tab active" data-target="fresh-form-r2">R2</button>
@@ -495,6 +533,11 @@ async function nextStep() {
 function goFreshInstall() {
   state.mode = 'fresh';
   showStep(1);
+}
+
+function toggleFreshDownloadMode(value) {
+  const group = document.getElementById('freshDownloadDomainGroup');
+  if (group) group.style.display = String(value) === '1' ? 'block' : 'none';
 }
 
 async function submitFresh() {
