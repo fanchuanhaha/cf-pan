@@ -271,6 +271,7 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
       </p>
       <div id="configList" class="config-list"></div>
       <div id="fileCountHint" class="text-muted" style="margin-top:8px"></div>
+      <div id="restoreTransferConfig" style="margin-top:18px"></div>
 
       <h4 style="margin-top:24px"><i class="fa fa-database"></i> 选择新的存储后端</h4>
       <div class="storage-tabs" id="restoreStorageTabs">
@@ -397,6 +398,7 @@ async function restoreInstallSession() {
     state.storageSaved = data.storageType === 'r2' || Object.keys(data.storageFields || {}).length > 0;
     state.fileTaskId = data.taskId || '';
     renderConfigList();
+    renderRestoreTransferConfig();
     renderWarnings();
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
     if (data.storageType) {
@@ -590,6 +592,7 @@ async function uploadSql() {
     result.innerHTML = '<i class="fa fa-check"></i> 预提取完成，提取到 ' + Object.keys(state.preExtract.preConfig).length + ' 条配置，' + state.preExtract.fileCount + ' 个文件';
     // 渲染 step 2r
     renderConfigList();
+    renderRestoreTransferConfig();
     renderWarnings();
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
     showStep(2);
@@ -735,6 +738,58 @@ function renderConfigList() {
   }
   html += '</tbody></table>';
   box.innerHTML = html;
+}
+
+function renderRestoreTransferConfig() {
+  const box = document.getElementById('restoreTransferConfig');
+  if (!box || !state.preExtract) return;
+  const source = state.preExtract.preConfig || {};
+  const value = (key, fallback) => {
+    const selected = state.selectedConfig && state.selectedConfig[key];
+    const raw = selected !== undefined ? selected : source[key];
+    return raw === undefined || raw === '' ? fallback : String(raw);
+  };
+  const uploadType = value('uploadfile_type', '0') === '1' ? '1' : '0';
+  const downloadType = value('downfile_type', '0') === '1' ? '1' : '0';
+  const protocol = value('downfile_protocol', '1') === '1' ? '1' : '0';
+  const domain = value('downfile_domain', '');
+  box.innerHTML =
+    '<h4 style="margin-top:18px"><i class="fa fa-exchange"></i> 文件传输方式</h4>' +
+    '<div class="row">' +
+    '<div class="col-md-6"><div class="form-group">' +
+    '<label>文件上传方式</label>' +
+    '<select id="restore_uploadfile_type" class="form-control" onchange="updateRestoreTransferConfig()">' +
+    '<option value="0"' + (uploadType === '0' ? ' selected' : '') + '>网站代理上传</option>' +
+    '<option value="1"' + (uploadType === '1' ? ' selected' : '') + '>存储直传</option>' +
+    '</select></div></div>' +
+    '<div class="col-md-6"><div class="form-group">' +
+    '<label>文件下载方式</label>' +
+    '<select id="restore_downfile_type" class="form-control" onchange="updateRestoreTransferConfig()">' +
+    '<option value="0"' + (downloadType === '0' ? ' selected' : '') + '>网站代理下载</option>' +
+    '<option value="1"' + (downloadType === '1' ? ' selected' : '') + '>存储直链下载</option>' +
+    '</select></div></div></div>' +
+    '<div class="form-group" id="restoreDownloadDomainGroup" style="display:' + (downloadType === '1' ? 'block' : 'none') + '">' +
+    '<label>直链协议和域名</label><div class="row">' +
+    '<div class="col-xs-4 col-md-3" style="padding-right:0"><select id="restore_downfile_protocol" class="form-control" onchange="updateRestoreTransferConfig()">' +
+    '<option value="0"' + (protocol === '0' ? ' selected' : '') + '>http://</option>' +
+    '<option value="1"' + (protocol === '1' ? ' selected' : '') + '>https://</option></select></div>' +
+    '<div class="col-xs-8 col-md-9" style="padding-left:0"><input id="restore_downfile_domain" type="text" class="form-control" value="' + escapeHtml(domain) + '" placeholder="可留空，使用存储默认域名" oninput="updateRestoreTransferConfig()"></div>' +
+    '</div><span class="help-block">系统会识别 SQL 中对应键的原值，也可以在这里修改；点击下一步时写入 D1。</span></div>';
+}
+
+function updateRestoreTransferConfig() {
+  const upload = document.getElementById('restore_uploadfile_type');
+  const download = document.getElementById('restore_downfile_type');
+  const protocol = document.getElementById('restore_downfile_protocol');
+  const domain = document.getElementById('restore_downfile_domain');
+  if (!upload || !download || !protocol || !domain) return;
+  state.selectedConfig.uploadfile_type = upload.value;
+  state.selectedConfig.downfile_type = download.value;
+  state.selectedConfig.downfile_protocol = protocol.value;
+  state.selectedConfig.downfile_domain = domain.value;
+  const group = document.getElementById('restoreDownloadDomainGroup');
+  if (group) group.style.display = download.value === '1' ? 'block' : 'none';
+  saveDraft();
 }
 
 function toggleConfig(cb) {
