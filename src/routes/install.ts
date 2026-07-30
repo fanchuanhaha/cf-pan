@@ -1014,6 +1014,9 @@ async function confirmStorage(prefix) {
         confirmBtn.className = 'btn btn-sm btn-danger';
         confirmBtn.innerHTML = '<i class="fa fa-times"></i> 保存失败';
       }
+      state.confirmedStorage = '';
+      state.storageSaved = false;
+      document.querySelectorAll('#' + rootId + ' [id$="confirmedBadge"]').forEach(b => b.style.display = 'none');
       state.storageSaveInProgress = false;
       return;
     }
@@ -1290,6 +1293,35 @@ install.post('/save', async (c) => {
 
     const db = getDB(c);
 
+    // The fresh-install form prefixes storage fields with fresh_. Normalize
+    // them before writing so the config keys match the storage factory.
+    const storageKeys = [
+      's3_endpoint', 's3_region', 's3_bucket', 's3_ak', 's3_sk',
+      'gh_owner', 'gh_repo', 'gh_token', 'gh_ref', 'gh_api_base',
+      'webdav_endpoint', 'webdav_user', 'webdav_pass', 'webdav_folder',
+      'upyun_bucket', 'upyun_operator', 'upyun_password', 'upyun_endpoint', 'upyun_domain', 'upyun_folder',
+      'qiniu_ak', 'qiniu_sk', 'qiniu_bucket', 'qiniu_domain', 'qiniu_folder',
+      'uploadfile_type', 'downfile_type', 'downfile_protocol', 'downfile_domain',
+    ];
+    const normalized: Record<string, string> = {};
+    for (const key of storageKeys) {
+      const value = body[key] ?? body['fresh_' + key];
+      if (value !== undefined && String(value) !== '') normalized[key] = String(value);
+    }
+
+    const required: Record<string, string[]> = {
+      s3: ['s3_endpoint', 's3_bucket', 's3_ak', 's3_sk'],
+      github: ['gh_owner', 'gh_repo', 'gh_token'],
+      webdav: ['webdav_endpoint', 'webdav_user', 'webdav_pass'],
+      upyun: ['upyun_bucket', 'upyun_operator', 'upyun_password'],
+      qiniu: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'],
+    };
+    const missing = (required[storageType] || []).filter(key => !normalized[key]);
+    if (missing.length) return jsonError(c, '存储配置不完整，缺少: ' + missing.join(', '));
+    if (storageType === 'r2' && !(c.env as any).FILE_R2) {
+      return jsonError(c, 'R2 绑定 FILE_R2 未找到，请先在 Cloudflare 配置 R2 绑定');
+    }
+
     // 写入所有字段
     await updateConfig(db, 'admin_user', adminUser);
     await updateConfig(db, 'admin_pwd', adminPwd);
@@ -1297,20 +1329,8 @@ install.post('/save', async (c) => {
     await updateConfig(db, 'storage', storageType);
 
     // 存储相关字段
-    const storageFields: Record<string, string> = {
-      s3_endpoint: 's3_endpoint', s3_region: 's3_region', s3_bucket: 's3_bucket', s3_ak: 's3_ak', s3_sk: 's3_sk',
-      gh_owner: 'gh_owner', gh_repo: 'gh_repo', gh_token: 'gh_token', gh_ref: 'gh_ref', gh_api_base: 'gh_api_base',
-      webdav_endpoint: 'webdav_endpoint', webdav_user: 'webdav_user', webdav_pass: 'webdav_pass', webdav_folder: 'webdav_folder',
-      upyun_bucket: 'upyun_bucket', upyun_operator: 'upyun_operator', upyun_password: 'upyun_password',
-      upyun_endpoint: 'upyun_endpoint', upyun_domain: 'upyun_domain', upyun_folder: 'upyun_folder',
-      qiniu_ak: 'qiniu_ak', qiniu_sk: 'qiniu_sk', qiniu_bucket: 'qiniu_bucket', qiniu_domain: 'qiniu_domain', qiniu_folder: 'qiniu_folder',
-      uploadfile_type: 'uploadfile_type', downfile_type: 'downfile_type', downfile_protocol: 'downfile_protocol', downfile_domain: 'downfile_domain',
-    };
-    for (const [formKey, cfgKey] of Object.entries(storageFields)) {
-      const v = body[formKey];
-      if (v !== undefined && v !== '') {
-        await updateConfig(db, cfgKey, String(v));
-      }
+    for (const [cfgKey, value] of Object.entries(normalized)) {
+      await updateConfig(db, cfgKey, value);
     }
     await updateConfig(db, 'installed', '1');
 
@@ -1438,6 +1458,20 @@ install.post('/api/storage-set', async (c) => {
       const val = String(v);
       if (val !== '') fields[key] = val;
     }
+    const required: Record<string, string[]> = {
+      s3: ['s3_endpoint', 's3_bucket', 's3_ak', 's3_sk'],
+      github: ['gh_owner', 'gh_repo', 'gh_token'],
+      webdav: ['webdav_endpoint', 'webdav_user', 'webdav_pass'],
+      upyun: ['upyun_bucket', 'upyun_operator', 'upyun_password'],
+      qiniu: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'],
+    };
+    const missing = (required[storageType] || []).filter(key => !fields[key]);
+    if (missing.length) return jsonError(c, '存储配置不完整，缺少: ' + missing.join(', '));
+    if (storageType === 'r2' && !(c.env as any).FILE_R2) {
+      return jsonError(c, 'R2 绑定 FILE_R2 未找到，请先在 Cloudflare 配置 R2 绑定');
+    }
+    const candidate = createStorage({ storage: storageType, ...fields } as any, c.env as any);
+    if (!candidate) return jsonError(c, '无法创建存储实例，请检查存储配置');
     // 确定使用时先持久化存储配置，后续文件下载请求可直接从 D1 重载。
     await updateConfig(db, 'storage', storageType);
     for (const [k, v] of Object.entries(fields)) {

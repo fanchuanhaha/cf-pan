@@ -231,6 +231,8 @@ https://d.802213.xyz/file/c46ba69394e7937c60538208bb887a9d
 - 恢复文件上传改为响应流直接传给目标存储，七牛云使用分片流式上传；不再先把 100 MiB 文件合并成多个 ArrayBuffer。
 - 第二步“确定使用”未成功写入 D1 时，前端不能进入下一步，后端的 `config-apply` 和 `files-from-source` 也会拒绝绕过存储确认。
 - 恢复任务会校验文件 hash 必须是 32 位十六进制 MD5；错误 hash 会显示为失败文件并写入任务日志。
+- 全新安装表单的存储字段带有 `fresh_` 前缀，`/install/save` 会先规范化为 `qiniu_*`、`s3_*` 等配置键再写入 D1；否则七牛云信息会只停留在表单中。
+- Cloudflare 报 D1 database deleted 是部署绑定问题，不是七牛参数问题；必须把 Worker 的 `DB` 绑定改成当前存在的 D1，写入失败时前端不会显示“已确认”。
 
 ## 移动端搜索穿模修复
 - 首页搜索框 `searchbox` span 的 `style="float:right"` 内联样式会覆盖 CSS media query `@media (min-width:767px){.searchbox{float:right}}`，导致移动端搜索框强制右浮动与标题重叠。

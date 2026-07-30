@@ -24,7 +24,9 @@ SITE_URL = ""
 # binding = "FILE_R2"
 # bucket_name = "pan-files"
 
-# D1 数据库绑定 - 替换为实际的 database_id
+# D1 数据库绑定 - 必须替换为当前仍存在的 D1 database_id。
+# 如果 Cloudflare 报 “D1 database ... has been deleted”，说明这里或 Dashboard
+# 的 Worker 绑定仍指向旧数据库；请在 Cloudflare Dashboard 重新绑定后再部署。
 [[d1_databases]]
 binding = "DB"
 database_name = "pan-db"
