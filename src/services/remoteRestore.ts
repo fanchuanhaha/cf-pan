@@ -57,25 +57,49 @@ async function remoteRequestOnce(secret: string, sourceUrl: string, action: stri
   const nonce = crypto.randomUUID();
   const encrypted = await encrypt(secret, payload, tagFirst);
   const signature = await hmac(secret, `${timestamp}\n${nonce}\n${action}\n${encrypted}`);
-  const response = await fetch(endpoint(sourceUrl), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ timestamp, nonce, action, payload: encrypted, signature }),
-  });
-  const text = await response.text();
-  let json: any;
-  try { json = JSON.parse(text); } catch { throw new Error(`远程 PHP 返回非 JSON (${response.status})`); }
-  if (!response.ok || !json.ok) throw new Error(json.error || `远程 PHP 请求失败 (${response.status})`);
-  return json;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch(endpoint(sourceUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ timestamp, nonce, action, payload: encrypted, signature }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let json: any;
+    try { json = JSON.parse(text); } catch { throw new Error(`远程 PHP 返回非 JSON (${response.status})`); }
+    if (!response.ok || !json.ok) throw new Error(json.error || `远程 PHP 请求失败 (${response.status})`);
+    return json;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function remoteRequestWithRetry(secret: string, sourceUrl: string, action: string, payload: Record<string, unknown>, tagFirst: boolean, retries = 2): Promise<any> {
+  let lastError: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await remoteRequestOnce(secret, sourceUrl, action, payload, tagFirst);
+    } catch (e: any) {
+      lastError = e;
+      const msg = String(e?.message || e);
+      if (msg.includes('加密请求校验失败') && tagFirst) {
+        tagFirst = false;
+        attempt--; // 不算次数，换 tagFirst 重试
+        continue;
+      }
+      if (attempt < retries) {
+        console.warn(`[remoteRequest] ${action} attempt ${attempt + 1} failed: ${msg}, retrying...`);
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
 }
 
 export async function remoteRequest(secret: string, sourceUrl: string, action: string, payload: Record<string, unknown>): Promise<any> {
-  try {
-    return await remoteRequestOnce(secret, sourceUrl, action, payload, true);
-  } catch (firstError: any) {
-    if (!String(firstError?.message || firstError).includes('加密请求校验失败')) throw firstError;
-    return remoteRequestOnce(secret, sourceUrl, action, payload, false);
-  }
+  return remoteRequestWithRetry(secret, sourceUrl, action, payload, true);
 }
 
 export async function remoteExport(secret: string, sourceUrl: string, adminUser: string, adminPassword: string): Promise<any> {
@@ -90,11 +114,18 @@ export function remoteFileRequest(secret: string, sourceUrl: string, hash: strin
     const nonce = crypto.randomUUID();
     const encrypted = await encrypt(secret, { hash, type, admin_user: adminUser, admin_password: adminPassword });
     const signature = await hmac(secret, `${timestamp}\n${nonce}\nfile\n${encrypted}`);
-    return fetch(endpoint(sourceUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/octet-stream' },
-      body: JSON.stringify({ timestamp, nonce, action: 'file', payload: encrypted, signature }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 300_000);
+    try {
+      return await fetch(endpoint(sourceUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/octet-stream' },
+        body: JSON.stringify({ timestamp, nonce, action: 'file', payload: encrypted, signature }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   })();
 }
 
@@ -149,22 +180,36 @@ export async function remoteUploadFile(
 
     const uploadOne = async (offset: number): Promise<void> => {
       if (failed) return;
-      try {
-        const block = await remoteRequestPayload(secret, sourceUrl, 'upload-block', { ...base, hash, offset, length: BLOCK });
-        if (!block.ok) {
-          if (!(block.error && String(block.error).includes('offset 超出'))) {
-            failed = { offset, error: block.error || `分块上传失败 (offset ${offset})` };
+      const MAX_RETRY = 2;
+      for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+        try {
+          const block = await remoteRequestPayload(secret, sourceUrl, 'upload-block', { ...base, hash, offset, length: BLOCK });
+          if (!block.ok) {
+            if (!(block.error && String(block.error).includes('offset 超出'))) {
+              if (attempt < MAX_RETRY) {
+                console.warn(`[remoteUpload] block offset=${offset} failed: ${block.error}, retry ${attempt + 1}/${MAX_RETRY}`);
+                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                continue;
+              }
+              failed = { offset, error: block.error || `分块上传失败 (offset ${offset})` };
+            }
+            return;
+          }
+          ctxByOffset.set(Number(block.offset), block.ctx);
+          const newUploaded = Math.min(uploaded + (Number(block.len) || 0), total);
+          if (newUploaded !== uploaded) {
+            uploaded = newUploaded;
+            onProgress?.({ type: 'progress', uploaded, total });
           }
           return;
+        } catch (e: any) {
+          if (attempt < MAX_RETRY) {
+            console.warn(`[remoteUpload] block offset=${offset} error: ${e?.message}, retry ${attempt + 1}/${MAX_RETRY}`);
+            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            continue;
+          }
+          failed = { offset, error: String(e?.message || e) };
         }
-        ctxByOffset.set(Number(block.offset), block.ctx);
-        const newUploaded = Math.min(uploaded + (Number(block.len) || 0), total);
-        if (newUploaded !== uploaded) {
-          uploaded = newUploaded;
-          onProgress?.({ type: 'progress', uploaded, total });
-        }
-      } catch (e: any) {
-        failed = { offset, error: String(e?.message || e) };
       }
     };
 

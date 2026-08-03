@@ -109,7 +109,26 @@ export async function downloadFromUrl(url: string, taskId: string, onProgress?: 
     task.message = '正在下载文件...';
   }
 
-  const res = await fetch(url);
+  const MAX_RETRY = 2;
+  let res: Response | null = null;
+  let lastError: any;
+  for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 300_000);
+    try {
+      res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      break;
+    } catch (e: any) {
+      clearTimeout(timeout);
+      lastError = e;
+      if (attempt < MAX_RETRY) {
+        console.warn(`[downloadFromUrl] attempt ${attempt + 1} failed: ${e?.message}, retrying...`);
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+  }
+  if (!res) throw lastError || new Error('下载失败');
   if (!res.ok) {
     throw new Error(`下载失败: HTTP ${res.status}`);
   }
