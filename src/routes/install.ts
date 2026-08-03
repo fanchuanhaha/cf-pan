@@ -310,6 +310,7 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
           <span class="help-block">如需更换原站点，请返回第二步修改。</span>
         </div>
          <button type="submit" class="btn-install"><i class="fa fa-cloud-upload"></i> 开始恢复并上传</button>
+         <button type="button" class="btn-install" style="background:#999;border-color:#777;margin-left:8px" onclick="skipRestore()"><i class="fa fa-forward"></i> 跳过恢复</button>
       </form>
       <div id="downloadProgress" style="display:none; margin-top:20px">
          <h4>恢复上传进度</h4>
@@ -520,7 +521,7 @@ function showStep(n) {
   document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
   // 根据安装模式选择步骤 ID
   const ids = state.mode === 'restore'
-    ? ['step-0', 'step-1r', 'step-2r', 'step-3r', '', 'step-4']
+    ? ['step-0', 'step-1r', 'step-2r', 'step-3r', 'step-4', 'step-4']
     : ['step-0', 'step-1f', '', '', '', 'step-4'];
   const el = document.getElementById(ids[n]);
   if (el) el.classList.add('active');
@@ -530,7 +531,7 @@ function showStep(n) {
 
   // 步骤指示器（restore: 0→1→1→2→3, fresh: 0→1→3）
   const map = state.mode === 'restore'
-    ? { 0: 0, 1: 1, 2: 1, 3: 2, 5: 3 }
+    ? { 0: 0, 1: 1, 2: 1, 3: 2, 4: 3, 5: 3 }
     : { 0: 0, 1: 1, 5: 3 };
   document.querySelectorAll('.step-pill').forEach((el, i) => {
     el.classList.remove('active', 'done');
@@ -542,8 +543,8 @@ function showStep(n) {
   const prev = document.getElementById('btnPrev');
   const next = document.getElementById('btnNext');
   next.disabled = false;
-  prev.style.display = n === 0 || n === 5 ? 'none' : '';
-  if (n === 5) { next.style.display = 'none'; return; }
+  prev.style.display = n === 0 || n === 4 || n === 5 ? 'none' : '';
+  if (n === 4 || n === 5) { next.style.display = 'none'; return; }
   if (n === 0) { next.style.display = 'none'; return; }
   next.style.display = '';
   if (n === 1 && state.mode === 'restore' && !state.remoteConfirmed) {
@@ -688,6 +689,16 @@ async function uploadSql() {
 function confirmRemote() {
   state.remoteConfirmed = true;
   showStep(2);
+}
+
+function skipRestore() {
+  if (!confirm('若你刚配置的存储里面没有对应文件，将会全部文件无法下载。确认跳过恢复？')) return;
+  fetch('/install/api/skip-restore', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+  showStep(4);
+  const doneSummary = document.getElementById('doneSummary');
+  if (doneSummary) {
+    doneSummary.innerHTML = '<i class="fa fa-info-circle"></i> 已跳过文件恢复。如需恢复文件，请稍后在管理后台重新操作。';
+  }
 }
 
 function renderWarnings() {
@@ -1729,12 +1740,6 @@ install.post('/api/sql-preview', async (c) => {
       for (const [key, value] of Object.entries(exported.settings || {})) {
         preExtract.preConfig[key] = String(value ?? '');
       }
-      if (preExtract.preConfig.storage === 'local') {
-        preExtract.warnings = Array.from(new Set([
-          ...(preExtract.warnings || []),
-          '检测到 storage=local（原 PHP 项目配置），本系统不支持。请在下一步重新选择存储。',
-        ]));
-      }
       const remoteCandidates: Array<{ name: string; required: string[]; prefix: string }> = [
         { name: 'qiniu', required: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'], prefix: 'qiniu_' },
         { name: 'upyun', required: ['upyun_bucket', 'upyun_operator', 'upyun_password'], prefix: 'upyun_' },
@@ -1942,6 +1947,18 @@ install.post('/api/config-apply', async (c) => {
     console.error('config-apply error:', e);
     return jsonError(c, '应用失败: ' + (e.message || e));
   }
+});
+
+/** POST /install/api/skip-restore - 跳过文件恢复，清除安装会话 */
+install.post('/api/skip-restore', async (c) => {
+  const db = getDB(c);
+  const sessionId = readSessionId(c.req.raw);
+  if (sessionId) {
+    try {
+      await db.prepare('DELETE FROM install_session WHERE id = ?').bind(sessionId).run();
+    } catch { /* 忽略 */ }
+  }
+  return jsonResultWithCookie(c, { code: 0, msg: '已跳过恢复' }, sessionClearCookieHeader());
 });
 
 /** POST /install/api/files-from-source - 从原站点下载文件 */
