@@ -383,6 +383,7 @@ const state = {
   suggestedStorageFields: {}, // 推荐存储的字段值
   resumed: false,
   remoteSourceUrl: '',
+  remoteConfirmed: false, // 连接原站点并确认后才允许进入下一步
 };
 
 async function saveDraft() {
@@ -412,6 +413,7 @@ async function restoreInstallSession() {
     state.storageSaved = data.storageType === 'r2' || Object.keys(data.storageFields || {}).length > 0;
     state.fileTaskId = data.taskId || '';
     state.remoteSourceUrl = data.remoteSourceUrl || '';
+    state.remoteConfirmed = !!(data.preExtract);
     const remoteUrlInput = document.querySelector('#formSqlUpload input[name="remote_source_url"]');
     const remoteUserInput = document.querySelector('#formSqlUpload input[name="remote_admin_user"]');
     const remotePasswordInput = document.querySelector('#formSqlUpload input[name="remote_admin_password"]');
@@ -544,6 +546,9 @@ function showStep(n) {
   if (n === 5) { next.style.display = 'none'; return; }
   if (n === 0) { next.style.display = 'none'; return; }
   next.style.display = '';
+  if (n === 1 && state.mode === 'restore' && !state.remoteConfirmed) {
+    next.disabled = true;
+  }
   if (n === 1 && state.mode === 'fresh') {
     next.innerHTML = '<i class="fa fa-check"></i> 完成安装';
   } else if (n === 2 && state.mode === 'restore') {
@@ -564,6 +569,16 @@ function prevStep() {
 }
 
 async function nextStep() {
+  if (state.step === 1 && state.mode === 'restore') {
+    if (!state.remoteConfirmed) {
+      const next = document.getElementById('btnNext');
+      next.innerHTML = '<i class="fa fa-exclamation-triangle"></i> 请先连接原站点并确认';
+      setTimeout(() => {
+        if (!state.remoteConfirmed) next.innerHTML = '下一步 <i class="fa fa-arrow-right"></i>';
+      }, 2500);
+      return;
+    }
+  }
   if (state.step === 1 && state.mode === 'fresh') {
     // 直接保存
     await submitFresh();
@@ -653,15 +668,14 @@ async function uploadSql() {
       state.selectedConfig[k] = state.preExtract.preConfig[k];
     }
     result.className = 'alert alert-success';
-    result.innerHTML = '<i class="fa fa-check"></i> 预提取完成，提取到 ' + Object.keys(state.preExtract.preConfig).length + ' 条配置，' + state.preExtract.fileCount + ' 个文件';
-    // 渲染 step 2r
+    result.innerHTML = '<i class="fa fa-check"></i> 连接成功，读写测试通过，提取到 ' + Object.keys(state.preExtract.preConfig).length + ' 条配置，' + state.preExtract.fileCount + ' 个文件。<br>' +
+      '<button type="button" class="btn-install" style="margin-top:10px" onclick="confirmRemote()"><i class="fa fa-check-circle"></i> 确认连接，进入下一步</button>';
+    // 渲染 step 2r（暂不跳转，等待确认）
     renderConfigList();
     renderRestoreTransferConfig();
     renderWarnings();
     renderSuggestedStorage(state.preExtract);
     document.getElementById('fileCountHint').innerText = 'SQL 中检测到约 ' + state.preExtract.fileCount + ' 个文件记录';
-    showStep(2);
-    renderSuggestedStorage(state.preExtract);
     // 智能建议：检测到原系统配置了非 local 存储时，显示选择提示
     console.log('[install] 检测存储推荐:', state.preExtract.preConfig || {});
   } catch (e) {
@@ -669,6 +683,11 @@ async function uploadSql() {
     result.className = 'alert alert-danger';
     result.innerHTML = '<i class="fa fa-exclamation-triangle"></i> ' + e.message;
   }
+}
+
+function confirmRemote() {
+  state.remoteConfirmed = true;
+  showStep(2);
 }
 
 function renderWarnings() {
