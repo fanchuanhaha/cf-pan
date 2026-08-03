@@ -1,71 +1,78 @@
-内容由AI生成，请注意辨别
-# 彩虹外链网盘 - Cloudflare Workers 版
+内容由ai生成，请注意辨别
 
-基于 [netcccyun/pan](https://github.com/netcccyun/pan) (PHP 版) 重写为 Cloudflare Workers 一体部署版本，使用 D1 数据库 + R2 对象存储，零服务器，全球 300+ 节点就近响应。
-操作方式上没啥区别，只是增加了深色模式
----
+# 彩虹外链网盘 (Cloudflare Workers 版)
 
-可以使用免费的cloudflare worker和免费的cloudflare D1 和免费的七牛云对象存储 搭建免费的文件分享平台
-## GitHub Actions 一键部署（推荐）
-你一定要看下面的`如果你是想从原站点恢复？`
-### 第一步：Fork 本仓库
+源项目地址https://github.com/netcccyun/pan
+界面上相较于原站点只是适配了深色模式，其他都保持了不变
 
-点击页面右上角 **Fork** 按钮，将仓库复制到你的 GitHub 账号下。
+# 安装
 
-### 第二步：获取 Cloudflare 凭证
+> 如果你是想从原 PHP 站点恢复数据，请先看 [从原站点恢复](#从原站点恢复)。
 
-**1. 获取 Account ID**
+## 快速开始
 
-登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)，在首页右侧可以看到 **Account ID**，复制它。
+这里不展示本地运行的方法
 
-**2. 创建 API Token**
 
-打开 [https://dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)，点击 **Create Token**：
+GitHub Actions 自动部署（推荐）
 
-- 选择模板 **Edit Cloudflare Workers**
-- 在 **Permissions** 中确认包含：
-  - `Account` → `Workers` → `Edit`
-  - `Account` → `D1` → `Edit`
-  - `Account` → `R2` → `Edit`（如需使用 R2 存储）
-- **Account Resources** 选择你的账号
-- 点击 **Continue to summary** → **Create Token**
-- 复制生成的 Token
+1. Fork 本仓库
+2. 在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加：
 
-### 第三步：配置 GitHub Secrets
+| Secret | 说明 |
+|---|---|
+| [CLOUDFLARE_API_TOKEN](https://dash.cloudflare.com/profile/api-tokens) | Cloudflare API Token（需要 Workers / D1 / R2 Edit 权限，一个令牌覆盖全部）|
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
 
-进入你 Fork 的仓库 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**：
-
-| Secret 名称 | 值 | 说明 |
-|---|---|---|
-| `CLOUDFLARE_API_TOKEN` | 上一步复制的 Token | Cloudflare API Token |
-| `CLOUDFLARE_ACCOUNT_ID` | 第一步复制的 Account ID | Cloudflare 账户 ID |
-
-### 第四步：触发部署
-
-进入仓库 **Actions** 页面，点击 **Deploy to Cloudflare Workers**，点击 **Run workflow**：
-
-- 选择 `main` 分支
-- 点击绿色的 **Run workflow** 按钮
-
-等待 2-3 分钟，部署完成后会在 Actions 日志中显示你的 Workers 访问地址。
+3. Push 代码到 `main` 分支，运行GitHub Actions 自动完成：
+   - 创建 D1 数据库
+   - 初始化表结构
+   - 创建 R2 存储桶
+   - 部署 Worker
 
 ### 部署完成后
-如果你这是第一次，你没有部署过php版本或不想从原站点恢复
-访问 `https://你的域名/install/` 进入安装向导，完成：
-1. 设置管理员账号和密码
-2. 选择存储后端（R2 / S3 / GitHub API）
-3. 完成初始配置
-# 如果你是想从原站点恢复？
-1导出你原站点的数据库
-2访问/install/ 选择从备份恢复
-3上传你的.sql文件
-如果你sql里面有配置存储信息 系统就会选择那个，第四步不要下载
-如果你原站点是本地存储的文件 ，那你就在下面配置新的存储地方 然后测试确定下一步
-4输入你原站点的地址
-然后 Worker 默认下载 `{原站点url}/file/{hash}`。如果原 PHP 站点通过下载入口提供文件，可填写 `{原站点url}/down.php`，Worker 会按 `{hash}.{type}` 访问 `/down.php`。文件会尽量以流式方式传输，七牛云使用分片上传。
-然后书局就恢复好了
+
+- 如果你**没有**部署过 PHP 版本，或不想从原站点恢复：
+  访问 `https://你的域名/install/`，选择"全新安装"，依次：
+  1. 设置管理员账号和密码
+  2. 选择存储后端（R2 / S3 / 七牛 / 又拍 / GitHub / WebDAV）并测试连接
+  3. 完成初始配置
 
 ---
+
+## 从原站点恢复
+
+本系统支持从原 PHP 版（彩虹外链网盘 PHP 版）站点一键恢复全部数据和文件，**无需重新上传文件**。
+
+### 方式一：远程 PHP 代理直传（推荐）
+
+在原 PHP 站点放一个代理文件，Worker 通过加密通信调用它，PHP 直接从原站服务器读取文件并直传目标存储（如七牛云），速度更快、不受 Worker 超时限制。
+
+#### 1. 部署原站代理文件
+
+1. 把 `remote_restore.php` 上传到原 PHP 站点根目录（与 `index.php` 同目录）
+2. 打开文件，修改开头的 `REMOTE_RESTORE_SECRET`，改成一段随机字符串
+3. 在 `wrangler.spa.toml` 的 `[vars]` 中把 `REMOTE_RESTORE_SECRET` 设置成**完全相同**的值
+
+> 通信使用 AES-256-GCM 加密 + HMAC-SHA256 签名，密钥不一致会导致请求被拒绝。
+
+#### 2. 在安装向导中恢复
+
+1. 访问 `https://你的域名/install/`，选择 **从备份恢复**
+2. 填写 **原站点地址**（如 `https://原站点.example.com`）、原站管理员账号和密码
+   - 系统会自动调用原站根目录的 `remote_restore.php`
+   - 系统会通过原站 PHP 自动导出数据库（也可手动上传 `.sql` 文件覆盖远程导出）
+3. 勾选要从 SQL 导入的 `pre_config` 配置项（`storage` 永远不导入，必须重新选择）
+4. 选择新的存储后端（如七牛云）并**测试连接**
+5. 点击 **应用配置并完成**，然后点击 **开始恢复并上传**
+   - Worker 逐文件调用原站 PHP，PHP 从原站本地路径读取文件，分片（4MB/块、8 路并发）直传目标存储
+   - 页面实时显示每文件的进度百分比
+
+#### 3. 大文件说明
+
+- PHP 代理已设置 `set_time_limit(0)`、`memory_limit=2048M`，并放宽 Qiniu SDK 请求超时（连接 60s / 总 600s）
+- 文件读取失败会自动顺延查找 `filepath` 配置、`/file`、`/incloud` 等目录
+- 原 PHP 站点所在服务器如对响应有超时限制（如 nginx `proxy_read_timeout`），请调大（建议 ≥ 600s），或使用八路并行分片以尽快完成
 
 ## 安装向导
 
@@ -74,45 +81,14 @@
 1. **设置管理员账号** — 设置后台登录用户名和密码
 2. **选择存储类型** — 根据需要选择：
    - **R2**（推荐）— Cloudflare 原生对象存储，零流量费
-   - **S3 兼容** — 支持阿里云 OSS / 腾讯云 COS / MinIO 等
-   - **GitHub API** — 免费但有大小限制，适合测试
-3. **配置存储参数** — 填写对应的 AccessKey、Bucket 等信息
+   - **S3 兼容** — 支持阿里云 OSS / 腾讯云 COS / 华为云 OBS / MinIO 等
+   - **七牛云** — Qiniu Kodo
+   - **又拍云** / **WebDAV** / **GitHub API**（免费但有大小限制，适合测试）
+3. **配置存储参数** — 填写对应的 AccessKey、Bucket 等信息并测试连接
 
 ---
 
-## 后台管理
 
-- 后台地址：`https://你的域名/admin`
-
----
-
-## 本地开发
-
-### 环境要求
-
-- [Node.js](https://nodejs.org/) >= 18
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)（`npm install` 后自动安装）
-
-### 启动开发服务器
-
-```bash
-npm install
-npx wrangler dev --config wrangler.spa.toml --local --port 8787
-```
-
-访问 `http://localhost:8787`，首次需要通过安装向导。
-
-### 本地数据库操作
-
-```bash
-# 查看所有表
-npx wrangler d1 execute pan-db --local --config wrangler.spa.toml --command "SELECT name FROM sqlite_master WHERE type='table';"
-
-# 清空数据库重新安装
-npx wrangler d1 execute pan-db --local --config wrangler.spa.toml --command "DELETE FROM pre_config; DELETE FROM pre_file; DELETE FROM pre_user; DELETE FROM install_session;"
-```
-
----
 
 ## 支持的存储后端
 
@@ -125,11 +101,69 @@ npx wrangler d1 execute pan-db --local --config wrangler.spa.toml --command "DEL
 | **GitHub API** | 使用 GitHub 仓库存储，免费但有大小限制 |
 | **WebDAV** | 支持坚果云等 WebDAV 服务 |
 
+### 原站点云存储对接
+
+原 PHP 版支持的云存储，在 Workers 版中的接入方式：
+
+| 原站点存储 | Workers 版接入方式 | 说明 |
+|---|---|---|
+| 腾讯云 COS | **S3 兼容** | 填写 COS 的 Endpoint（如 `https://cos.ap-guangzhou.myqcloud.com`）、Region、Bucket、SecretId/SecretKey |
+| 阿里云 OSS | **S3 兼容** | 填写 OSS 的 Endpoint（如 `https://oss-cn-hangzhou.aliyuncs.com`）、Region、Bucket、AccessKey/SecretKey |
+| 华为云 OBS | **S3 兼容** | 填写 OBS 的 Endpoint、Region、Bucket、AK/SK |
+| 七牛云 | **七牛云** | 直接选择七牛云，填写 AK / SK / Bucket |
+| 又拍云 | **又拍云** | 直接选择又拍云，填写 Operator / 密码 / Bucket |
+
+---
+
+## 目录结构
+
+```
+├─ wrangler.spa.toml          # Worker 部署配置
+├─ package.json
+├─ tsconfig.json
+├─ schema.sql                 # D1 建表 SQL
+├─ remote_restore.php         # 原站 PHP 恢复代理（部署到原 PHP 站点根目录）
+├─ public/                    # 前端静态资源 (Worker Assets)
+│  ├─ favicon.ico
+│  └─ assets/
+│     ├─ css/                 # style / admin / ckplayer / bootstrap-table
+│     ├─ js/                  # ckplayer / custom / upload / uploadnew
+│     └─ img/                 # 占位图
+└─ src/
+   ├─ index.ts                # Worker 入口 (Hono 路由)
+   ├─ config.ts               # 配置管理 (D1 读写)
+   ├─ middleware.ts           # db / stor / config 注入
+   ├─ db/index.ts             # D1 查询封装
+   ├─ auth/
+   │  ├─ admin.ts             # 管理员 AES-GCM Token
+   │  └─ user.ts              # 用户 AES-GCM Token
+   ├─ storage/
+   │  ├─ IStorage.ts          # 存储抽象接口
+   │  ├─ R2Storage.ts         # R2 实现
+   │  ├─ S3Storage.ts         # S3 兼容实现
+   │  └─ factory.ts           # 存储工厂
+   ├─ services/
+   │  ├─ upload.ts            # 上传服务
+   │  ├─ green.ts             # 鉴黄服务
+   │  ├─ remoteRestore.ts     # 远程恢复加密客户端（export / upload-stream）
+   │  ├─ restoreSession.ts    # 安装会话持久化
+   │  ├─ restorePreExtract.ts # SQL 预提取 / pre_file 解析
+   │  └─ restore.ts           # 从源 URL 恢复文件
+   └─ routes/
+      ├─ frontend.ts          # 页面渲染 (首页 / 文件查看 / 后台)
+      ├─ ajax.ts              # 上传 (预检 / 分片 / 删除)
+      ├─ api.ts               # 第三方上传 API
+      ├─ download.ts          # 下载代理 (Range 断点续传)
+      ├─ view.ts              # 预览代理
+      ├─ admin.ts             # 后台管理 API
+      └─ install.ts           # 安装向导 / 从备份恢复
+```
+
 ---
 
 ## API 接口
 
-### 上传
+### 上传 API
 
 ```
 POST /api.php
@@ -139,7 +173,17 @@ file: 文件内容
 format: json（可选，支持 json / jsonp / form）
 ```
 
-### 返回示例
+回执格式支持 `json` / `jsonp` / `form` 三种，通过 `POST` 参数 `format` 指定。
+
+### 示例请求
+
+```bash
+curl -X POST https://你的域名/api.php \
+  -F "file=@example.png" \
+  -F "format=json"
+```
+
+返回：
 
 ```json
 {
@@ -156,31 +200,34 @@ format: json（可选，支持 json / jsonp / form）
 
 ---
 
-## 与原 PHP 版本对比
+## 与原 PHP 版本的主要区别
 
 | 项目 | PHP 版 | Workers 版 |
 |---|---|---|
 | 运行环境 | PHP 7.1+ / MySQL 5.5+ | Cloudflare Workers |
 | 数据库 | MySQL | D1 (SQLite 兼容) |
 | 存储 | 本地 / OSS / COS / OBS / Upyun / Qiniu | R2 + S3 兼容 + 七牛 / 又拍 / GitHub / WebDAV |
-| 鉴权 | authcode (RC4) | AES-GCM |
-| 前端 | jQuery + Bootstrap 3 | 保留原版前端风格 |
+| 鉴权算法 | authcode (RC4) | AES-GCM |
+| 前端框架 | jQuery + Bootstrap 3 | 保留原 jQuery + Bootstrap 3 |
 | 页面渲染 | PHP 模板 | Worker SSR 模板直出 |
+| 鉴黄 | 阿里云 Green / 腾讯云 IMS | Cloudflare AI |
 | 部署 | 上传 PHP 主机 | GitHub Actions 一键部署 |
-| 扩展名图标 | Font Awesome 4 | 与原版完全一致 |
-
----
-
-## 相关链接
-
-- **原 PHP 版仓库**：https://github.com/netcccyun/pan
-- **原 PHP 版在线演示**：https://pan.cccyun.cc/
-- Cloudflare Workers 文档：https://developers.cloudflare.com/workers/
-- Cloudflare D1 文档：https://developers.cloudflare.com/d1/
-- Cloudflare R2 文档：https://developers.cloudflare.com/r2/
+| 数据迁移 | - | 原站 PHP 代理自动导出 + 文件直传 |
 
 ---
 
 ## 许可证
 
-Apache-2.0 License
+MIT License
+
+---
+
+## 相关链接
+
+- 原 PHP 版：https://github.com/netcccyun/pan
+- 原 PHP 版在线演示：https://pan.cccyun.cc/
+- 作者博客：https://blog.cccyun.cn/
+- Cloudflare Workers 文档：https://developers.cloudflare.com/workers/
+- Cloudflare D1 文档：https://developers.cloudflare.com/d1/
+- Cloudflare R2 文档：https://developers.cloudflare.com/r2/
+

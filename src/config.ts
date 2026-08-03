@@ -168,8 +168,19 @@ export const defaults: AppConfig = {
 
 let cached: AppConfig | null = null;
 
+/** 确保 pre_config 表存在（新建 D1 时自动建表） */
+async function ensureConfigTable(db: D1Database): Promise<void> {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS pre_config (
+      k TEXT PRIMARY KEY,
+      v TEXT
+    )
+  `).run();
+}
+
 /** 从 D1 加载配置 */
 export async function loadConfig(db: D1Database): Promise<AppConfig> {
+  await ensureConfigTable(db);
   // 不使用缓存，每次都从数据库加载最新配置（确保配置修改后立即生效）
   const { results } = await db.prepare('SELECT k, v FROM pre_config').all<D1Result>();
   const config = { ...defaults };

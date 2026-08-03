@@ -4,6 +4,7 @@
 import type { IStorage } from '../storage/IStorage';
 import { extractPreFileRecords, type PreFileRecord } from './restorePreExtract';
 import { QiniuStorage } from '../storage/QiniuStorage';
+import { remoteFileRequest } from './remoteRestore';
 
 function buildSourceFileUrl(sourceBaseUrl: string, hash: string, type: string): string {
   const input = new URL(sourceBaseUrl);
@@ -56,6 +57,8 @@ export interface RestoreProgress {
   processedBytes: number;
   currentFileStage?: 'download' | 'upload';
   currentFileSpeed?: number;
+  /** 当前文件开始上传/下载的时间戳，用于计算实时速度 */
+  fileSpeedStart?: number;
   currentFileChunked?: boolean;
   logs: string[];
 }
@@ -272,9 +275,17 @@ export async function restoreDatabaseFromSql(
       continue;
     }
     
-    // CREATE TABLE - 跳过（D1 已有结构）
+    // CREATE TABLE / INDEX - 注入 IF NOT EXISTS，使其在空 D1 上也能安全执行
     if (upperStmt.startsWith('CREATE TABLE') || upperStmt.startsWith('CREATE INDEX') || upperStmt.startsWith('CREATE UNIQUE INDEX')) {
-      result.success++;
+      const safe = stmt.replace(/^CREATE\s+(TABLE|INDEX|UNIQUE\s+INDEX)\s/i, (m, type) => {
+        return 'CREATE ' + type + ' IF NOT EXISTS ';
+      });
+      try {
+        await db.prepare(safe).run();
+        result.success++;
+      } catch (e: any) {
+        result.errors.push('CREATE 失败: ' + (e.message || e));
+      }
       continue;
     }
 
@@ -368,7 +379,8 @@ export async function restoreFilesFromSource(
   sourceBaseUrl: string,
   taskId: string,
   folder: string = 'file',
-  sqlText?: string
+  sqlText?: string,
+  remote?: { secret: string; sourceUrl: string; adminUser: string; adminPassword: string }
 ): Promise<{ fileCount: number; success: number; failed: number; errors: string[]; totalSize: number }> {
   const task = restoreTasks.get(taskId);
   const log = (message: string) => {
@@ -393,6 +405,17 @@ export async function restoreFilesFromSource(
   // 标准化 folder（去掉首尾斜杠和 file/ 前缀，确保最终拼接路径干净）
   const cleanFolder = (folder || 'file').replace(/^\/+|\/+$/g, '');
   
+  // 确保 pre_file 表存在
+  await db.prepare(`CREATE TABLE IF NOT EXISTS pre_file (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL, type TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0,
+    hash TEXT NOT NULL, addtime TEXT NOT NULL, lasttime TEXT, ip TEXT,
+    hide INTEGER DEFAULT 0, pwd TEXT, uid INTEGER DEFAULT 0, block INTEGER DEFAULT 0, count INTEGER DEFAULT 0
+  )`).run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_pre_file_hash ON pre_file(hash)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_pre_file_uid ON pre_file(uid)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_pre_file_ip ON pre_file(ip)').run();
+
   // 查询所有文件
   const { results: files } = await db.prepare('SELECT id, name, hash, size FROM pre_file ORDER BY id').all();
   let fileList = (files as PreFileRecord[]) || [];
@@ -450,7 +473,9 @@ export async function restoreFilesFromSource(
     const downloadUrl = /\/down\.php\/?$/i.test(baseUrl)
       ? buildSourceFileUrl(baseUrl, file.hash, file.type)
       : `${baseUrl}/${cleanFolder}/${file.hash}`;
-    log(`文件 ${i + 1}/${fileList.length} 开始下载: ${file.name} hash=${file.hash} url=${downloadUrl}`);
+    log(remote
+      ? `文件 ${i + 1}/${fileList.length} 开始通过原站 PHP 读取并上传: ${file.name} hash=${file.hash}`
+      : `文件 ${i + 1}/${fileList.length} 开始下载: ${file.name} hash=${file.hash} url=${downloadUrl}`);
     
     if (task) {
       task.processed = i;
@@ -476,10 +501,12 @@ export async function restoreFilesFromSource(
       // 下载文件
       let res: Response;
       try {
-        res = await fetch(downloadUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-          cf: { cacheTtl: -1 },
-        });
+        res = remote
+          ? await remoteFileRequest(remote.secret, remote.sourceUrl, file.hash, file.type || 'file', remote.adminUser, remote.adminPassword)
+          : await fetch(downloadUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/Fetch' },
+            cf: { cacheTtl: -1 },
+          });
       } catch (fetchErr: any) {
         const errMsg = `源站连接失败: ${fetchErr?.message || fetchErr} (url=${downloadUrl})`;
         result.failed++;
@@ -494,10 +521,16 @@ export async function restoreFilesFromSource(
       }
       
       if (!res.ok) {
-        const error = res.status === 404
+        let remoteDetail = '';
+        if (remote) {
+          try { remoteDetail = (await res.clone().text()).substring(0, 500); } catch { /* ignore */ }
+        }
+        const error = remote
+          ? `${file.name}: 原站 PHP 读取失败 HTTP ${res.status}，hash=${file.hash}${remoteDetail ? '，返回: ' + remoteDetail : ''}`
+          : res.status === 404
           ? `${file.name}: 源站文件不存在 HTTP 404，hash=${file.hash}，URL=${downloadUrl}`
           : `${file.name}: 源站下载失败 HTTP ${res.status}，URL=${downloadUrl}`;
-        if (res.status === 404) {
+        if (res.status === 404 && !remote) {
           result.skipped.push(error);
           task?.skipped.push(error);
           log('跳过文件: ' + error);

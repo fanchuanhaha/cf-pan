@@ -16,6 +16,13 @@ export function jsonResult(c: Context, result: Record<string, unknown>, status: 
   return c.json(result, status);
 }
 
+/** JSON 响应（带自定义 Set-Cookie 头） */
+export function jsonResultWithCookie(c: Context, result: Record<string, unknown>, cookieHeader: string): Response {
+  return c.json(result, 200, {
+    'Set-Cookie': cookieHeader,
+  });
+}
+
 /** HTML 响应 */
 export function html(c: Context, body: string, status = 200): Response {
   return new Response(body, {

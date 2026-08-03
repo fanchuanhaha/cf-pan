@@ -17,6 +17,7 @@ ENCRYPTION_SECRET = "default-encryption-key-change-me"
 ADMIN_TOKEN_EXPIRY_DAYS = "7"
 SITE_TITLE = "彩虹外链网盘"
 SITE_URL = ""
+REMOTE_RESTORE_SECRET = "27da3de8ce92ad3b00ab1c374045de83a15d06b3b94b3b73f729a9bdbb474043"
 
 # R2 存储桶绑定 - 可选 (如果 API Token 有 R2 权限才启用)
 # 如果你打算使用 S3 或 GitHub API 作为存储后端，可以注释掉下面这段

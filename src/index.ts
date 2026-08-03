@@ -32,18 +32,21 @@ app.use('*', initApp());
 
 // 安装向导（不需要存储，优先级最高）
 app.route('/install', installRoutes);
+// 兼容带尾斜杠的 /install/ 访问
+app.get('/install/', (c) => c.redirect('/install', 301));
 
 // 存储就绪检查中间件（仅对需要存储的路由生效）
 const requireStorage = async (c: any, next: any) => {
   const ready = isStorageReady(c);
   const path = c.req.path || c.req.url;
+  const config = c.var.config;
+  // 未安装 → 无论存储是否已填配置，都跳转到安装向导
+  if (config.installed !== 1) {
+    console.log(`[requireStorage] NOT installed for ${path}, installed=${config?.installed}`);
+    return c.redirect('/install');
+  }
   if (!ready) {
-    const config = c.var.config;
     console.log(`[requireStorage] NOT ready for ${path}, installed=${config?.installed}, storage=${config?.storage}`);
-    // 未安装或存储未配置
-    if (config.installed !== 1) {
-      return c.redirect('/install');
-    }
     // 已安装但存储不可用（例如 R2 token 失效）
     return c.html(`<!DOCTYPE html>
 <html lang="zh-CN">

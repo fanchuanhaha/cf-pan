@@ -10,6 +10,7 @@ export type AppBindings = {
   DB: D1Database;
   FILE_R2?: R2Bucket; // 改为可选
   AI?: unknown;
+  REMOTE_RESTORE_SECRET?: string;
 };
 
 // 扩展 Hono Context 的变量类型

@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS install_session (
   source_url TEXT,
   fresh_install INTEGER DEFAULT 0,
   task_id TEXT,
-  task_status TEXT
+  task_status TEXT,
+  remote_source_url TEXT,
+  remote_admin_user TEXT,
+  remote_admin_password TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_install_session_created_at ON install_session(created_at);

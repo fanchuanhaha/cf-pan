@@ -31,6 +31,9 @@ export interface InstallSession {
   /** 已启动的文件恢复任务 ID */
   taskId?: string;
   taskStatus?: Record<string, unknown>;
+  remoteSourceUrl?: string;
+  remoteAdminUser?: string;
+  remoteAdminPassword?: string;
 }
 
 const cache = new Map<string, InstallSession>();
@@ -52,19 +55,31 @@ interface DbSessionRow {
   fresh_install: number;
   task_id?: string | null;
   task_status?: string | null;
+  remote_source_url?: string | null;
+  remote_admin_user?: string | null;
+  remote_admin_password?: string | null;
 }
 
-/** 兼容已经创建过的本地/远程 install_session 表。 */
+/** 确保 install_session 表存在；新建 D1 时由 schema.sql 创建，但本地开发清除后需要自动建表。 */
 async function ensureSessionSchema(db: D1Database): Promise<void> {
-  try {
-    await db.prepare('ALTER TABLE install_session ADD COLUMN task_id TEXT').run();
-  } catch {
-    // 字段已经存在时 SQLite/D1 会报错，忽略即可。
-  }
-  try {
-    await db.prepare('ALTER TABLE install_session ADD COLUMN task_status TEXT').run();
-  } catch {
-    // 字段已经存在时忽略。
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS install_session (
+      id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      sql_text TEXT NOT NULL,
+      pre_extract TEXT NOT NULL,
+      storage_type TEXT,
+      storage_fields TEXT,
+      selected_config TEXT,
+      source_url TEXT,
+      fresh_install INTEGER DEFAULT 0,
+      task_id TEXT,
+      task_status TEXT
+    )
+  `).run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_install_session_created_at ON install_session(created_at)').run();
+  for (const column of ['remote_source_url', 'remote_admin_user', 'remote_admin_password']) {
+    try { await db.prepare(`ALTER TABLE install_session ADD COLUMN ${column} TEXT`).run(); } catch { /* 已存在 */ }
   }
 }
 
@@ -81,6 +96,9 @@ function rowToSession(row: DbSessionRow): InstallSession {
     freshInstall: row.fresh_install === 1,
     taskId: row.task_id || undefined,
     taskStatus: row.task_status ? JSON.parse(row.task_status) : undefined,
+    remoteSourceUrl: row.remote_source_url || undefined,
+    remoteAdminUser: row.remote_admin_user || undefined,
+    remoteAdminPassword: row.remote_admin_password || undefined,
   };
 }
 
@@ -97,6 +115,9 @@ function sessionToRow(s: InstallSession): DbSessionRow {
     fresh_install: s.freshInstall ? 1 : 0,
     task_id: s.taskId || null,
     task_status: s.taskStatus ? JSON.stringify(s.taskStatus) : null,
+    remote_source_url: s.remoteSourceUrl || null,
+    remote_admin_user: s.remoteAdminUser || null,
+    remote_admin_password: s.remoteAdminPassword || null,
   };
 }
 
@@ -128,11 +149,12 @@ async function saveToDb(db: D1Database, s: InstallSession): Promise<void> {
   const r = sessionToRow(s);
   await db.prepare(
      `INSERT OR REPLACE INTO install_session
-        (id, created_at, sql_text, pre_extract, storage_type, storage_fields, selected_config, source_url, fresh_install, task_id, task_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (id, created_at, sql_text, pre_extract, storage_type, storage_fields, selected_config, source_url, fresh_install, task_id, task_status, remote_source_url, remote_admin_user, remote_admin_password)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     r.id, r.created_at, r.sql_text, r.pre_extract,
-    r.storage_type, r.storage_fields, r.selected_config, r.source_url, r.fresh_install, r.task_id, r.task_status
+     r.storage_type, r.storage_fields, r.selected_config, r.source_url, r.fresh_install, r.task_id, r.task_status,
+     r.remote_source_url, r.remote_admin_user, r.remote_admin_password
   ).run();
 }
 
@@ -141,6 +163,9 @@ export async function createInstallSession(db: D1Database, opts: {
   sqlText: string;
   preExtract: SqlPreExtractResult;
   freshInstall?: boolean;
+  remoteSourceUrl?: string;
+  remoteAdminUser?: string;
+  remoteAdminPassword?: string;
 }): Promise<InstallSession> {
   const selectedConfig: Record<string, string> = {};
   for (const [key, value] of Object.entries(opts.preExtract.preConfig || {})) {
@@ -156,6 +181,9 @@ export async function createInstallSession(db: D1Database, opts: {
     selectedConfig,
     sourceUrl: undefined,
     freshInstall: !!opts.freshInstall,
+    remoteSourceUrl: opts.remoteSourceUrl,
+    remoteAdminUser: opts.remoteAdminUser,
+    remoteAdminPassword: opts.remoteAdminPassword,
   };
   await saveToDb(db, sess);
   cache.set(sess.id, sess);
