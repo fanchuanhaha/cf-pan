@@ -328,6 +328,7 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
         <div id="dpSkippedList" class="text-warning" style="margin-top:6px; max-height:180px; overflow:auto; white-space:pre-wrap"></div>
         <div id="dpStatus" class="text-muted" style="margin-top:6px"></div>
         <div id="dpFailedList" class="text-danger" style="margin-top:6px; max-height:220px; overflow:auto; white-space:pre-wrap"></div>
+        <div id="dpRefreshHint" class="text-muted" style="margin-top:12px; font-size:12px; border-top:1px dashed #ccc; padding-top:8px">如果进度长时间无变化，可直接刷新页面，恢复任务会自动继续。</div>
       </div>
     </div>
 
