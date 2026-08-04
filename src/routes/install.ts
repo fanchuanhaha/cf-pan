@@ -998,8 +998,10 @@ async function startFileDownload() {
 
 function pollFileStatus() {
   if (state.filePollTimer) clearInterval(state.filePollTimer);
-  var pollFailCount = 0;
-  state.filePollTimer = setInterval(async () => {
+      var pollFailCount = 0;
+      var lastProgress = '';
+      var stuckSince = 0;
+      state.filePollTimer = setInterval(async () => {
     try {
       var res = await fetch('/install/api/status?taskId=' + state.fileTaskId, { credentials: 'same-origin' });
       if (!res.ok) {
@@ -1063,6 +1065,19 @@ function pollFileStatus() {
         document.getElementById('dpBarCurrent').className = 'progress-bar ' + (s.currentFileStage === 'upload' ? 'progress-bar-success' : 'progress-bar-info');
         document.getElementById('dpCurrentDetail').innerText = '上传中: ' + formatSize(s.currentFileReceived || 0) + ' / ' + formatSize(s.currentFileTotal || 0) + '，速度: ' + formatSize(s.currentFileSpeed || 0) + '/s';
         document.getElementById('dpStatus').innerText = '正在从原站点读取并上传到目标存储: ' + s.currentItem;
+        var progressKey = s.currentItem + '|' + (s.currentFileReceived || 0);
+        if (progressKey === lastProgress) {
+          if (!stuckSince) stuckSince = Date.now();
+          var stuckSec = Math.floor((Date.now() - stuckSince) / 1000);
+          if (stuckSec >= 60) {
+            document.getElementById('dpStatus').innerHTML = '当前文件进度停滞 ' + stuckSec + ' 秒，建议 <a href="javascript:location.reload()" style="color:#3c78a8;font-weight:bold">刷新页面</a> 后恢复会继续';
+          } else if (stuckSec >= 15) {
+            document.getElementById('dpStatus').innerText = '当前文件进度停滞 ' + stuckSec + ' 秒，如长时间无变化请刷新页面';
+          }
+        } else {
+          lastProgress = progressKey;
+          stuckSince = 0;
+        }
       }
       if (s.status === 'completed') {
         clearInterval(state.filePollTimer);
