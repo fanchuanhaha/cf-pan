@@ -19,39 +19,35 @@
 | [CLOUDFLARE_API_TOKEN](https://dash.cloudflare.com/profile/api-tokens) | Cloudflare API Token（要有 Workers / D1 / R2 Edit 权限） |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
 
-3. 往 `main` 分支推一次代码，Actions 会自动跑完这些事：
-   - 创建 D1 数据库
-   - 初始化表结构
-   - 创建 R2 存储桶
-   - 部署 Worker
-
-不用配任何通信密钥，`rec.php` 那边第一次访问会自动生成。
+3. 点击项目上面的Actions
+点击左边部署到 Cloudflare Workers
+点击右边Run workflow
+点击右边绿色的Run workflow
 
 ## 部署完成后
-
+打开cloudflare的Workers 和 Pages界面，点击pan-worker，点击域，点击添加域名，添加你的域名（可选）
 打开 `https://你的域名/install/`，按向导走：
-
+要是之前没用过 PHP 版，选「全新安装」就行
 1. 设置管理员账号和密码
-2. 选择存储后端，目前支持 R2 / S3 / 七牛 / 又拍 / GitHub / WebDAV
+2. 选择存储后端，目前支持 R2 / S3（原本腾讯云存储那些用这个） / 七牛 / 又拍 / GitHub / WebDAV
 3. 填存储的参数（Key、Bucket 之类的），点一下测试连接
-4. 完事
+4. 好了
 
-要是之前没用过 PHP 版，选「全新安装」直接建个空库就行。
+
 
 ---
 
 # 从原站点恢复
 
 老 PHP 站点的数据和文件可以直接整体搬过来，不用手动重新传文件。流程是：
-
+- 把[rec.php](https://raw.githubusercontent.com/fanchuanhaha/cf-pan/refs/heads/main/rec.php)上传到原站点更目录
 - Worker 向导从原站导出数据库和文件清单（需要原站的管理员账号密码）
 - 文件由原站服务器上的 `rec.php` 直接读出来传到新存储，不走 Worker，速度快也不受 Worker 超时限制
 
 ## 1. 上传 rec.php 到原站
 
-把仓库根目录的 `rec.php` 传到原站根目录（和 `index.php` 同一个目录）。**不用改任何东西**，密钥第一次访问时自动生成、自动存到 `restore_secret.php`。
+把仓库根目录的 `rec.php` 传到原站根目录（和 `index.php` 同一个目录）。要给755权限
 
-> 原站如果是静态托管（比如 Mohua 虚拟主机开了缓存），页面可能拿到旧内容，恢复的时候记得刷新。
 
 ## 2. 在向导里恢复
 
@@ -67,15 +63,13 @@
 用那个带令牌的链接打开原站 `rec.php` 页面，点「开始恢复」：
 
 - 文件由原站 PHP 逐个传到新存储，页面上能看到实时进度
-- 令牌链接有效期 7 天，第一次打开自动记住会话；没带令牌也可以直接输原站管理员账号密码进去
-- 恢复完成点「返回 Worker 站点」回到向导确认，收工
+- 恢复完成点「返回 Worker 站点」回到向导确认，就可以了
 
 ### 关于 GitHub 存储
 
-用 GitHub 仓库存文件是免费，但有几个限制要心里有数：
+用 GitHub 仓库存文件是免费，但有几个限制：
 
-- 单文件上限 50MB，超过的会自动跳过并在结果里标出来
-- 文件存成 `file/完整hash` 这样的扁平结构
+- 单文件上限 50MB，超过的会自动跳过并在结果里标出
 - 需要填 GitHub 账号、仓库名和 token（token 要有仓库写入权限）
 
 ### 原站 PHP 那边要注意的
@@ -84,6 +78,7 @@
 - `restore_config.php` / `restore_status.json` / `restore_secret.php` 会在原站目录自动生成，确认目录可写
 - 站点静态缓存会挡住 `restore_status.json` 的实时状态，看进度时带个时间戳参数（向导已经自动处理了）
 
+下面内容由AI生成，请注意辨别。
 ---
 
 # 支持的存储后端
