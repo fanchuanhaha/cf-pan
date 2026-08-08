@@ -102,10 +102,25 @@ export async function remoteRequest(secret: string, sourceUrl: string, action: s
   return remoteRequestWithRetry(secret, sourceUrl, action, payload, true);
 }
 
-export async function remoteExport(secret: string, sourceUrl: string, adminUser: string, adminPassword: string): Promise<any> {
-  const result = await remoteRequest(secret, sourceUrl, 'export', { admin_user: adminUser, admin_password: adminPassword });
-  if (!result.payload) throw new Error('远程 PHP 没有返回导出数据');
-  return decrypt(secret, result.payload);
+export async function remoteExport(sourceUrl: string, adminUser: string, adminPassword: string): Promise<any> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch(endpoint(sourceUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ action: 'export', admin_user: adminUser, admin_password: adminPassword }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let json: any;
+    try { json = JSON.parse(text); } catch { throw new Error(`原站 rec.php 返回非 JSON (${response.status})`); }
+    if (!response.ok || !json.ok) throw new Error(json.error || `远程导出失败 (${response.status})`);
+    if (!json.data) throw new Error('远程 PHP 没有返回导出数据');
+    return json.data;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function remoteFileRequest(secret: string, sourceUrl: string, hash: string, type: string, adminUser: string, adminPassword: string): Promise<Response> {

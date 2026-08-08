@@ -1924,9 +1924,7 @@ install.post('/api/sql-preview', async (c) => {
       if (!sqlText.trim()) return jsonError(c, 'SQL 文件内容为空');
       preExtract = extractFromSql(sqlText);
     } else {
-      const secret = c.env.REMOTE_RESTORE_SECRET;
-      if (!secret) return jsonError(c, '未配置远程恢复通信密钥');
-      const exported: any = await remoteExport(secret, remoteSourceUrl, remoteAdminUser, remoteAdminPassword);
+      const exported: any = await remoteExport(remoteSourceUrl, remoteAdminUser, remoteAdminPassword);
       sqlText = String(exported.sql || '');
       preExtract = extractFromSql(sqlText);
       // PHP 同时返回配置字典。即使 SQL 解析器遇到方言或转义差异，也不能丢失

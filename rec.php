@@ -1,5 +1,17 @@
 <?php
-define('REMOTE_RESTORE_SECRET', '27da3de8ce92ad3b00ab1c374045de83a15d06b3b94b3b73f729a9bdbb474043');
+// 通信密钥：首次运行自动生成并持久化到 restore_secret.php，无需手工修改
+function rec_secret_load() {
+    $file = __DIR__ . '/restore_secret.php';
+    if (is_file($file)) {
+        $v = trim((string)file_get_contents($file));
+        $v = preg_replace('/^<\?php exit;\?>\s*/', '', $v);
+        if (strlen($v) >= 32) return $v;
+    }
+    $v = bin2hex(random_bytes(32));
+    @file_put_contents($file, "<?php exit;?>\n" . $v, LOCK_EX);
+    return $v;
+}
+define('REMOTE_RESTORE_SECRET', rec_secret_load());
 define('REMOTE_RESTORE_TTL', 300);
 define('REMOTE_RESTORE_LOG', '/home/fan/Downloads/remote_restore.log');
 
@@ -564,7 +576,7 @@ function rec_browser_set_config() {
     exit;
 }
 
-function rec_worker_export($data) {
+function rec_worker_export($data, $plaintext = false) {
     $db = rec_db();
     $settings = rec_settings($db);
     $user = (string)($data['admin_user'] ?? '');
@@ -588,6 +600,10 @@ function rec_worker_export($data) {
     $sql .= implode(",\n", $vals) . ";\n";
     $payload = array('sql' => $sql, 'fileCount' => count($fileRows), 'settings' => $settings, 'serverTime' => time());
     header('Content-Type: application/json; charset=utf-8');
+    if ($plaintext) {
+        echo json_encode(array('ok' => true, 'data' => $payload), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
     echo json_encode(array('ok' => true, 'payload' => rec_encrypt($payload)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
@@ -894,10 +910,15 @@ setInterval(function(){fetch('?action=status').then(function(r){return r.json()}
 $action = isset($_GET['action']) ? $_GET['action'] : '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $body = json_decode(file_get_contents('php://input'), true);
-    if (is_array($body) && isset($body['signature'])) {
-        $data = rec_auth($body);
-        if (($body['action'] ?? '') === 'export') {
-            rec_worker_export($data);
+    if (is_array($body) && (($body['action'] ?? '') === 'export')) {
+        if (isset($body['signature'])) {
+            rec_worker_export(rec_auth($body));
+        } else {
+            // 明文模式：管理员账号密码鉴权（rec_worker_export 内部校验），无需共享密钥
+            $user = (string)($body['admin_user'] ?? '');
+            $pass = (string)($body['admin_password'] ?? '');
+            if ($user === '' || $pass === '') rec_fail('缺少管理员账号密码', 403);
+            rec_worker_export(array('admin_user' => $user, 'admin_password' => $pass), true);
         }
     }
 }
