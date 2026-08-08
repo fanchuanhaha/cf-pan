@@ -7,122 +7,118 @@
 
 # 安装
 
-> 如果你是想从原 PHP 站点恢复数据，请先看 [从原站点恢复](#从原站点恢复)。
+> 如果以前跑过 PHP 版、想把数据搬过来，先看 [从原站点恢复](#从原站点恢复)。
 
-## 快速开始
+## 用 GitHub Actions 部署（推荐）
 
-这里不展示本地运行的方法
-
-
-GitHub Actions 自动部署（推荐）
-
-1. Fork 本仓库
-2. 在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加：
+1. Fork 这个仓库
+2. 在 GitHub 仓库 Settings → Secrets and variables → Actions 里加两个 Secret：
 
 | Secret | 说明 |
 |---|---|
-| [CLOUDFLARE_API_TOKEN](https://dash.cloudflare.com/profile/api-tokens) | Cloudflare API Token（需要 Workers / D1 / R2 Edit 权限，一个令牌覆盖全部）|
+| [CLOUDFLARE_API_TOKEN](https://dash.cloudflare.com/profile/api-tokens) | Cloudflare API Token（要有 Workers / D1 / R2 Edit 权限） |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
 
-3. Push 代码到 `main` 分支，运行GitHub Actions 自动完成：
+3. 往 `main` 分支推一次代码，Actions 会自动跑完这些事：
    - 创建 D1 数据库
    - 初始化表结构
    - 创建 R2 存储桶
    - 部署 Worker
 
-### 部署完成后
+不用配任何通信密钥，`rec.php` 那边第一次访问会自动生成。
 
-- 如果你**没有**部署过 PHP 版本，或不想从原站点恢复：
-  访问 `https://你的域名/install/`，选择"全新安装"，依次：
-  1. 设置管理员账号和密码
-  2. 选择存储后端（R2 / S3 / 七牛 / 又拍 / GitHub / WebDAV）并测试连接
-  3. 完成初始配置
+## 部署完成后
 
----
+打开 `https://你的域名/install/`，按向导走：
 
-## 从原站点恢复
+1. 设置管理员账号和密码
+2. 选择存储后端，目前支持 R2 / S3 / 七牛 / 又拍 / GitHub / WebDAV
+3. 填存储的参数（Key、Bucket 之类的），点一下测试连接
+4. 完事
 
-本系统支持从原 PHP 版（彩虹外链网盘 PHP 版）站点一键恢复全部数据和文件，**无需重新上传文件**。
-
-### 方式一：远程 PHP 代理直传（推荐）
-
-在原 PHP 站点放一个代理文件，Worker 通过加密通信调用它，PHP 直接从原站服务器读取文件并直传目标存储（如七牛云），速度更快、不受 Worker 超时限制。
-
-#### 1. 部署原站代理文件
-
-1. 把 `remote_restore.php` 上传到原 PHP 站点根目录（与 `index.php` 同目录）
-2. 打开文件，修改开头的 `REMOTE_RESTORE_SECRET`，改成一段随机字符串
-3. 在 `wrangler.spa.toml` 的 `[vars]` 中把 `REMOTE_RESTORE_SECRET` 设置成**完全相同**的值
-
-> 通信使用 AES-256-GCM 加密 + HMAC-SHA256 签名，密钥不一致会导致请求被拒绝。
-
-#### 2. 在安装向导中恢复
-
-1. 访问 `https://你的域名/install/`，选择 **从备份恢复**
-2. 填写 **原站点地址**（如 `https://原站点.example.com`）、原站管理员账号和密码
-   - 系统会自动调用原站根目录的 `remote_restore.php`
-   - 系统会通过原站 PHP 自动导出数据库（也可手动上传 `.sql` 文件覆盖远程导出）
-3. 勾选要从 SQL 导入的 `pre_config` 配置项（`storage` 永远不导入，必须重新选择）
-4. 选择新的存储后端（如七牛云）并**测试连接**
-5. 点击 **应用配置并完成**，然后点击 **开始恢复并上传**
-   - Worker 逐文件调用原站 PHP，PHP 从原站本地路径读取文件，分片（4MB/块、8 路并发）直传目标存储
-   - 页面实时显示每文件的进度百分比
-
-#### 3. 大文件说明
-
-- PHP 代理已设置 `set_time_limit(0)`、`memory_limit=2048M`，并放宽 Qiniu SDK 请求超时（连接 60s / 总 600s）
-- 文件读取失败会自动顺延查找 `filepath` 配置、`/file`、`/incloud` 等目录
-- 原 PHP 站点所在服务器如对响应有超时限制（如 nginx `proxy_read_timeout`），请调大（建议 ≥ 600s），或使用八路并行分片以尽快完成
-
-## 安装向导
-
-部署成功后首次访问会自动跳转到安装页面：
-
-1. **设置管理员账号** — 设置后台登录用户名和密码
-2. **选择存储类型** — 根据需要选择：
-   - **R2**（推荐）— Cloudflare 原生对象存储，零流量费
-   - **S3 兼容** — 支持阿里云 OSS / 腾讯云 COS / 华为云 OBS / MinIO 等
-   - **七牛云** — Qiniu Kodo
-   - **又拍云** / **WebDAV** / **GitHub API**（免费但有大小限制，适合测试）
-3. **配置存储参数** — 填写对应的 AccessKey、Bucket 等信息并测试连接
+要是之前没用过 PHP 版，选「全新安装」直接建个空库就行。
 
 ---
 
+# 从原站点恢复
 
+老 PHP 站点的数据和文件可以直接整体搬过来，不用手动重新传文件。流程是：
 
-## 支持的存储后端
+- Worker 向导从原站导出数据库和文件清单（需要原站的管理员账号密码）
+- 文件由原站服务器上的 `rec.php` 直接读出来传到新存储，不走 Worker，速度快也不受 Worker 超时限制
+
+## 1. 上传 rec.php 到原站
+
+把仓库根目录的 `rec.php` 传到原站根目录（和 `index.php` 同一个目录）。**不用改任何东西**，密钥第一次访问时自动生成、自动存到 `restore_secret.php`。
+
+> 原站如果是静态托管（比如 Mohua 虚拟主机开了缓存），页面可能拿到旧内容，恢复的时候记得刷新。
+
+## 2. 在向导里恢复
+
+1. 打开 `https://你的域名/install/`，选「从备份恢复」
+2. 填原站地址（比如 `https://老站点.com`）、原站管理员账号和密码
+3. 系统自动从原站导出数据库，也可以手动传一个 `.sql` 文件代替
+4. 勾选要带过来的 `pre_config` 配置项（`storage` 永远不导入，得重新选）
+5. 选新存储（比如 GitHub 仓库），填好参数测试连接
+6. 点「应用配置并完成」，向导会给你一个带令牌的恢复链接
+
+## 3. 在原站开始恢复
+
+用那个带令牌的链接打开原站 `rec.php` 页面，点「开始恢复」：
+
+- 文件由原站 PHP 逐个传到新存储，页面上能看到实时进度
+- 令牌链接有效期 7 天，第一次打开自动记住会话；没带令牌也可以直接输原站管理员账号密码进去
+- 恢复完成点「返回 Worker 站点」回到向导确认，收工
+
+### 关于 GitHub 存储
+
+用 GitHub 仓库存文件是免费，但有几个限制要心里有数：
+
+- 单文件上限 50MB，超过的会自动跳过并在结果里标出来
+- 文件存成 `file/完整hash` 这样的扁平结构
+- 需要填 GitHub 账号、仓库名和 token（token 要有仓库写入权限）
+
+### 原站 PHP 那边要注意的
+
+- PHP 需要装了 cURL 扩展
+- `restore_config.php` / `restore_status.json` / `restore_secret.php` 会在原站目录自动生成，确认目录可写
+- 站点静态缓存会挡住 `restore_status.json` 的实时状态，看进度时带个时间戳参数（向导已经自动处理了）
+
+---
+
+# 支持的存储后端
 
 | 存储类型 | 说明 |
 |---|---|
 | **R2** | Cloudflare 原生对象存储，零流量费 |
-| **S3 兼容** | 阿里云 OSS / 腾讯云 COS / AWS S3 / MinIO / 京东云 等 |
+| **S3 兼容** | 阿里云 OSS / 腾讯云 COS / AWS S3 / MinIO 等 |
 | **七牛云** | Qiniu Kodo |
 | **又拍云** | Upyun USS |
-| **GitHub API** | 使用 GitHub 仓库存储，免费但有大小限制 |
-| **WebDAV** | 支持坚果云等 WebDAV 服务 |
+| **GitHub API** | 用 GitHub 仓库存，免费但有 50MB 单文件上限 |
+| **WebDAV** | 坚果云等 WebDAV 服务 |
 
 ### 原站点云存储对接
 
-原 PHP 版支持的云存储，在 Workers 版中的接入方式：
+老 PHP 版用的存储，在 Workers 版里这么配：
 
 | 原站点存储 | Workers 版接入方式 | 说明 |
 |---|---|---|
-| 腾讯云 COS | **S3 兼容** | 填写 COS 的 Endpoint（如 `https://cos.ap-guangzhou.myqcloud.com`）、Region、Bucket、SecretId/SecretKey |
-| 阿里云 OSS | **S3 兼容** | 填写 OSS 的 Endpoint（如 `https://oss-cn-hangzhou.aliyuncs.com`）、Region、Bucket、AccessKey/SecretKey |
-| 华为云 OBS | **S3 兼容** | 填写 OBS 的 Endpoint、Region、Bucket、AK/SK |
-| 七牛云 | **七牛云** | 直接选择七牛云，填写 AK / SK / Bucket |
-| 又拍云 | **又拍云** | 直接选择又拍云，填写 Operator / 密码 / Bucket |
+| 腾讯云 COS | **S3 兼容** | 填 COS 的 Endpoint、Region、Bucket、SecretId/SecretKey |
+| 阿里云 OSS | **S3 兼容** | 填 OSS 的 Endpoint、Region、Bucket、AccessKey/SecretKey |
+| 华为云 OBS | **S3 兼容** | 填 OBS 的 Endpoint、Region、Bucket、AK/SK |
+| 七牛云 | **七牛云** | 直接选七牛云，填 AK / SK / Bucket |
+| 又拍云 | **又拍云** | 直接选又拍云，填 Operator / 密码 / Bucket |
 
 ---
 
-## 目录结构
+# 目录结构
 
 ```
 ├─ wrangler.spa.toml          # Worker 部署配置
 ├─ package.json
 ├─ tsconfig.json
 ├─ schema.sql                 # D1 建表 SQL
-├─ remote_restore.php         # 原站 PHP 恢复代理（部署到原 PHP 站点根目录）
+├─ rec.php                    # 原站恢复脚本（部署到原 PHP 站点根目录，不用改配置）
 ├─ public/                    # 前端静态资源 (Worker Assets)
 │  ├─ favicon.ico
 │  └─ assets/
@@ -145,7 +141,7 @@ GitHub Actions 自动部署（推荐）
    ├─ services/
    │  ├─ upload.ts            # 上传服务
    │  ├─ green.ts             # 鉴黄服务
-   │  ├─ remoteRestore.ts     # 远程恢复加密客户端（export / upload-stream）
+   │  ├─ remoteRestore.ts     # 远程恢复客户端（导出原站数据）
    │  ├─ restoreSession.ts    # 安装会话持久化
    │  ├─ restorePreExtract.ts # SQL 预提取 / pre_file 解析
    │  └─ restore.ts           # 从源 URL 恢复文件
@@ -161,9 +157,9 @@ GitHub Actions 自动部署（推荐）
 
 ---
 
-## API 接口
+# API 接口
 
-### 上传 API
+## 上传 API
 
 ```
 POST /api.php
@@ -173,9 +169,9 @@ file: 文件内容
 format: json（可选，支持 json / jsonp / form）
 ```
 
-回执格式支持 `json` / `jsonp` / `form` 三种，通过 `POST` 参数 `format` 指定。
+回执格式支持 `json` / `jsonp` / `form` 三种，用 `POST` 参数 `format` 指定。
 
-### 示例请求
+## 示例请求
 
 ```bash
 curl -X POST https://你的域名/api.php \
@@ -200,7 +196,7 @@ curl -X POST https://你的域名/api.php \
 
 ---
 
-## 与原 PHP 版本的主要区别
+# 与原 PHP 版本的主要区别
 
 | 项目 | PHP 版 | Workers 版 |
 |---|---|---|
@@ -212,17 +208,17 @@ curl -X POST https://你的域名/api.php \
 | 页面渲染 | PHP 模板 | Worker SSR 模板直出 |
 | 鉴黄 | 阿里云 Green / 腾讯云 IMS | Cloudflare AI |
 | 部署 | 上传 PHP 主机 | GitHub Actions 一键部署 |
-| 数据迁移 | - | 原站 PHP 代理自动导出 + 文件直传 |
+| 数据迁移 | - | 原站 rec.php 自动导出 + 文件直传 |
 
 ---
 
-## 许可证
+# 许可证
 
 MIT License
 
 ---
 
-## 相关链接
+# 相关链接
 
 - 原 PHP 版：https://github.com/netcccyun/pan
 - 原 PHP 版在线演示：https://pan.cccyun.cc/
@@ -230,4 +226,3 @@ MIT License
 - Cloudflare Workers 文档：https://developers.cloudflare.com/workers/
 - Cloudflare D1 文档：https://developers.cloudflare.com/d1/
 - Cloudflare R2 文档：https://developers.cloudflare.com/r2/
-
