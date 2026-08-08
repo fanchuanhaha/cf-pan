@@ -25,6 +25,7 @@ export interface IStorage {
   /** 获取前端直传参数 (云存储用) */
   getUploadParam?(name: string, filename: string, maxFileSize?: number): Promise<{
     url: string; post: Record<string, string>;
+    method?: 'POST' | 'PUT'; headers?: Record<string, string>;
   } | null>;
 
   /** 获取直链下载 URL */

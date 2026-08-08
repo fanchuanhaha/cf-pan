@@ -50,6 +50,7 @@ export function createStorage(config: AppConfig, env?: { FILE_R2?: R2Bucket }): 
         ref: config.gh_ref || undefined,
         defaultFolder: config.gh_folder || undefined,
         apiBase: config.gh_api_base || undefined,
+        ghProxy: config.gh_download_proxy || undefined,
       });
 
     case 'webdav':

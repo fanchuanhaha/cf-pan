@@ -8,6 +8,7 @@ import { isBlocked, sanitizeFileName } from '../services/upload';
 import { getFileExt, getMimeType, isView as isViewExt } from '../utils/mime';
 import { jsonError, jsonResult, generateCsrfToken, getClientIP } from '../utils/response';
 import { checkImage } from '../services/green';
+import { S3Storage } from '../storage/S3Storage';
 
 let csrfTokens: Record<string, string> = {};
 
@@ -95,6 +96,41 @@ async function handlePreUpload(c: any) {
   // Workers 没有本地磁盘，强制 chunks=1 让前端一次发送整个文件
   const chunkSize = 8 * 1024 * 1024;
   const chunks = 1;
+
+  // 直传模式：云存储支持时返回第三方直传参数（浏览器直接传存储商，Worker 不占流量）
+  if (config.uploadfile_type === 1) {
+    const stor = getStorOrThrow(c);
+    let param: any = null;
+    if (stor.getUploadParam) {
+      param = await stor.getUploadParam(hash, name, size);
+    } else if (config.storage === 'r2' && config.r2_access_key_id && config.r2_secret_access_key && config.r2_bucket) {
+      // R2 用 S3 兼容预签名直传（凭据在安装/恢复时写入配置）
+      const endpoint = (config.r2_endpoint || '').trim() ||
+        (config.r2_account_id ? `https://${config.r2_account_id}.r2.cloudflarestorage.com` : '');
+      if (endpoint) {
+        try {
+          const r2s3 = new S3Storage({
+            endpoint, region: 'auto', bucket: config.r2_bucket,
+            accessKeyId: config.r2_access_key_id, secretAccessKey: config.r2_secret_access_key,
+          });
+          param = await r2s3.getUploadParam(hash, name, size);
+        } catch (e) {
+          console.error('R2 presign error:', e);
+        }
+      }
+    }
+    if (param) {
+      return jsonResult(c, {
+        code: 0, third: true,
+        method: param.method || 'POST',
+        url: param.url,
+        post: param.post || {},
+        headers: param.headers || {},
+        hash, name, size, type: ext,
+        chunksize: chunkSize, chunks,
+      });
+    }
+  }
 
   return jsonResult(c, {
     code: 0, third: false, hash,
@@ -190,24 +226,92 @@ async function handleUploadPart(c: any) {
   });
 }
 
-// 完成上传
+// 完成上传（第三方直传时调用：校验存储中存在后入库）
 async function handleCompleteUpload(c: any) {
   const body = await c.req.parseBody() as Record<string, string>;
   const hash = String(body['hash'] || '');
   const csrfToken = String(body['csrf_token'] || '');
-
-  // 验证 cookie 中的 token
   const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
   if (!csrfToken || csrfToken !== cookieCsrf) {
     return jsonError(c, 'CSRF TOKEN ERROR');
   }
+  if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
 
   const db = getDB(c);
-  const file = await getFileByHash(db, hash);
-  if (!file) return jsonError(c, '文件不存在');
+  const config = getConf(c);
+  const ip = getClientIP(c);
 
+  // 中转流程已入库，直接返回
+  const existing = await getFileByHash(db, hash);
+  if (existing) {
+    delete csrfTokens[ip];
+    return jsonResult(c, {
+      code: 1, msg: '文件上传成功！', hash, name: existing.name, size: existing.size, type: existing.type, id: existing.id,
+    });
+  }
+
+  const name = sanitizeFileName(String(body['name'] || ''));
+  const size = parseInt(String(body['size'] || '0')) || 0;
+  if (!name) return jsonError(c, '文件名不能为空');
+  if (config.upload_size > 0 && size > config.upload_size * 1024 * 1024) {
+    return jsonError(c, '文件超过大小限制');
+  }
+  const ext = getFileExt(name);
+  if (isBlocked(name, ext)) return jsonError(c, '文件上传失败，不支持上传该格式文件');
+
+  const pwdRaw = String(body['pwd'] || '');
+  const pwd = pwdRaw ? pwdRaw : null;
+  if (pwd && !/^[a-zA-Z0-9]+$/.test(pwd)) return jsonError(c, '文件密码只能为字母和数字');
+
+  if (config.upload_limit > 0) {
+    const todayCount = await getTodayUploadCount(db, ip, 0);
+    if (todayCount >= config.upload_limit) return jsonError(c, '你今天上传文件的数量已超过限制');
+  }
+
+  // 直传完成后校验文件确实已在存储中
+  const stor = getStorOrThrow(c);
+  if (!(await stor.exists(hash))) return jsonError(c, '文件未上传成功');
+
+  const hide = String(body['show'] || '1') === '1' ? 0 : 1;
+  const id = await insertFile(db, { name, type: ext, size, hash, ip, hide, pwd, uid: 0 });
+
+  // 鉴黄
+  if (config.green_check > 0) {
+    const typeImage = config.type_image.split('|').map(s => s.toLowerCase());
+    if (typeImage.includes(ext.toLowerCase())) {
+      const checkResult = await checkImage(hash, ext, c.env);
+      if (!checkResult.safe) {
+        await db.prepare('UPDATE pre_file SET block = 1 WHERE id = ?').bind(id).run();
+      }
+    }
+  }
+
+  // 视频审核
+  if (config.videoreview === 1) {
+    const typeVideo = config.type_video.split('|').map(s => s.toLowerCase());
+    if (typeVideo.includes(ext.toLowerCase())) {
+      await db.prepare('UPDATE pre_file SET block = 2 WHERE id = ?').bind(id).run();
+    }
+  }
+
+  // 记录上传的文件ID到cookie（用于"我的文件"和管理权限）
+  const cookie = c.req.header('cookie') || '';
+  const match = cookie.match(/file_ids=([^;]+)/);
+  let ids: number[] = [];
+  if (match) {
+    try {
+      ids = atob(decodeURIComponent(match[1])).split(',').map(s => parseInt(s)).filter(n => !isNaN(n));
+    } catch {}
+  }
+  if (!ids.includes(id)) {
+    ids.unshift(id);
+    if (ids.length > 60) ids = ids.slice(0, 60);
+  }
+  c.header('Set-Cookie', `file_ids=${encodeURIComponent(btoa(ids.join(',')))}; Path=/; Max-Age=604800; SameSite=Lax`);
+
+  delete csrfTokens[ip];
   return jsonResult(c, {
-    code: 1, msg: '文件上传成功！', hash, name: file.name, size: file.size, type: file.type, id: file.id,
+    code: 1, msg: '文件上传成功！', exists: 0, hash, name, size, type: ext, id,
   });
 }
 

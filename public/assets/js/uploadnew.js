@@ -136,11 +136,19 @@ new Vue({
             }
 
             if(result.third){
-                await this.uploadThird(result.url, result.post, file).then(res =>{
-                }, res => {
-                    that.show_msg(res, 'danger');
-                    throw Error();
-                });
+                if(result.method == 'PUT'){
+                    await this.uploadThirdPut(result.url, file).then(res =>{
+                    }, res => {
+                        that.show_msg(res, 'danger');
+                        throw Error();
+                    });
+                }else{
+                    await this.uploadThird(result.url, result.post, result.headers, file).then(res =>{
+                    }, res => {
+                        that.show_msg(res, 'danger');
+                        throw Error();
+                    });
+                }
 
                 await this.completeUpload().then(res =>{
                     result = res
@@ -214,7 +222,15 @@ new Vue({
                 $.ajax({
                     type: 'POST',
                     url: 'ajax.php?act=complete_upload',
-                    data: {hash: that.input.hash, csrf_token: that.input.csrf_token},
+                    data: {
+                        hash: that.input.hash,
+                        csrf_token: that.input.csrf_token,
+                        name: that.input.name,
+                        size: that.input.size,
+                        show: that.input.show?'1':'0',
+                        ispwd: that.input.ispwd?'1':'0',
+                        pwd: that.input.pwd,
+                    },
                     dataType: 'json',
                     success: function(data) {
                         if(data.code == 0 || data.code == 1){
@@ -281,7 +297,7 @@ new Vue({
                 });
             })
         },
-        async uploadThird(url, postdata, file){ //第三方上传文件
+        async uploadThird(url, postdata, headers, file){ //第三方POST直传（七牛/又拍表单上传）
             var that = this;
             var tempTime = new Date().getTime();
             var oloaded = 0;
@@ -295,6 +311,7 @@ new Vue({
                     type : "POST",
                     url : url,
                     data : data,
+                    headers: headers || {},
                     processData: false,
                     contentType: false,
                     dataType : 'html',
@@ -324,6 +341,41 @@ new Vue({
                         return xhr;
                     }
                 });
+            })
+        },
+        async uploadThirdPut(url, file){ //第三方PUT直传（S3/R2 预签名）
+            var that = this;
+            var tempTime = new Date().getTime();
+            var oloaded = 0;
+            return new Promise((resolve, reject) => {
+                var xhr = new XMLHttpRequest();
+                xhr.open('PUT', url, true);
+                xhr.onload = function(){
+                    if(xhr.status >= 200 && xhr.status < 300){
+                        resolve();
+                    }else{
+                        reject('上传失败(HTTP ' + xhr.status + ')，请检查存储桶是否允许跨域(CORS)');
+                    }
+                };
+                xhr.onerror = function(){
+                    reject('上传失败，请检查存储桶是否允许跨域(CORS)');
+                };
+                xhr.upload.addEventListener('progress', function (e) {
+                    if(e.lengthComputable){
+                        var progressRate = Math.round((e.loaded + that.loaded_size) / that.input.size * 100);
+                        if(progressRate>100)progressRate=100;
+                        that.progress = progressRate;
+                        if(progressRate == 100) that.progress_tip = '正在保存中，请稍候'
+                        var nowTime = new Date().getTime();
+                        var pertime = (nowTime - tempTime) / 1000;
+                        tempTime = nowTime;
+                        var perload = e.loaded - oloaded;
+                        oloaded = e.loaded;
+                        var speed = that.size_format(perload/pertime)+'/s';
+                        that.uploadspeed = speed
+                    }
+                });
+                xhr.send(file);
             })
         },
         async getFileHash(file){ //获取文件MD5

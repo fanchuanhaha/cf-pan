@@ -39,7 +39,7 @@ async function decrypt(secret: string, value: string): Promise<any> {
       return JSON.parse(new TextDecoder().decode(plain));
     } catch { /* 尝试另一种密文排列 */ }
   }
-  throw new Error('远程 PHP 响应解密失败，请更新 remote_restore.php');
+  throw new Error('远程 PHP 响应解密失败，请更新 rec.php');
 }
 
 function endpoint(sourceUrl: string): string {
@@ -47,7 +47,7 @@ function endpoint(sourceUrl: string): string {
   if (/\/remote_restore\.php$/i.test(url.pathname)) return url.toString();
   // Accept a root URL or the old /down.php URL, but always call the agent file.
   const basePath = /\/down\.php$/i.test(url.pathname) ? url.pathname.replace(/\/down\.php$/i, '') : url.pathname;
-  url.pathname = basePath.replace(/\/+$/, '') + '/remote_restore.php';
+  url.pathname = basePath.replace(/\/+$/, '') + '/rec.php';
   url.search = '';
   return url.toString();
 }

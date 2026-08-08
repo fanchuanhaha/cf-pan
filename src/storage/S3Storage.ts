@@ -1,6 +1,7 @@
 // 彩虹外链网盘 - S3 兼容存储实现 (支持 OSS/COS/MinIO 等)
 
 import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { IStorage } from './IStorage';
 
 const FILE_PREFIX = 'file/';
@@ -27,6 +28,8 @@ export class S3Storage implements IStorage {
         secretAccessKey: config.secretAccessKey,
       },
       forcePathStyle: true,
+      // 预签名 URL 不带 checksum，浏览器才能直接 PUT
+      requestChecksumCalculation: 'WHEN_REQUIRED',
     });
   }
 
@@ -124,6 +127,22 @@ export class S3Storage implements IStorage {
 
   async savefile(name: string, _tmpfile: string, _contentType?: string): Promise<boolean> {
     return false; // S3 使用 upload 替代
+  }
+
+  /** 前端直传参数：SigV4 预签名 PUT URL（浏览器直接 PUT，需存储商开启 CORS） */
+  async getUploadParam(name: string, _filename: string, _maxFileSize?: number): Promise<{
+    url: string; post: Record<string, string>; method: 'PUT';
+  } | null> {
+    try {
+      const url = await getSignedUrl(this.client, new PutObjectCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(name),
+      }), { expiresIn: 3600 });
+      return { method: 'PUT', url, post: {} };
+    } catch (e) {
+      console.error('S3 presign error:', e);
+      return null;
+    }
   }
 
   async getinfo(name: string): Promise<{ length: number; content_type: string } | null> {

@@ -1223,15 +1223,15 @@ function saveSetting(obj){
       <div class="col-sm-9"><select class="form-control" name="storage" default="${config.storage}">${storOptions(config.storage)}</select><font color="green">已有文件的情况下请勿随意变更，否则之前上传的文件全部无法下载</font></div>
     </div><br/>
     <div id="cloud_stor">
-    <div class="form-group">
+    <div class="form-group" id="uploadfile_type_form">
       <label class="col-sm-3 control-label">文件上传方式</label>
-       <div class="col-sm-9"><select class="form-control" name="uploadfile_type" default="${config.uploadfile_type}"><option value="0">网站中转</option><option value="1">直接链接</option></select></div>
+       <div class="col-sm-9"><select class="form-control" name="uploadfile_type" default="${config.uploadfile_type}"><option value="0">网站中转</option><option value="1">直接链接</option></select><font color="green">直传需存储商允许跨域(CORS)，否则请使用中转</font></div>
     </div><br/>
-    <div class="form-group">
+    <div class="form-group" id="downfile_type_mode_form">
       <label class="col-sm-3 control-label">文件下载方式</label>
        <div class="col-sm-9"><select class="form-control" name="downfile_type" default="${config.downfile_type}"><option value="0">网站中转</option><option value="1">直接链接</option></select></div>
     </div><br/>
-    <div class="form-group" id="downfile_type_form" style="${config.downfile_type !== 1 ? 'display:none;' : ''}">
+    <div class="form-group" id="downfile_domain_form" style="${config.downfile_type !== 1 ? 'display:none;' : ''}">
       <label class="col-sm-3 control-label">文件下载域名</label>
       <div class="col-sm-9">
         <div class="row">
@@ -1245,6 +1245,10 @@ function saveSetting(obj){
         <font color="green">不设Bucket绑定的域名，也可使用CDN域名</font>
       </div>
     </div><br/>
+    <div class="form-group" id="gh_proxy_form" style="display:none">
+      <label class="col-sm-3 control-label">下载代理地址</label>
+      <div class="col-sm-9"><input type="text" class="form-control" name="gh_download_proxy" value="${config.gh_download_proxy}" placeholder="https://ghfast.top/"/><font color="green">GitHub 直连下载走代理前缀，留空则直连原始地址</font></div>
+    </div><br/>
     </div>
     <div class="form-group">
       <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="提交" class="btn btn-primary btn-block"/>
@@ -1254,7 +1258,7 @@ function saveSetting(obj){
 </div>
 </div>
 
-<div class="panel panel-info">
+<div class="panel panel-info stor-panel" data-stor="r2">
 <div class="panel-heading"><h3 class="panel-title">Cloudflare R2 配置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
@@ -1270,7 +1274,7 @@ function saveSetting(obj){
 </div>
 </div>
 
-<div class="panel panel-info">
+<div class="panel panel-info stor-panel" data-stor="s3">
 <div class="panel-heading"><h3 class="panel-title">S3 兼容的存储配置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
@@ -1302,7 +1306,7 @@ function saveSetting(obj){
 </div>
 </div>
 
-<div class="panel panel-info">
+<div class="panel panel-info stor-panel" data-stor="github">
 <div class="panel-heading"><h3 class="panel-title">GitHub API 配置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
@@ -1334,7 +1338,7 @@ function saveSetting(obj){
 </div>
 </div>
 
-<div class="panel panel-info">
+<div class="panel panel-info stor-panel" data-stor="webdav">
 <div class="panel-heading"><h3 class="panel-title">WebDAV 配置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
@@ -1362,7 +1366,7 @@ function saveSetting(obj){
 </div>
 </div>
 
-<div class="panel panel-info">
+<div class="panel panel-info stor-panel" data-stor="upyun">
 <div class="panel-heading"><h3 class="panel-title">又拍云配置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
@@ -1398,7 +1402,7 @@ function saveSetting(obj){
 </div>
 </div>
 
-<div class="panel panel-info">
+<div class="panel panel-info stor-panel" data-stor="qiniu">
 <div class="panel-heading"><h3 class="panel-title">七牛云配置</h3></div>
 <div class="panel-body">
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
@@ -1431,13 +1435,29 @@ function saveSetting(obj){
 </div>
 
 <script>
-$("select[name='storage']").change(function(){
-  $("#cloud_stor").show();
-});
-$("select[name='downfile_type']").change(function(){
-  if($(this).val() == '1'){ $("#downfile_type_form").show(); }
-  else{ $("#downfile_type_form").hide(); }
-});
+function applyStorView(){
+  var t = $("select[name='storage']").val();
+  // 上传方式：支持浏览器直传的存储（七牛/又拍/云/S3/R2）
+  $("#uploadfile_type_form").toggle(t === 'qiniu' || t === 'upyun' || t === 's3' || t === 'r2');
+  // 下载方式：有直链能力的存储（七牛/又拍/GitHub）
+  $("#downfile_type_mode_form").toggle(t === 'qiniu' || t === 'upyun' || t === 'github');
+  // 只显示与当前存储类型匹配的配置面板
+  $(".stor-panel").each(function(){
+    $(this).css('display', $(this).data('stor') === t ? '' : 'none');
+  });
+  applyDownfileView();
+}
+function applyDownfileView(){
+  var t = $("select[name='storage']").val();
+  var isDirect = $("select[name='downfile_type']").val() == '1';
+  // 下载域名：仅七牛云在直连时显示
+  $("#downfile_domain_form").toggle(t === 'qiniu' && isDirect);
+  // GitHub 代理地址：GitHub 直连时显示
+  $("#gh_proxy_form").toggle(t === 'github' && isDirect);
+}
+$("select[name='storage']").change(applyStorView);
+$(function(){ applyStorView(); });
+$("select[name='downfile_type']").change(applyDownfileView);
 
 function startMigrate(){
   var targetType = $("select[name='storage']").val();

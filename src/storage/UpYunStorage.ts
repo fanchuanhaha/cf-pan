@@ -34,7 +34,7 @@ export class UpYunStorage implements IStorage {
   /** 把 hash 映射到存储路径 */
   private hashToPath(hash: string): string {
     const folder = (this.cfg.folder || 'file').replace(/\/$/, '');
-    return `/${folder}/${hash.substring(0, 2)}/${hash.substring(2, 4)}/${hash}`;
+    return `/${folder}/${hash}`;
   }
 
   /** 生成 Authorization 头 */
@@ -134,6 +134,29 @@ export class UpYunStorage implements IStorage {
     const path = this.hashToPath(name);
     const res = await this.request('DELETE', path);
     return res.ok || res.status === 404;
+  }
+
+  /**
+   * 前端直传参数：又拍云表单 API（policy + signature，浏览器 FormData POST 直传）
+   */
+  async getUploadParam(name: string, _filename: string, _maxFileSize?: number): Promise<{
+    url: string; post: Record<string, string>; method: 'POST'; headers: Record<string, string>;
+  } | null> {
+    const path = this.hashToPath(name);
+    const expiration = Math.floor(Date.now() / 1000) + 3600;
+    const policy = btoa(unescape(encodeURIComponent(JSON.stringify({
+      bucket: this.cfg.bucket,
+      'save-key': path,
+      expiration,
+    }))));
+    const passwordMd5 = await md5(this.cfg.password);
+    const signature = await md5(passwordMd5 + '&' + policy);
+    return {
+      method: 'POST',
+      url: `${this.apiHost}/${this.cfg.bucket}/`,
+      headers: { Authorization: `UPYUN ${this.cfg.operator}:${signature}` },
+      post: { policy, signature },
+    };
   }
 
   async getDownUrl(name: string, filename: string, contentType?: string): Promise<string | null> {

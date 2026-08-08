@@ -28,6 +28,41 @@ import { remoteExport, remoteUploadFile } from '../services/remoteRestore';
 
 const install = new Hono<AppEnv>();
 
+function browserRestoreEndpoint(sourceUrl: string): string {
+  const url = new URL(sourceUrl);
+  const basePath = /\/down\.php$/i.test(url.pathname)
+    ? url.pathname.replace(/\/down\.php$/i, '')
+    : url.pathname;
+  url.pathname = basePath.replace(/\/+$/, '') + '/rec.php';
+  url.search = '';
+  return url.toString();
+}
+
+async function saveRemoteRestoreConfig(
+  sourceUrl: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const endpoint = browserRestoreEndpoint(sourceUrl);
+    const response = await fetch(endpoint + '?action=set-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let result: any;
+    try { result = JSON.parse(text); } catch { throw new Error(`原站 rec.php 返回非 JSON (${response.status})`); }
+    if (!response.ok || !result.ok) {
+      throw new Error((result && result.error) ? String(result.error) : `原站恢复配置保存失败 (${response.status})`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /* ---------------------------------------------------------------------- *
  * 页面：单页多步骤安装向导
  * step 状态由前端 JS 控制，步骤：
@@ -94,6 +129,14 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
 .button-row .btn { margin-right: 6px; }
 .finish-buttons { text-align: center; margin-top: 20px; }
 .finish-buttons .btn-install { margin: 0 4px; }
+/* 全屏阻塞模态框 */
+.suggest-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.62); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.suggest-modal-box { background: #fff; color: #333; width: 100%; max-width: 520px; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.45); }
+.suggest-modal-head { background: #2e8bcc; color: #fff; padding: 16px 20px; font-size: 16px; font-weight: bold; }
+.suggest-modal-body { padding: 22px 20px; font-size: 14px; color: #555; line-height: 1.7; }
+.suggest-modal-body code { background: #f3f3f3; color: #c0392b; padding: 1px 5px; border-radius: 3px; }
+.suggest-modal-foot { padding: 14px 20px; background: #f5f5f5; text-align: right; border-top: 1px solid #e0e0e0; }
+.suggest-modal-foot .btn-install, .suggest-modal-foot .btn-secondary { margin-left: 8px; font-size: 14px; }
 @media (max-width: 640px) { .wizard-body { padding: 12px; } .wizard-header { padding: 12px; } .step-pill { font-size: 11px; } .step-pill .num { display: none; } }
 @media (prefers-color-scheme: dark) {
   body { background: #000; color: #ddd; }
@@ -122,6 +165,11 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
   .alert-success { background: #203a28; border-color: #3d744c; color: #c9efcf; }
   .alert-warning { background: #40361d; border-color: #806b2e; color: #f2df9b; }
   .alert-danger { background: #432525; border-color: #854545; color: #f3caca; }
+  .suggest-modal-box { background: #1d1d1d; color: #ddd; }
+  .suggest-modal-head { background: #21597f; }
+  .suggest-modal-body { color: #bbb; }
+  .suggest-modal-body code { background: #303030; color: #f0c674; }
+  .suggest-modal-foot { background: #252525; border-color: #444; }
 }
 </style>
 </head>
@@ -243,15 +291,15 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
     <!-- Step 1R: 连接原站点导出 -->
     <div class="step" id="step-1r">
       <h3 style="margin-top:0">从备份恢复 - 连接原站点</h3>
-      <p class="text-muted">输入原站点信息后，系统会通过原站点根目录的 <code>/remote_restore.php</code> 自动导出数据库并预提取 <code>pre_config</code> 表供您选择，不会立刻写入 D1。</p>
+       <p class="text-muted">输入原站点信息后，系统会通过原站点根目录的 <code>/rec.php</code> 自动导出数据库并预提取 <code>pre_config</code> 表供您选择，不会立刻写入 D1。</p>
       <div class="alert alert-warning" style="margin-top:10px">
-        <i class="fa fa-exclamation-triangle"></i> 请先将 <a href="https://raw.githubusercontent.com/fanchuanhaha/cf-pan/refs/heads/master/remote_restore.php" target="_blank">remote_restore.php</a> 上传到原站点根目录，否则无法连接进行恢复。
+        <i class="fa fa-exclamation-triangle"></i> 请先将 <a href="https://raw.githubusercontent.com/fanchuanhaha/cf-pan/refs/heads/master/rec.php" target="_blank">rec.php</a> 上传到原站点根目录，否则无法连接进行恢复。
       </div>
       <form id="formSqlUpload">
         <div class="form-group">
           <label>原站点地址 <span class="required">*</span></label>
           <input type="text" name="remote_source_url" class="form-control" placeholder="https://原站点.example.com" required>
-          <span class="help-block">系统会自动调用原站点根目录的 <code>/remote_restore.php</code>。</span>
+          <span class="help-block">系统会自动调用原站点根目录的 <code>/rec.php</code>。</span>
         </div>
         <div class="row">
           <div class="col-md-6"><div class="form-group"><label>原站管理员账号 <span class="required">*</span></label><input type="text" name="remote_admin_user" class="form-control" required></div></div>
@@ -268,12 +316,17 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
     <div class="step" id="step-2r">
       <h3 style="margin-top:0">从备份恢复 - 勾选配置 + 选择存储</h3>
       <div id="configWarnings"></div>
-      <div id="storageSuggestBanner" style="display:none; margin: 12px 0; padding: 14px 18px; border: 2px solid #2e8bcc; border-radius: 6px; background: #f0f8ff;">
-        <div style="font-weight:bold; font-size:14px; margin-bottom:8px; color:#2e8bcc"><i class="fa fa-lightbulb-o"></i> <span id="suggestTitle"></span></div>
-        <div id="suggestDetail" style="font-size:13px; color:#555; margin-bottom:12px"></div>
-        <div class="button-row">
-          <button type="button" class="btn btn-primary btn-sm" onclick="acceptSuggestedStorage()"><i class="fa fa-check"></i> 使用推荐存储</button>
-          <button type="button" class="btn btn-default btn-sm" onclick="dismissSuggestedStorage()"><i class="fa fa-times"></i> 不使用，手动选择</button>
+      <!-- 存储推荐全屏模态框（阻塞式，必须点按钮才能继续） -->
+      <div id="storageSuggestModal" class="suggest-modal-overlay" style="display:none">
+        <div class="suggest-modal-box" role="dialog" aria-modal="true">
+          <div class="suggest-modal-head"><i class="fa fa-lightbulb-o"></i> <span id="suggestTitle"></span></div>
+          <div class="suggest-modal-body">
+            <div id="suggestDetail"></div>
+          </div>
+          <div class="suggest-modal-foot">
+            <button type="button" class="btn-secondary" onclick="dismissSuggestedStorage()"><i class="fa fa-times"></i> 不使用，手动选择</button>
+            <button type="button" class="btn-install" onclick="acceptSuggestedStorage()"><i class="fa fa-check"></i> 使用推荐存储</button>
+          </div>
         </div>
       </div>
       <h4 style="margin-top:18px"><i class="fa fa-list"></i> SQL 中提取到的 <code>pre_config</code> 项</h4>
@@ -302,33 +355,24 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
     <!-- Step 3R: 原站 PHP 直传 + 文件恢复进度 -->
     <div class="step" id="step-3r">
       <h3 style="margin-top:0">从备份恢复 - 开始恢复文件</h3>
-      <p class="text-muted">原站点地址已在上一步填写并保存，当前任务会使用同一个地址读取文件。</p>
-      <form id="formSource" onsubmit="event.preventDefault(); startFileDownload();">
-        <div class="form-group">
-          <label>当前原站点 URL</label>
-          <input id="restoreSourceUrlDisplay" type="text" name="source_url" class="form-control" readonly placeholder="第二步保存的原站点地址会显示在这里">
-          <span class="help-block">如需更换原站点，请返回第二步修改。</span>
-        </div>
-         <button type="submit" class="btn-install"><i class="fa fa-cloud-upload"></i> 开始恢复并上传</button>
-         <button type="button" class="btn-install" style="background:#999;border-color:#777;margin-left:8px" onclick="skipRestore()"><i class="fa fa-forward"></i> 跳过恢复</button>
-      </form>
-      <div id="downloadProgress" style="display:none; margin-top:20px">
-         <h4>恢复上传进度</h4>
-         <div>已处理文件 / 总文件: <span id="dpTotal">0 / 0</span></div>
-        <div class="progress"><div id="dpBarTotal" class="progress-bar progress-bar-info" style="width:0%">0%</div></div>
-        <span id="dpTransferMode" class="text-muted"></span>
-         <div id="dpBytes" class="text-muted">已处理大小 / 总文件大小: 0 B / 0 B</div>
-        <div id="dpCurrentPanel">
-          <div style="margin-top:8px">当前文件: <span id="dpCurrent">-</span></div>
-          <div class="progress"><div id="dpBarCurrent" class="progress-bar progress-bar-info" style="width:0%">0%</div></div>
-          <div id="dpCurrentDetail" class="text-muted">当前文件: 0 B / 0 B，速度: 0 B/s</div>
-        </div>
-        <div>成功 / 失败: <span id="dpResult">0 / 0</span></div>
-        <div>跳过文件: <span id="dpSkipped">0</span></div>
-        <div id="dpSkippedList" class="text-warning" style="margin-top:6px; max-height:180px; overflow:auto; white-space:pre-wrap"></div>
-        <div id="dpStatus" class="text-muted" style="margin-top:6px"></div>
-        <div id="dpFailedList" class="text-danger" style="margin-top:6px; max-height:220px; overflow:auto; white-space:pre-wrap"></div>
-        <div id="dpRefreshHint" class="text-muted" style="margin-top:12px; font-size:12px; border-top:1px dashed #ccc; padding-top:8px">如果进度长时间无变化，可直接刷新页面，恢复任务会自动继续。</div>
+      <div id="restoreSending" style="text-align:center;padding:40px">
+        <i class="fa fa-spinner fa-spin fa-3x" style="color:#2196f3"></i>
+        <p style="margin-top:16px">正在保存配置并跳转...</p>
+      </div>
+      <div id="restoreError" style="display:none;color:#dc3545;padding:20px"></div>
+      <div id="restoreGuide" style="display:none;text-align:center;padding:30px">
+        <p style="margin-bottom:20px;font-size:15px">配置已保存，请在新标签页完成文件恢复</p>
+        <a id="recLink" href="#" target="_blank" class="btn-install" style="text-decoration:none">
+          <i class="fa fa-external-link"></i> 前往恢复页面
+        </a>
+        <p style="color:#999;font-size:13px;margin-top:16px">输入密码开始恢复后，在原站页面点击"返回 Worker 站点"即可回来</p>
+        <button type="button" class="btn-install" style="background:#999;border-color:#777;margin-left:8px" onclick="skipRestore()">
+          <i class="fa fa-forward"></i> 跳过恢复
+        </button>
+      </div>
+      <div id="restoreManual" style="display:none;text-align:center;padding:30px">
+        <p style="margin-bottom:12px">请手动访问：</p>
+        <input id="restoreManualUrl" type="text" class="form-control" readonly style="margin-bottom:16px">
       </div>
     </div>
 
@@ -383,9 +427,11 @@ const state = {
   storageTested: false, // 存储读写测试是否通过（restore 流程确认前必须为 true）
   suggestedStorageName: '', // 检测到的推荐存储类型（如 qiniu）
   suggestedStorageFields: {}, // 推荐存储的字段值
+  suggestDismissed: false, // 存储推荐弹窗已被用户关闭后不再弹出
   resumed: false,
   remoteSourceUrl: '',
   remoteConfirmed: false, // 连接原站点并确认后才允许进入下一步
+  recToken: '',           // rec.php 恢复页免密令牌（由向导生成，随配置下发给原站）
 };
 
 async function saveDraft() {
@@ -439,15 +485,20 @@ async function restoreInstallSession() {
       if (sourceInput && !sourceInput.value) setRestoreSourceUrl(data.remoteSourceUrl);
     }
     if (data.taskId) {
-      showStep(3);
-      document.getElementById('downloadProgress').style.display = 'block';
-      const startButton = document.querySelector('#formSource button[type="submit"]');
-      if (startButton) {
-        startButton.disabled = true;
-        startButton.innerHTML = '<i class="fa fa-refresh fa-spin"></i> 已有任务进行中';
+      const isLocalBackup = String((data.preExtract && data.preExtract.preConfig && data.preExtract.preConfig.storage) || '').trim() === 'local';
+      if (isLocalBackup) {
+        showStep(3);
+        document.getElementById('restoreGuide').style.display = 'block';
+        document.getElementById('restoreSending').style.display = 'none';
+        document.getElementById('restoreManual').style.display = 'none';
+        const recUrl = (data.remoteSourceUrl || '').replace(/[/]+$/, '') + '/rec.php';
+        const token = await genRecToken();
+        const recLink = recUrl + (recUrl.indexOf('?') >= 0 ? '&' : '?') + 't=' + encodeURIComponent(token);
+        document.getElementById('recLink').href = recLink;
+        document.getElementById('restoreManualUrl').value = recLink;
+      } else {
+        showStep(2);
       }
-      document.getElementById('dpStatus').innerText = '正在恢复任务进度...';
-      pollFileStatus();
     } else if (data.storageType) {
       showStep(2);
     } else if (data.preExtract) {
@@ -456,9 +507,58 @@ async function restoreInstallSession() {
     } else {
       showStep(1);
     }
+    if (new URLSearchParams(location.search).get('restore_done')) {
+      await confirmRestoreDone(data.remoteSourceUrl || '');
+    }
   } catch (e) {
     console.warn('[install] session restore failed:', e);
   }
+}
+
+/* ==================== 原站恢复完成确认 ==================== */
+async function confirmRestoreDone(sourceUrl) {
+  const panel = document.getElementById('restoreSending');
+  const guide = document.getElementById('restoreGuide');
+  const errorEl = document.getElementById('restoreError');
+  if (!sourceUrl) {
+    errorEl.style.display = 'block';
+    errorEl.innerText = '缺少原站点地址，无法确认恢复结果';
+    return;
+  }
+  showStep(3);
+  guide.style.display = 'none';
+  errorEl.style.display = 'none';
+  panel.style.display = 'block';
+  const tip = panel.querySelector('p');
+  if (tip) tip.innerText = '正在确认原站恢复结果...';
+  const recUrl = sourceUrl.replace(/[/]+$/, '') + '/rec.php';
+  const deadline = Date.now() + 60000;
+  let nullCount = 0;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch('/install/api/check-restore?url=' + encodeURIComponent(recUrl), { credentials: 'same-origin' });
+      const json = await res.json();
+      const s = json.data;
+      if (s && (s.status === 'completed' || (s.processed || 0) >= (s.total || 0))) {
+        document.getElementById('doneSummary').innerText =
+          '文件恢复完成：' + (s.processed || 0) + ' / ' + (s.total || 0) + ' 个文件，成功 ' + (s.success || 0) + ' 个，失败 ' + (s.failed || 0) + ' 个';
+        clearInstallData();
+        showStep(4);
+        return;
+      }
+      if (!s) {
+        // 原站没有恢复任务（配置或状态文件缺失）：立即提示，不空转等待
+        nullCount++;
+        if (nullCount >= 2) break;
+      }
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  panel.style.display = 'none';
+  guide.style.display = 'block';
+  errorEl.style.display = 'block';
+  errorEl.innerText = '未能确认到恢复完成：原站未检测到恢复任务（restore_config.php / restore_status.json 不存在或为空）。' +
+    '请回到向导第 2 步重新点击「应用配置并完成」保存配置，再到原站 rec.php 页面开始恢复，完成后点击「返回 Worker 站点」。';
 }
 
 function setRestoreSourceUrl(url) {
@@ -471,23 +571,24 @@ function setRestoreSourceUrl(url) {
 function showStorageSuggest(storageType, fields, fieldSummary) {
   state.suggestedStorageName = storageType;
   state.suggestedStorageFields = fields;
-  const banner = document.getElementById('storageSuggestBanner');
   document.getElementById('suggestTitle').textContent = '检测到备份包含完整的 ' + storageType + ' 配置';
   document.getElementById('suggestDetail').innerHTML =
-    '检测到完整的 ' + storageType + ' 云存储配置（' + fieldSummary + '）。是否直接使用这些配置？';
-  banner.style.display = 'block';
+    '检测到原站点配置了完整的 <code>' + storageType + '</code> 云存储（' + fieldSummary + '）。<br>是否直接沿用这些配置作为新的存储后端？';
+  document.getElementById('storageSuggestModal').style.display = 'flex';
 }
 
 function renderSuggestedStorage(preExtract) {
   if (!preExtract) return;
+  if (state.suggestDismissed) return;
   const config = preExtract.preConfig || {};
-  if (config.storage && config.storage !== 'local' && config.storage !== 'qiniu') return;
+  if (String(config.storage || '').trim() !== 'local') return;
   const candidates = [
     { name: 'qiniu', required: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'], prefix: 'qiniu_' },
     { name: 'upyun', required: ['upyun_bucket', 'upyun_operator', 'upyun_password'], prefix: 'upyun_' },
     { name: 'webdav', required: ['webdav_endpoint', 'webdav_user', 'webdav_pass'], prefix: 'webdav_' },
     { name: 's3', required: ['s3_endpoint', 's3_bucket', 's3_ak', 's3_sk'], prefix: 's3_' },
-    { name: 'github', required: ['gh_owner', 'gh_repo', 'gh_token'], prefix: 'gh_' }
+    { name: 'github', required: ['gh_owner', 'gh_repo', 'gh_token'], prefix: 'gh_' },
+    { name: 'r2', required: ['r2_account_id', 'r2_access_key_id', 'r2_secret_access_key', 'r2_bucket'], prefix: 'r2_' }
   ];
   const candidate = candidates.find(item => item.required.every(key => String(config[key] || '').trim() !== ''));
   if (!candidate) return;
@@ -502,16 +603,20 @@ function renderSuggestedStorage(preExtract) {
 }
 
 function acceptSuggestedStorage() {
+  state.suggestDismissed = true;
   const sug = state.suggestedStorageName;
   const fields = state.suggestedStorageFields;
   if (sug && fields) {
     applySuggestedStorage(sug, fields);
   }
-  document.getElementById('storageSuggestBanner').style.display = 'none';
+  document.getElementById('storageSuggestModal').style.display = 'none';
 }
 
 function dismissSuggestedStorage() {
-  document.getElementById('storageSuggestBanner').style.display = 'none';
+  const isLocalBackup = String((state.preExtract && state.preExtract.preConfig && state.preExtract.preConfig.storage) || '').trim() === 'local';
+  if (!isLocalBackup && !confirm('不使用推荐存储的话，你稍后需要自己把原站点本地存储里的文件上传到新的存储后端，否则文件将无法下载。继续？')) return;
+  state.suggestDismissed = true;
+  document.getElementById('storageSuggestModal').style.display = 'none';
   state.suggestedStorageName = '';
   state.suggestedStorageFields = {};
 }
@@ -632,6 +737,7 @@ async function submitFresh() {
     if (json.code !== 0) throw new Error(json.msg || '保存失败');
     testRes.className = 'alert alert-success';
     testRes.innerHTML = '<i class="fa fa-check"></i> 配置已保存，正在跳转到完成页...';
+    clearInstallData();
     setTimeout(() => {
       document.getElementById('doneSummary').innerText = '管理员账号: ' + fd.get('admin_user') + '，存储: ' + fd.get('storage_type');
       showStep(5);
@@ -692,9 +798,33 @@ function confirmRemote() {
   showStep(2);
 }
 
+async function genRecToken() {
+  if (state.recToken) return state.recToken;
+  try {
+    state.recToken = sessionStorage.getItem('rec_token') || '';
+  } catch (_) {}
+  if (!state.recToken) {
+    try {
+      const arr = new Uint8Array(24);
+      crypto.getRandomValues(arr);
+      state.recToken = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+      sessionStorage.setItem('rec_token', state.recToken);
+    } catch (_) {}
+  }
+  return state.recToken;
+}
+
+async function clearInstallData() {
+  try { sessionStorage.removeItem('remote_restore_password'); } catch (_) {}
+  try { sessionStorage.removeItem('rec_token'); } catch (_) {}
+  try {
+    await fetch('/install/api/finish', { method: 'POST', credentials: 'same-origin' });
+  } catch (_) {}
+}
+
 function skipRestore() {
   if (!confirm('若你刚配置的存储里面没有对应文件，将会全部文件无法下载。确认跳过恢复？')) return;
-  fetch('/install/api/skip-restore', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+  clearInstallData();
   showStep(4);
   const doneSummary = document.getElementById('doneSummary');
   if (doneSummary) {
@@ -781,7 +911,7 @@ function renderConfigList() {
     s3_endpoint: 'S3端点', s3_region: 'S3区域', s3_bucket: 'S3存储桶',
     s3_ak: 'S3 AccessKey', s3_sk: 'S3 SecretKey', s3_domain: 'S3域名',
     gh_owner: 'GitHub仓库拥有者', gh_repo: 'GitHub仓库名', gh_token: 'GitHub Token',
-    gh_branch: 'GitHub分支', gh_domain: 'GitHub域名',
+    gh_branch: 'GitHub分支', gh_domain: 'GitHub域名', gh_download_proxy: 'GitHub直连下载代理前缀',
     webdav_endpoint: 'WebDAV地址', webdav_user: 'WebDAV用户名',
     webdav_pass: 'WebDAV密码', webdav_domain: 'WebDAV域名',
     green_check: '图片鉴黄(0关/1开)', green_apikey: '鉴黄API密钥',
@@ -847,13 +977,13 @@ function renderRestoreTransferConfig() {
   box.innerHTML =
     '<h4 style="margin-top:18px"><i class="fa fa-exchange"></i> 文件传输方式</h4>' +
     '<div class="row">' +
-    '<div class="col-md-6"><div class="form-group">' +
+    '<div class="col-md-6" id="restoreUploadTypeWrap"><div class="form-group">' +
     '<label>文件上传方式</label>' +
     '<select id="restore_uploadfile_type" class="form-control" onchange="updateRestoreTransferConfig()">' +
     '<option value="0"' + (uploadType === '0' ? ' selected' : '') + '>网站代理上传</option>' +
     '<option value="1"' + (uploadType === '1' ? ' selected' : '') + '>存储直传</option>' +
     '</select></div></div>' +
-    '<div class="col-md-6"><div class="form-group">' +
+    '<div class="col-md-6" id="restoreDownloadTypeWrap"><div class="form-group">' +
     '<label>文件下载方式</label>' +
     '<select id="restore_downfile_type" class="form-control" onchange="updateRestoreTransferConfig()">' +
     '<option value="0"' + (downloadType === '0' ? ' selected' : '') + '>网站代理下载</option>' +
@@ -865,7 +995,24 @@ function renderRestoreTransferConfig() {
     '<option value="0"' + (protocol === '0' ? ' selected' : '') + '>http://</option>' +
     '<option value="1"' + (protocol === '1' ? ' selected' : '') + '>https://</option></select></div>' +
     '<div class="col-xs-8 col-md-9" style="padding-left:0"><input id="restore_downfile_domain" type="text" class="form-control" value="' + escapeHtml(domain) + '" placeholder="可留空，使用存储默认域名" oninput="updateRestoreTransferConfig()"></div>' +
-    '</div><span class="help-block">系统会识别 SQL 中对应键的原值，也可以在这里修改；点击下一步时写入 D1。</span></div>';
+    '</div><span class="help-block">系统会识别 SQL 中对应键的原值，也可以在这里修改；点击下一步时写入 D1。</span></div>' +
+    '<span class="help-block" style="color:#999">直连下载相关设置仅在对应存储类型支持时显示。</span>';
+  applyRestoreTransferView();
+}
+
+/* 按所选存储类型过滤"文件传输方式"的可见字段（与后台存储设置一致） */
+function applyRestoreTransferView() {
+  const t = storageTypeEl('restore-').value || 'r2';
+  const uploadWrap = document.getElementById('restoreUploadTypeWrap');
+  const downloadWrap = document.getElementById('restoreDownloadTypeWrap');
+  if (uploadWrap) uploadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 's3' || t === 'r2') ? '' : 'none';
+  if (downloadWrap) downloadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 'github') ? '' : 'none';
+  const download = document.getElementById('restore_downfile_type');
+  const domainGroup = document.getElementById('restoreDownloadDomainGroup');
+  if (domainGroup) {
+    const isDirect = download && download.value === '1';
+    domainGroup.style.display = (t === 'qiniu' && isDirect) ? 'block' : 'none';
+  }
 }
 
 function updateRestoreTransferConfig() {
@@ -878,8 +1025,7 @@ function updateRestoreTransferConfig() {
   state.selectedConfig.downfile_type = download.value;
   state.selectedConfig.downfile_protocol = protocol.value;
   state.selectedConfig.downfile_domain = domain.value;
-  const group = document.getElementById('restoreDownloadDomainGroup');
-  if (group) group.style.display = download.value === '1' ? 'block' : 'none';
+  applyRestoreTransferView();
   saveDraft();
 }
 
@@ -948,6 +1094,8 @@ async function applyConfigAndComplete() {
   const fd = await setStorage('restore-');
   fd.set('sessionId', state.sessionId);
   fd.set('config_json', JSON.stringify(cfg));
+  const recToken = await genRecToken();
+  if (recToken) fd.set('auth_token', recToken);
   console.log('[install] applyConfigAndComplete: fd 中 storage_type=' + fd.get('storage_type'));
   try {
     const res = await fetch('/install/api/config-apply', { method: 'POST', body: fd, credentials: 'same-origin' });
@@ -955,12 +1103,14 @@ async function applyConfigAndComplete() {
     if (json.code !== 0) throw new Error(json.msg || '应用失败');
     // 是否需要下载文件？
     if (state.preExtract.fileCount > 0) {
-      // 跳到 step 3r 输入原站点
+      // 跳到 step 3r 并自动发送配置到 PHP
       showStep(3);
+      setTimeout(() => startFileDownload(), 500);
     } else {
       // 没有文件，直接完成
       const sum = document.getElementById('doneSummary');
       sum.innerText = '存储: ' + document.getElementById('restore_storage_type').value + '，已应用 ' + Object.keys(cfg).length + ' 条配置';
+      clearInstallData();
       showStep(5);
     }
   } catch (e) {
@@ -972,29 +1122,29 @@ async function applyConfigAndComplete() {
 }
 
 async function startFileDownload() {
-  const form = document.getElementById('formSource');
-  const fd = new FormData(form);
-  if (!fd.get('source_url') && state.preExtract && state.remoteSourceUrl) fd.set('source_url', state.remoteSourceUrl);
-  fd.set('sessionId', state.sessionId);
-  const prog = document.getElementById('downloadProgress');
-  prog.style.display = 'block';
-  document.getElementById('dpStatus').innerText = '正在启动...';
-  console.log('[install] files-from-source: 提交下载任务', {
-    sourceUrl: fd.get('source_url'),
-    sessionId: state.sessionId,
-  });
-  try {
-    const res = await fetch('/install/api/files-from-source', { method: 'POST', body: fd, credentials: 'same-origin' });
-    const json = await res.json();
-    if (json.code !== 0) throw new Error(json.msg || '启动失败');
-    state.fileTaskId = json.data.taskId;
-    console.log('[install] files-from-source: 任务已启动 taskId=' + state.fileTaskId, json);
-    pollFileStatus();
-  } catch (e) {
-    console.error('[install] files-from-source: 启动异常', e);
-    document.getElementById('dpStatus').innerText = '启动失败: ' + e.message;
-    document.getElementById('dpStatus').className = 'text-danger';
+  const sending = document.getElementById('restoreSending');
+  const guide = document.getElementById('restoreGuide');
+  const errorEl = document.getElementById('restoreError');
+  const manualEl = document.getElementById('restoreManual');
+  sending.style.display = 'none';
+  guide.style.display = 'none';
+  errorEl.style.display = 'none';
+  manualEl.style.display = 'none';
+
+  const sourceUrl = state.remoteSourceUrl || '';
+  if (!sourceUrl) {
+    errorEl.style.display = 'block';
+    errorEl.innerText = '未找到原站点地址，请返回第二步填写';
+    return;
   }
+
+  const recUrl = sourceUrl.replace(/[/]+$/, '') + '/rec.php';
+  const token = await genRecToken();
+  const recLink = recUrl + (recUrl.indexOf('?') >= 0 ? '&' : '?') + 't=' + encodeURIComponent(token);
+  document.getElementById('recLink').href = recLink;
+  const manualUrl = document.getElementById('restoreManualUrl');
+  if (manualUrl) manualUrl.value = recLink;
+  guide.style.display = 'block';
 }
 
 function pollFileStatus() {
@@ -1276,6 +1426,7 @@ function bindStorageTabs(prefix) {
         state.confirmedStorage = '';
         state.storageSaved = false;
         state.storageTested = false;
+        applyRestoreTransferView();
         const badge = document.querySelector('#step-2r [id$="confirmedBadge"]');
         if (badge) badge.style.display = 'none';
         document.querySelectorAll('#step-2r .storage-form [id$="testResult"]').forEach(el => {
@@ -1327,7 +1478,17 @@ function renderStorageForms(prefix: string): string {
   const p = prefix.replace(/-$/, '_');
   return `
     <div class="storage-form active" id="${prefix}form-r2">
-      <div class="alert alert-info">R2 存储桶需在 Cloudflare Dashboard 中手动创建，wrangler.toml 中已绑定 <code>FILE_R2</code>。</div>
+      <div class="alert alert-info">Worker 运行时使用 <code>FILE_R2</code> 绑定。远程恢复文件时，还需填写 R2 S3 API 凭据供原站 rec.php 直接流式上传。</div>
+      <div class="form-group"><label>Account ID</label>
+        <input type="text" name="${p}r2_account_id" class="form-control"></div>
+      <div class="form-group"><label>Bucket</label>
+        <input type="text" name="${p}r2_bucket" class="form-control"></div>
+      <div class="form-group"><label>Access Key ID</label>
+        <input type="text" name="${p}r2_access_key_id" class="form-control"></div>
+      <div class="form-group"><label>Secret Access Key</label>
+        <input type="password" name="${p}r2_secret_access_key" class="form-control"></div>
+      <div class="form-group"><label>S3 API Endpoint（可选）</label>
+        <input type="text" name="${p}r2_endpoint" class="form-control" placeholder="https://ACCOUNT_ID.r2.cloudflarestorage.com"></div>
       <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" style="display:none"></div>
     </div>
@@ -1357,6 +1518,8 @@ function renderStorageForms(prefix: string): string {
         <input type="text" name="${p}gh_ref" class="form-control" placeholder="main"></div>
       <div class="form-group"><label>API Base</label>
         <input type="text" name="${p}gh_api_base" class="form-control" value="https://api.github.com"></div>
+      <div class="form-group"><label>直连下载代理前缀（可留空）</label>
+        <input type="text" name="${p}gh_download_proxy" class="form-control" placeholder="https://ghfast.top/"></div>
       <div class="button-row"><button type="button" class="btn btn-sm btn-info" onclick="testStorage('${prefix}')"><i class="fa fa-flask"></i> 测试读写</button><button type="button" class="btn btn-sm btn-primary" onclick="confirmStorage('${prefix}')"><i class="fa fa-check"></i> 确定使用</button><span id="${prefix}confirmedBadge" style="display:none; color:#5cb85c; font-size:13px"><i class="fa fa-check-circle"></i> 已确认</span></div>
       <div id="${prefix}testResult" style="display:none"></div>
     </div>
@@ -1409,21 +1572,31 @@ function renderStorageForms(prefix: string): string {
  * 路由
  * ---------------------------------------------------------------------- */
 
-/** GET /install - 安装向导首页 */
-install.get('/', async (c) => {
+/** 站点已安装时锁定 /install：除携带有效恢复会话的请求外，页面与安装 API 一律拒绝 */
+async function isInstallLocked(c: any): Promise<boolean> {
   try {
     const db = getDB(c);
     const { results } = await db.prepare("SELECT v FROM pre_config WHERE k='installed'").all<{ v: string }>();
-    if (results[0]?.v === '1') {
-      // 已安装，但如果有恢复会话 cookie，说明恢复任务可能还在进行，允许继续
-      const sessId = readSessionId(c.req.raw);
-      if (sessId) {
-        const sess = await getInstallSession(db, sessId);
-        if (sess && !sess.freshInstall) {
-          return c.html(wizardPage());
-        }
-      }
-      return c.html(`<!DOCTYPE html>
+    if (results[0]?.v !== '1') return false;
+    const sessId = readSessionId(c.req.raw);
+    if (sessId) {
+      const sess = await getInstallSession(db, sessId);
+      if (sess && !sess.freshInstall) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installLockedResponse(c: any) {
+  return c.json({ code: 1, msg: '站点已安装，安装接口已锁定' }, 403);
+}
+
+/** GET /install - 安装向导首页 */
+install.get('/', async (c) => {
+  if (await isInstallLocked(c)) {
+    return c.html(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -1511,8 +1684,7 @@ function doReinstall() {
 </script>
 </body>
 </html>`, 200, { 'Content-Type': 'text/html; charset=utf-8' });
-    }
-  } catch {}
+  }
   return c.html(wizardPage());
 });
 
@@ -1561,6 +1733,7 @@ install.post('/api/reinstall', async (c) => {
 
 /** GET /install/api/session - 刷新安装向导后恢复会话状态 */
 install.get('/api/session', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const db = getDB(c);
     const sessionId = readSessionId(c.req.raw);
@@ -1589,6 +1762,7 @@ install.get('/api/session', async (c) => {
 
 /** POST /install/api/draft - 保存用户修改的配置勾选和值 */
 install.post('/api/draft', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const db = getDB(c);
     const formData = await c.req.formData();
@@ -1607,6 +1781,7 @@ install.post('/api/draft', async (c) => {
 
 /** POST /install/save - 兼容旧的"全新安装"一站式保存 */
 install.post('/save', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const body = await c.req.parseBody() as Record<string, string>;
     const storageType = String(body['storage_type'] || '');
@@ -1622,8 +1797,9 @@ install.post('/save', async (c) => {
     // The fresh-install form prefixes storage fields with fresh_. Normalize
     // them before writing so the config keys match the storage factory.
     const storageKeys = [
+      'r2_account_id', 'r2_bucket', 'r2_access_key_id', 'r2_secret_access_key', 'r2_endpoint',
       's3_endpoint', 's3_region', 's3_bucket', 's3_ak', 's3_sk',
-      'gh_owner', 'gh_repo', 'gh_token', 'gh_ref', 'gh_api_base',
+      'gh_owner', 'gh_repo', 'gh_token', 'gh_ref', 'gh_api_base', 'gh_download_proxy',
       'webdav_endpoint', 'webdav_user', 'webdav_pass', 'webdav_folder',
       'upyun_bucket', 'upyun_operator', 'upyun_password', 'upyun_endpoint', 'upyun_domain', 'upyun_folder',
       'qiniu_ak', 'qiniu_sk', 'qiniu_bucket', 'qiniu_domain', 'qiniu_folder',
@@ -1669,6 +1845,7 @@ install.post('/save', async (c) => {
 
 /** POST /install/test - 真实测试存储连接 + 读写（上传真实文件） */
 install.post('/test', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const formData = await c.req.formData();
     const storageType = String(formData.get('storage_type') || '');
@@ -1729,6 +1906,7 @@ install.post('/test', async (c) => {
 
 /** POST /install/api/sql-preview - 上传 SQL 并预提取 pre_config */
 install.post('/api/sql-preview', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const db = getDB(c);
     const formData = await c.req.formData();
@@ -1757,6 +1935,7 @@ install.post('/api/sql-preview', async (c) => {
         preExtract.preConfig[key] = String(value ?? '');
       }
       const remoteCandidates: Array<{ name: string; required: string[]; prefix: string }> = [
+        { name: 'r2', required: ['r2_account_id', 'r2_access_key_id', 'r2_secret_access_key', 'r2_bucket'], prefix: 'r2_' },
         { name: 'qiniu', required: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'], prefix: 'qiniu_' },
         { name: 'upyun', required: ['upyun_bucket', 'upyun_operator', 'upyun_password'], prefix: 'upyun_' },
         { name: 'webdav', required: ['webdav_endpoint', 'webdav_user', 'webdav_pass'], prefix: 'webdav_' },
@@ -1796,6 +1975,7 @@ install.post('/api/sql-preview', async (c) => {
 
 /** POST /install/api/storage-set - 保存 storage 到 session */
 install.post('/api/storage-set', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const db = getDB(c);
     const formData = await c.req.formData();
@@ -1820,6 +2000,9 @@ install.post('/api/storage-set', async (c) => {
       upyun: ['upyun_bucket', 'upyun_operator', 'upyun_password'],
       qiniu: ['qiniu_ak', 'qiniu_sk', 'qiniu_bucket'],
     };
+    if (storageType === 'r2' && (sess.preExtract?.fileCount || 0) > 0) {
+      required.r2 = ['r2_account_id', 'r2_bucket', 'r2_access_key_id', 'r2_secret_access_key'];
+    }
     const missing = (required[storageType] || []).filter(key => !fields[key]);
     if (missing.length) return jsonError(c, '存储配置不完整，缺少: ' + missing.join(', '));
     if (storageType === 'r2' && !(c.env as any).FILE_R2) {
@@ -1849,12 +2032,14 @@ install.post('/api/storage-set', async (c) => {
 
 /** POST /install/api/config-apply - 应用选中的 pre_config + storage 到 D1，并写回其它 SQL 内容 */
 install.post('/api/config-apply', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const db = getDB(c);
     const formData = await c.req.formData();
     const sessionId = String(formData.get('sessionId') || '');
     const configJson = String(formData.get('config_json') || '{}');
     const storageType = String(formData.get('storage_type') || '');
+    const authToken = String(formData.get('auth_token') || '');
     if (!sessionId) return jsonError(c, '缺少 sessionId');
     const sess = await getInstallSession(db, sessionId);
     if (!sess) return jsonError(c, '会话不存在或已过期（30分钟），请重新上传 SQL');
@@ -1867,7 +2052,7 @@ install.post('/api/config-apply', async (c) => {
     const storageFields: Record<string, string> = {};
     for (const [k, v] of formData.entries()) {
       const key = String(k);
-      if (key === 'sessionId' || key === 'config_json' || key === 'storage_type') continue;
+      if (key === 'sessionId' || key === 'config_json' || key === 'storage_type' || key === 'auth_token') continue;
       const val = String(v);
       if (val !== '') storageFields[key] = val;
     }
@@ -1942,6 +2127,19 @@ install.post('/api/config-apply', async (c) => {
     // 保留 session 以便后续 step-3 下载文件
     await updateInstallSession(db, sessionId, { storageType, storageFields, selectedConfig: filtered });
 
+    if (sess.remoteSourceUrl && sess.remoteAdminUser && sess.remoteAdminPassword) {
+      const remoteStorageFields = Object.fromEntries(Object.entries(storageFields).map(([k, v]) => [k, String(v)]));
+      const workerUrl = new URL(c.req.url).origin + '/install';
+      await saveRemoteRestoreConfig(sess.remoteSourceUrl, {
+        admin_user: sess.remoteAdminUser,
+        admin_password: sess.remoteAdminPassword,
+        storage_type: storageType,
+        storage_fields: remoteStorageFields,
+        worker_url: workerUrl,
+        auth_token: authToken,
+      });
+    }
+
     return new Response(JSON.stringify({
       code: 0,
       msg: '配置已应用',
@@ -1977,8 +2175,21 @@ install.post('/api/skip-restore', async (c) => {
   return jsonResultWithCookie(c, { code: 0, msg: '已跳过恢复' }, sessionClearCookieHeader());
 });
 
+/** POST /install/api/finish - 安装完成后清除安装会话与浏览器 Cookie */
+install.post('/api/finish', async (c) => {
+  const db = getDB(c);
+  const sessionId = readSessionId(c.req.raw);
+  if (sessionId) {
+    try {
+      await db.prepare('DELETE FROM install_session WHERE id = ?').bind(sessionId).run();
+    } catch { /* 忽略 */ }
+  }
+  return jsonResultWithCookie(c, { code: 0, msg: 'ok' }, sessionClearCookieHeader());
+});
+
 /** POST /install/api/files-from-source - 从原站点下载文件 */
 install.post('/api/files-from-source', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const db = getDB(c);
     const formData = await c.req.formData();
@@ -2188,6 +2399,7 @@ install.post('/api/files-from-source', async (c) => {
 
 /** GET /install/api/status?taskId=xxx - 查询任务状态 */
 install.get('/api/status', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   const taskId = c.req.query('taskId') || '';
   if (!taskId) return jsonError(c, '缺少 taskId');
   const db = getDB(c);
@@ -2233,6 +2445,7 @@ install.get('/api/status', async (c) => {
 
 /** GET /install/api/diag?url=xxx - 诊断源站连通性 */
 install.get('/api/diag', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   const url = c.req.query('url') || '';
   if (!url) return jsonError(c, '缺少 url 参数');
   const start = Date.now();
@@ -2269,6 +2482,7 @@ install.get('/api/diag', async (c) => {
 
 /** POST /install/api/cancel - 取消任务 */
 install.post('/api/cancel', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
   try {
     const formData = await c.req.formData();
     const taskId = String(formData.get('taskId') || '');
@@ -2277,6 +2491,24 @@ install.post('/api/cancel', async (c) => {
     return jsonResult(c, { code: 0, msg: '已取消' });
   } catch (e: any) {
     return jsonError(c, '取消失败: ' + (e.message || e));
+  }
+});
+
+/** GET /install/api/check-restore?url=xxx - 代理查询 rec.php 恢复状态 */
+install.get('/api/check-restore', async (c) => {
+  if (await isInstallLocked(c)) return installLockedResponse(c);
+  const url = c.req.query('url') || '';
+  if (!url) return jsonError(c, '缺少 url');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const resp = await fetch(url + '?action=status', { cf: { cacheTtl: -1 }, signal: controller.signal });
+    const json = await resp.json() as any;
+    return jsonResult(c, { code: 0, data: json.status || null });
+  } catch (e: any) {
+    return jsonResult(c, { code: 0, data: null, error: e?.message || '查询失败' });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 

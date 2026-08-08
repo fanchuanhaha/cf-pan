@@ -5,7 +5,7 @@
 import type { IStorage } from './IStorage';
 
 const DEFAULT_API_BASE = 'https://api.github.com';
-const MAX_GITHUB_BLOB = 100 * 1024 * 1024; // 100MB 单 blob 上限
+const MAX_GITHUB_BLOB = 50 * 1024 * 1024; // 50MB 单 blob 上限（GitHub API 当前限制）
 
 interface GitHubConfig {
   owner: string;
@@ -132,12 +132,12 @@ export class GitHubApiStorage implements IStorage {
     }
   }
 
-  /** 把 hash 映射到仓库内路径（按 2 级目录切分） */
+  /** 把 hash 映射到仓库内路径（扁平：file/hash） */
   private hashToPath(hash: string): string {
     if (this.cfg.defaultFolder) {
-      return `${this.cfg.defaultFolder.replace(/\/$/, '')}/${hash.substring(0, 2)}/${hash.substring(2, 4)}/${hash}`;
+      return `${this.cfg.defaultFolder.replace(/\/$/, '')}/${hash}`;
     }
-    return `file/${hash.substring(0, 2)}/${hash.substring(2, 4)}/${hash}`;
+    return `file/${hash}`;
   }
 
   async exists(name: string): Promise<boolean> {
@@ -199,6 +199,9 @@ export class GitHubApiStorage implements IStorage {
       const buf = body instanceof ArrayBuffer
         ? body
         : await new Response(body as ReadableStream).arrayBuffer();
+      if (buf.byteLength > MAX_GITHUB_BLOB) {
+        throw new Error(`GitHub 单文件上限 50MB，当前文件 ${(buf.byteLength / 1024 / 1024).toFixed(1)}MB`);
+      }
 
       // 1. 创建 blob
       const blobRes = await this.fetchJson(this.gitBlobUrl(), {
@@ -317,10 +320,20 @@ export class GitHubApiStorage implements IStorage {
     if (!this.resolvedRef) await this.initialize();
     try {
       const meta = await this.fetchJson(this.fileApiUrl(this.hashToPath(name)));
-      return meta.download_url || null;
+      const raw = meta.download_url || null;
+      if (!raw) return null;
+      return this.proxyDownloadUrl(raw);
     } catch {
       return null;
     }
+  }
+
+  /** 直连下载走代理前缀（如 https://ghfast.top/），留空则直连原始地址 */
+  private proxyDownloadUrl(raw: string): string {
+    const proxy = (this.cfg.ghProxy || '').trim();
+    if (!proxy) return raw;
+    const base = /^https?:\/\//i.test(proxy) ? proxy : 'https://' + proxy;
+    return base.replace(/\/+$/, '') + '/' + raw;
   }
 
   /** 验证配置是否有效 */

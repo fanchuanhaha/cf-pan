@@ -248,6 +248,28 @@ export class QiniuStorage implements IStorage {
     return res;
   }
 
+  /**
+   * 前端直传参数：UpToken + 上传 host + key（浏览器 FormData POST 直传七牛）
+   */
+  async getUploadParam(name: string, _filename: string, _maxFileSize?: number): Promise<{
+    url: string; post: Record<string, string>; method: 'POST';
+  } | null> {
+    try {
+      const region = await this.ensureRegion();
+      const token = await this.makeUploadToken();
+      const host = region.cdnUpHosts[0] || region.srcUpHosts[0];
+      if (!host) return null;
+      return {
+        method: 'POST',
+        url: `https://${host}/`,
+        post: { token, key: this.hashToKey(name) },
+      };
+    } catch (e) {
+      console.error('Qiniu getUploadParam error:', e);
+      return null;
+    }
+  }
+
   async upload(name: string, body: ArrayBuffer | ReadableStream, contentType?: string): Promise<boolean> {
     const key = this.hashToKey(name);
     let buf: ArrayBuffer;

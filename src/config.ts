@@ -68,6 +68,7 @@ export interface AppConfig {
   gh_ref: string;
   gh_folder: string;
   gh_api_base: string;
+  gh_download_proxy: string; // GitHub 直连下载代理前缀（如 https://ghfast.top/）
   // WebDAV 配置
   webdav_endpoint: string;
   webdav_user: string;
@@ -88,6 +89,12 @@ export interface AppConfig {
   qiniu_folder: string;
   // 安装标识
   installed: number;
+  // R2 S3 直连凭据（安装/恢复时写入，直传和远程恢复使用）
+  r2_account_id: string;
+  r2_bucket: string;
+  r2_access_key_id: string;
+  r2_secret_access_key: string;
+  r2_endpoint: string;
 }
 
 export const defaults: AppConfig = {
@@ -148,6 +155,7 @@ export const defaults: AppConfig = {
   gh_ref: '',
   gh_folder: '',
   gh_api_base: 'https://api.github.com',
+  gh_download_proxy: '',
   webdav_endpoint: '',
   webdav_user: '',
   webdav_pass: '',
@@ -164,6 +172,11 @@ export const defaults: AppConfig = {
   qiniu_domain: '',
   qiniu_folder: 'file',
   installed: 0,
+  r2_account_id: '',
+  r2_bucket: '',
+  r2_access_key_id: '',
+  r2_secret_access_key: '',
+  r2_endpoint: '',
 };
 
 let cached: AppConfig | null = null;
