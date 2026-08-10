@@ -42,6 +42,7 @@ ajax.get('/', async (c) => {
 
 async function handleList(c: any) {
   const db = getDB(c);
+  const config = getConf(c);
   const isMine = c.req.query('m') === 'mine';
   const kw = (c.req.query('kw') || '').trim();
   const page = Math.max(1, parseInt(c.req.query('page') || '1'));
@@ -92,7 +93,10 @@ async function handleList(c: any) {
     addtime: r.addtime,
     ip: (r.ip || '').replace(/\d+$/, '*'),
   }));
-  return jsonResult(c, { code: 0, rows, total: totalCount, page, pageSize, isMine });
+  return jsonResult(c, { code: 0, rows, total: totalCount, page, pageSize, isMine, site: {
+    title: config.title,
+    gonggao: config.gonggao,
+  } });
 }
 
 // 路径方式的路由（兼容）

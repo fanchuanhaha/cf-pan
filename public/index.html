@@ -31,7 +31,7 @@
       <span class="icon-bar"></span>
       <span class="icon-bar"></span>
     </button>
-    <a class="navbar-brand" href="./">彩虹外链网盘</a>
+    <a class="navbar-brand" id="nav-brand" href="./">彩虹外链网盘</a>
   </div>
   <div class="navbar-collapse collapse navbar-responsive-collapse">
     <ul class="nav navbar-nav">
@@ -55,6 +55,7 @@
       </form>
     </span>
   </h2>
+  <div id="gonggao-box" class="alert alert-info" style="display:none"></div>
   <div class="table-responsive">
     <table class="table table-striped table-hover filelist">
       <thead>
@@ -74,7 +75,7 @@
 
 <footer class="footer text-center">
 <div class="container">
-<p class="text-muted">Copyright &copy; <span id="year"></span> <a href="/">彩虹外链网盘</a></p>
+<p class="text-muted">Copyright &copy; <span id="year"></span> <a id="footer-brand" href="/">彩虹外链网盘</a></p>
 </div>
 </footer>
 <script src="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/js/bootstrap.min.js"></script>
@@ -111,12 +112,27 @@ function loadList(page) {
     })
     .then(function (data) {
       if (data.code !== 0) { throw new Error(data.msg || '加载失败'); }
+      applySite(data.site);
       renderList(data);
     })
     .catch(function (err) {
       document.querySelector('.filelist tbody').innerHTML =
         '<tr><td colspan="7" align="center">加载失败，请检查服务是否正常</td></tr>';
     });
+}
+
+function applySite(site) {
+  if (!site) return;
+  var title = site.title || '彩虹外链网盘';
+  document.title = title;
+  document.getElementById('nav-brand').textContent = title;
+  document.getElementById('footer-brand').textContent = title;
+  var gonggao = site.gonggao || '';
+  if (gonggao) {
+    var box = document.getElementById('gonggao-box');
+    box.innerHTML = '<i class="fa fa-bullhorn" aria-hidden="true"></i> ' + escapeHtml(gonggao);
+    box.style.display = '';
+  }
 }
 
 function renderList(data) {
