@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="renderer" content="webkit">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>彩虹外链网盘</title>
+<meta name="viewport" content="width=device-width,height=device-height,inital-scale=1.0,maximum-scale=1.0,user-scalable=no;">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="format-detection" content="telephone=no">
+<link href="https://s4.zstatic.net/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet">
+<link href="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/css/bootstrap-material-design.min.css" rel="stylesheet">
+<link href="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/css/ripples.min.css" rel="stylesheet">
+<link href="assets/css/style.css" rel="stylesheet">
+<link href="assets/css/dark.css" rel="stylesheet">
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<!--[if lt IE 9]>
+<script src="https://s4.zstatic.net/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
+<script src="https://s4.zstatic.net/ajax/libs/respond.js/1.4.2/respond.min.js"></script>
+<![endif]-->
+<script src="https://s4.zstatic.net/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
+</head>
+<body>
+<div class="navbar navbar-default">
+<div class="container">
+  <div class="navbar-header">
+    <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-responsive-collapse">
+      <span class="icon-bar"></span>
+      <span class="icon-bar"></span>
+      <span class="icon-bar"></span>
+    </button>
+    <a class="navbar-brand" href="./">彩虹外链网盘</a>
+  </div>
+  <div class="navbar-collapse collapse navbar-responsive-collapse">
+    <ul class="nav navbar-nav">
+      <li class="active"><a href="./"><i class="fa fa-list" aria-hidden="true"></i> 文件列表</a></li>
+      <li><a href="./upload.php"><i class="fa fa-upload" aria-hidden="true"></i> 上传文件</a></li>
+    </ul>
+    <ul class="nav navbar-nav navbar-right">
+      <li class="nav-mine"><a href="./?m=mine"><i class="fa fa-folder-open" aria-hidden="true"></i> 我的文件</a></li>
+    </ul>
+  </div>
+</div>
+</div>
+
+<div class="container">
+<div class="well bs-component">
+  <h2><span id="list-title">文件列表</span>
+    <span class="searchbox">
+      <form class="form-inline" action="./" method="GET">
+        <input name="kw" class="form-control" type="search" placeholder="请输入搜索关键词" value="">
+        <button class="btn btn-default btn-raised btn-sm" type="submit"><i class="fa fa-search" aria-hidden="true"></i> 搜索</button>
+      </form>
+    </span>
+  </h2>
+  <div class="table-responsive">
+    <table class="table table-striped table-hover filelist">
+      <thead>
+        <tr><th>#</th><th>操作</th><th>文件</th><th>文件大小</th><th>文件格式</th><th>上传时间</th><th>上传者IP</th></tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="7" align="center">加载中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="row">
+    <div class="col-md-6" id="list-info"></div>
+    <div class="col-md-6"><nav aria-label="pagination"><ul class="pagination pagination-sm" style="float:right;" id="pagination"></ul></nav></div>
+  </div>
+</div>
+</div>
+
+<footer class="footer text-center">
+<div class="container">
+<p class="text-muted">Copyright &copy; <span id="year"></span> <a href="/">彩虹外链网盘</a></p>
+</div>
+</footer>
+<script src="https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/js/bootstrap.min.js"></script>
+<script src="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/bootstrap-material-design.min.js"></script>
+<script src="https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/ripples.min.js"></script>
+<script>
+$.material.init();
+document.getElementById('year').textContent = new Date().getFullYear();
+
+var pageParams = new URLSearchParams(location.search);
+var isMine = pageParams.get('m') === 'mine';
+var currentKw = pageParams.get('kw') || '';
+var currentPage = parseInt(pageParams.get('page') || '1');
+
+function sizeFormat(size) {
+  if (size == null || isNaN(size)) return '0 B';
+  var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var i = 0;
+  while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+  return (i === 0 ? size : size.toFixed(1)) + ' ' + units[i];
+}
+
+function loadList(page) {
+  var qs = new URLSearchParams({ act: 'list', page: page || 1, pageSize: 15 });
+  if (isMine) qs.set('m', 'mine');
+  if (currentKw) qs.set('kw', currentKw);
+  document.getElementById('list-title').textContent = isMine ? '我上传的文件' : '文件列表';
+  var mineLink = document.querySelector('.nav-mine a');
+  if (mineLink) mineLink.className = isMine ? 'active' : '';
+  fetch('/ajax.php?' + qs.toString(), { credentials: 'same-origin' })
+    .then(function (resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    })
+    .then(function (data) {
+      if (data.code !== 0) { throw new Error(data.msg || '加载失败'); }
+      renderList(data);
+    })
+    .catch(function (err) {
+      document.querySelector('.filelist tbody').innerHTML =
+        '<tr><td colspan="7" align="center">加载失败，请检查服务是否正常</td></tr>';
+    });
+}
+
+function renderList(data) {
+  var tbody = document.querySelector('.filelist tbody');
+  var rows = data.rows || [];
+  var offset = (data.page - 1) * data.pageSize;
+  var icons = { image: 'fa-file-image-o', video: 'fa-file-video-o', audio: 'fa-file-audio-o', zip: 'fa-file-archive-o', text: 'fa-file-text-o', pdf: 'fa-file-pdf-o', code: 'fa-file-code-o', doc: 'fa-file-word-o', xls: 'fa-file-excel-o' };
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" align="center">还没上传过任何文件</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map(function (r, i) {
+      var fileurl = 'down.php/' + r.hash + '.' + (r.type || 'file');
+      var viewurl = 'file.php?hash=' + r.hash;
+      var icon = icons[r.type] || 'fa-file-o';
+      return '<tr>' +
+        '<td><b>' + (offset + i + 1) + '</b></td>' +
+        '<td><a href="' + fileurl + '">下载</a>｜<a href="' + viewurl + '">查看</a></td>' +
+        '<td><i class="fa ' + icon + ' fa-fw"></i>' + escapeHtml(r.name) + '</td>' +
+        '<td>' + sizeFormat(r.size) + '</td>' +
+        '<td><font color="blue">' + escapeHtml(r.type || '未知类型') + '</font></td>' +
+        '<td>' + escapeHtml(r.addtime || '') + '</td>' +
+        '<td>' + escapeHtml(r.ip || '') + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+  var totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
+  document.getElementById('list-info').innerHTML =
+    '<br>共有 ' + data.total + ' 个文件，&nbsp;&nbsp;当前第 ' + data.page + ' 页，共 ' + totalPages + ' 页';
+  document.getElementById('pagination').innerHTML = buildPagination(data.page, totalPages, data.pageSize);
+}
+
+function buildPagination(page, totalPages, pageSize) {
+  if (totalPages <= 1) return '';
+  var items = '';
+  var link = function (p) {
+    var qs = new URLSearchParams({ page: p });
+    if (isMine) qs.set('m', 'mine');
+    if (currentKw) qs.set('kw', currentKw);
+    return './?' + qs.toString();
+  };
+  if (page > 1) {
+    items += '<li><a href="' + link(1) + '">首页</a></li><li><a href="' + link(page - 1) + '">&laquo;</a></li>';
+  } else {
+    items += '<li class="disabled"><a>首页</a></li><li class="disabled"><a>&laquo;</a></li>';
+  }
+  var start = Math.max(1, page - 10);
+  var end = Math.min(totalPages, page + 10);
+  for (var i = start; i < page; i++) items += '<li><a href="' + link(i) + '">' + i + '</a></li>';
+  items += '<li class="disabled"><a>' + page + '</a></li>';
+  for (var i = page + 1; i <= end; i++) items += '<li><a href="' + link(i) + '">' + i + '</a></li>';
+  if (page < totalPages) {
+    items += '<li><a href="' + link(page + 1) + '">&raquo;</a></li><li><a href="' + link(totalPages) + '">尾页</a></li>';
+  } else {
+    items += '<li class="disabled"><a>&raquo;</a></li><li class="disabled"><a>尾页</a></li>';
+  }
+  return items;
+}
+
+function escapeHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+// 未安装/未配置存储时跳安装向导（列表接口会返回 302/HTML）
+fetch('/ajax.php?act=list', { credentials: 'same-origin' })
+  .then(function (resp) {
+    if (resp.redirected || !resp.ok) {
+      var ct = resp.headers.get('content-type') || '';
+      if (resp.redirected || ct.indexOf('json') < 0) window.location.href = '/install';
+    }
+  })
+  .catch(function () {});
+
+loadList(currentPage);
+</script>
+</body>
+</html>

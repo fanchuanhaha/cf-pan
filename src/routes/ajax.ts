@@ -32,6 +32,69 @@ ajax.post('/', async (c) => {
   return jsonError(c, 'Unknown action');
 });
 
+// 文件列表（静态首页 data-source，仅读查询，动态不缓存）
+ajax.get('/list', handleList);
+ajax.get('/', async (c) => {
+  const act = c.req.query('act');
+  if (act === 'list') return handleList(c);
+  return jsonError(c, 'Unknown action');
+});
+
+async function handleList(c: any) {
+  const db = getDB(c);
+  const isMine = c.req.query('m') === 'mine';
+  const kw = (c.req.query('kw') || '').trim();
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'));
+  const pageSize = Math.min(50, Math.max(1, parseInt(c.req.query('pageSize') || '15')));
+  const offset = (page - 1) * pageSize;
+
+  const where: string[] = [];
+  const params: any[] = [];
+  if (isMine) {
+    const cookie = c.req.header('cookie') || '';
+    const match = cookie.match(/file_ids=([^;]+)/);
+    let ids: number[] = [];
+    if (match) {
+      try {
+        const decoded = atob(decodeURIComponent(match[1]));
+        ids = decoded.split(',').map(s => parseInt(s)).filter(n => !isNaN(n));
+      } catch {}
+    }
+    if (ids.length > 0) {
+      ids = ids.slice(0, 60);
+      where.push(`id IN (${ids.map(() => '?').join(',')})`);
+      params.push(...ids);
+    } else {
+      where.push('1=2');
+    }
+  } else {
+    where.push('hide=0');
+    if (kw) {
+      where.push('name LIKE ?');
+      params.push(`%${kw}%`);
+    }
+  }
+
+  const { results: rawRows } = await db.prepare(
+    `SELECT * FROM pre_file WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ? OFFSET ?`
+  ).bind(...params, pageSize, offset).all<any>();
+  const { results: countRow } = await db.prepare(
+    `SELECT count(*) as cnt FROM pre_file WHERE ${where.join(' AND ')}`
+  ).bind(...params).all<{ cnt: number }>();
+  const totalCount = countRow[0]?.cnt || 0;
+
+  const rows = rawRows.map((r: any) => ({
+    id: r.id,
+    name: r.name,
+    type: r.type || '',
+    size: r.size,
+    hash: r.hash,
+    addtime: r.addtime,
+    ip: (r.ip || '').replace(/\d+$/, '*'),
+  }));
+  return jsonResult(c, { code: 0, rows, total: totalCount, page, pageSize, isMine });
+}
+
 // 路径方式的路由（兼容）
 ajax.post('/pre_upload', handlePreUpload);
 ajax.post('/upload_part', handleUploadPart);
