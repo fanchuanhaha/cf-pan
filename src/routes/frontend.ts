@@ -246,7 +246,7 @@ frontend.get('/upload.php', (c) => {
 <h3 class="panel-title"><i class="fa fa-exclamation-circle"></i> 上传提示</h3>
 </div>
 <div class="list-group-item">
-**您的IP是 {clientip}，请不要要上传违规文件</div>
+**您的IP是 ${clientip}，请不要要上传违规文件</div>
 ${config.upload_size > 0 ? `<div class="list-group-item">**上传无格式限制，当前服务器单个文件上传最大支持 <b>${config.upload_size}MB</b></div>` : `<div class="list-group-item">**上传无格式限制，无大小限制！
 </div>`}
 ${config.videoreview == 1 ? `<div class="list-group-item">**当前网站已开启视频文件审核，如果上传的是视频文件，需要等待审核通过后才能下载和播放</div>` : ''}
@@ -271,6 +271,8 @@ frontend.get('/file.php', async (c) => {
   const db = getDB(c);
   const config = getConf(c);
   const siteUrlStr = siteUrl(c);
+  const csrf = generateCsrfToken();
+  c.header('Set-Cookie', `upload_csrf=${csrf}; Path=/; Max-Age=3600; SameSite=Lax`);
 
   const hash = c.req.query('hash') || '';
   const pwd = c.req.query('pwd') || null;
@@ -441,7 +443,7 @@ if (pwd!=null && pwd!="")
           <div class="row" align="center">
             <div class="col-md-12">
               <input type="hidden" id="hash" value="${hash}">
-              <input type="hidden" id="csrf_token" value="${generateCsrfToken()}">
+              <input type="hidden" id="csrf_token" value="${csrf}">
               <button onclick="delete_confirm()" class="btn btn-raised btn-danger"><i class="fa fa-close"></i> 删除文件</button>
             </div>
           </div>

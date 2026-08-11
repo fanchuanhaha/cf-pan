@@ -390,9 +390,8 @@ async function handleDeleteFile(c: any) {
 
   const hash = String(body['hash'] || '');
   const csrfToken = String(body['csrf_token'] || '');
-  const ip = getClientIP(c);
-
-  if (!csrfToken || csrfToken !== csrfTokens[ip]) {
+  const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
+  if (!csrfToken || csrfToken !== cookieCsrf) {
     return jsonError(c, 'CSRF TOKEN ERROR');
   }
   if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
