@@ -318,6 +318,18 @@ if (pwd!=null && pwd!="")
   const viewurlAll = `${siteUrlStr}/${viewurl}`;
   const thisurl = `${siteUrlStr}/file.php?hash=${row.hash}${pwd ? '&pwd=' + pwd : ''}`;
 
+  // 直连模式：进入页面时先获取带签名的直链，下载按钮/链接直接跳转，无需经过 down.php
+  let downReal = downurlAll;
+  if (config.downfile_type === 1) {
+    try {
+      const stor = getStorOrThrow(c);
+      if (stor.getDownUrl) {
+        const directUrl = await stor.getDownUrl(row.hash, row.name);
+        if (directUrl) downReal = directUrl;
+      }
+    } catch {}
+  }
+
   const viewType = getViewType(row.type);
   let fileTitle = '';
   let htmlcode = '';
@@ -365,7 +377,7 @@ if (pwd!=null && pwd!="")
     const icon = typeToIcon(row.type);
     fileContent = `<div class="view"><div class="elseview"><div class="tubiao"><i class="fa ${icon}"></i></div></div>
 <div class="elsetext"><p>${htmlspecialchars(row.name)}（${sizeFormat(row.size)}）</p>
-<a href="${downurl}" class="btn btn-raised btn-primary btn-lg"><i class="fa fa-download" aria-hidden="true"></i> 下载文件<div class="ripple-container"></div></a>
+<a href="${downReal}" class="btn btn-raised btn-primary btn-lg"${config.downfile_type === 1 ? ' target="_blank"' : ''}><i class="fa fa-download" aria-hidden="true"></i> 下载文件<div class="ripple-container"></div></a>
 </div></div>`;
   }
 
@@ -399,8 +411,8 @@ if (pwd!=null && pwd!="")
             <label class="col-md-2 control-label">下载链接</label>
             <div class="col-md-10">
               <div class="input-group">
-                <input type="text" class="form-control" id="link2" readonly value="${downurlAll}">
-                <span class="input-group-btn"><button class="btn btn-primary btn-raised copy-btn" type="button" data-clipboard-text="${downurlAll}">复制</button></span>
+                <input type="text" class="form-control" id="link2" readonly value="${downReal}">
+                <span class="input-group-btn"><button class="btn btn-primary btn-raised copy-btn" type="button" data-clipboard-text="${downReal}">复制</button></span>
               </div>
             </div>
           </div>
