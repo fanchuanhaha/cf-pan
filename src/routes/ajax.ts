@@ -237,7 +237,13 @@ async function handleUploadPart(c: any) {
   const arrayBuf = await file.arrayBuffer();
 
   const stor = getStorOrThrow(c);
-  const success = await stor.upload(hash, arrayBuf, getMimeType(ext));
+  let success = false;
+  try {
+    success = await stor.upload(hash, arrayBuf, getMimeType(ext));
+  } catch (e: any) {
+    console.error('upload_part error:', e);
+    return jsonError(c, String(e?.message || e));
+  }
   if (!success) return jsonError(c, '文件上传失败');
 
   // 入库（去重）

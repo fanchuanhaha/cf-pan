@@ -269,9 +269,10 @@ export class GitHubApiStorage implements IStorage {
         });
       }
       return true;
-    } catch (e) {
+    } catch (e: any) {
       console.error('GitHub upload error:', e);
-      return false;
+      const msg = String(e?.message || e);
+      throw new Error(`GitHub 上传失败: ${msg.slice(0, 300)}`);
     }
   }
 
