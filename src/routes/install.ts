@@ -237,26 +237,23 @@ body { background: #000; min-height: 100%; margin: 0; padding: 0; color: #333; f
         </div>
         <h4 style="margin-top:24px"><i class="fa fa-exchange"></i> 文件传输方式</h4>
         <div class="row">
-          <div class="col-md-6">
-            <div class="form-group">
+          <div class="col-md-6" id="freshUploadTypeWrap"><div class="form-group">
               <label>文件上传方式</label>
               <select name="uploadfile_type" class="form-control">
                 <option value="0" selected>网站代理上传</option>
                 <option value="1">存储直传</option>
               </select>
               <span class="help-block">网站代理由 Worker 接收文件后上传；存储直传需要存储后端支持直传。</span>
-            </div>
-          </div>
-          <div class="col-md-6">
-            <div class="form-group">
+            </div></div>
+          <div class="col-md-6" id="freshDownloadTypeWrap"><div class="form-group">
               <label>文件下载方式</label>
               <select name="downfile_type" class="form-control" onchange="toggleFreshDownloadMode(this.value)">
                 <option value="0" selected>网站代理下载</option>
                 <option value="1">存储直链下载</option>
               </select>
               <span class="help-block">网站代理支持权限和 Range；存储直链需要配置公开或签名下载地址。</span>
-            </div>
-          </div>
+            </div></div>
+          <span class="help-block" style="color:#999;width:100%">直传/直链相关设置仅在所选存储类型支持时显示。</span>
         </div>
         <div class="form-group" id="freshDownloadDomainGroup" style="display:none">
           <label>直链协议和域名</label>
@@ -723,6 +720,15 @@ function goFreshInstall() {
 function toggleFreshDownloadMode(value) {
   const group = document.getElementById('freshDownloadDomainGroup');
   if (group) group.style.display = String(value) === '1' ? 'block' : 'none';
+}
+
+/* 按所选存储类型过滤"文件传输方式"的可见字段（与恢复流程/后台存储设置一致） */
+function applyFreshTransferView() {
+  const t = storageTypeEl('fresh-').value || 'r2';
+  const uploadWrap = document.getElementById('freshUploadTypeWrap');
+  const downloadWrap = document.getElementById('freshDownloadTypeWrap');
+  if (uploadWrap) uploadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 's3' || t === 'r2') ? '' : 'none';
+  if (downloadWrap) downloadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 'github') ? '' : 'none';
 }
 
 async function submitFresh() {
@@ -1440,12 +1446,15 @@ function bindStorageTabs(prefix) {
           btn.className = 'btn btn-sm btn-primary';
           btn.innerHTML = '<i class="fa fa-check"></i> 确定使用';
         });
+      } else {
+        applyFreshTransferView();
       }
     });
   });
 }
 bindStorageTabs('fresh-');
 bindStorageTabs('restore-');
+applyFreshTransferView();
 restoreInstallSession();
 
 /* ==================== 工具 ==================== */
