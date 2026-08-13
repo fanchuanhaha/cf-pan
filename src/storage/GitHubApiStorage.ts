@@ -203,6 +203,18 @@ export class GitHubApiStorage implements IStorage {
         throw new Error(`GitHub 单文件上限 50MB，当前文件 ${(buf.byteLength / 1024 / 1024).toFixed(1)}MB`);
       }
 
+      // 空仓库：Git Database API 不可用（409 Git Repository is empty），
+      // 改用 Contents API 直接写入，GitHub 会自动创建首个 commit 和默认分支
+      if (this.repoIsEmpty) {
+        await this.fetchJson(this.fileApiUrl(path), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: `upload ${name}`, content: toBase64(buf) }),
+        });
+        this.repoIsEmpty = false;
+        return true;
+      }
+
       // 1. 创建 blob
       const blobRes = await this.fetchJson(this.gitBlobUrl(), {
         method: 'POST',
