@@ -31,6 +31,9 @@ export class S3Storage implements IStorage {
       forcePathStyle: true,
       // 预签名 URL 不带 checksum，浏览器才能直接 PUT
       requestChecksumCalculation: 'WHEN_REQUIRED',
+      // 不要为了校验响应 checksum 而把整个响应体重新包装/读取一遍，
+      // 否则大文件下载会占用大量内存并触发 Worker 128MB 限制。
+      responseChecksumValidation: 'WHEN_REQUIRED',
     });
   }
 
@@ -89,25 +92,48 @@ export class S3Storage implements IStorage {
   }
 
   async downfile(name: string, range?: [number, number]): Promise<Response | null> {
+    // 不用 AWS SDK 的 GetObject 返回值直接当 Response body。
+    // SDK 在 Worker 里可能返回 Node 流，或者为了校验 checksum 再包一层
+    // TransformStream；大文件下载时会额外占用内存/CPU，触发 128MB 内存
+    // 或 CPU 限制，表现为下载到一半 503（error code: 1102）。
+    // 这里先生成短期预签名 GET URL，再用 fetch 拿原始响应流，Worker 只做
+    // 透明转发，不解析、不校验、不缓存文件内容。
     try {
-      const cmd = new GetObjectCommand({
+      const url = await getSignedUrl(this.client, new GetObjectCommand({
         Bucket: this.cfg.bucket,
         Key: this.key(name),
-        Range: range ? `bytes=${range[0]}-${range[1]}` : undefined,
-      });
-      const result = await this.client.send(cmd);
-      if (!result.Body) return null;
+      }), { expiresIn: 300 });
+
+      const reqHeaders: Record<string, string> = {};
+      if (range) reqHeaders['Range'] = `bytes=${range[0]}-${range[1]}`;
+
+      const upstream = await fetch(url, { headers: reqHeaders });
+      if (!upstream.ok || !upstream.body) {
+        console.error('S3 downfile HTTP error:', upstream.status, (await upstream.text()).slice(0, 300));
+        return null;
+      }
+
+      // Range 请求必须拿到 206；如果存储商忽略 Range 返回 200，
+      // 不要把整个文件伪装成 206，交给上层返回 404/回退处理。
+      if (range && upstream.status !== 206) {
+        try { await upstream.body.cancel(); } catch { /* ignore */ }
+        console.error('S3 downfile ignored Range, status:', upstream.status);
+        return null;
+      }
 
       const headers: Record<string, string> = {
-        'Content-Type': result.ContentType || 'application/octet-stream',
+        'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'public, max-age=31536000',
       };
-      if (range && result.ContentRange) headers['Content-Range'] = result.ContentRange;
-      if (result.ContentLength) headers['Content-Length'] = String(result.ContentLength);
-      if (result.ETag) headers['ETag'] = result.ETag;
+      const contentRange = upstream.headers.get('content-range');
+      const contentLength = upstream.headers.get('content-length');
+      const etag = upstream.headers.get('etag');
+      if (contentRange) headers['Content-Range'] = contentRange;
+      if (contentLength) headers['Content-Length'] = contentLength;
+      if (etag) headers['ETag'] = etag;
 
-      return new Response(result.Body as unknown as ReadableStream, {
+      return new Response(upstream.body, {
         status: range ? 206 : 200,
         headers,
       });
