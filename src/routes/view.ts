@@ -2,10 +2,11 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStorOrThrow } from '../middleware';
-import { getFileByHash, touchFile } from '../db';
+import { getDB, getConf } from '../middleware';
+import { getFileByHash } from '../db';
 import { fileOutput } from '../services/upload';
 import { getViewType } from '../utils/mime';
+import { getStorageBackends, findStorageBackend } from '../storage/backends';
 
 const view = new Hono<AppEnv>();
 
@@ -61,7 +62,7 @@ audio{width:90%}
 // /view.php/:hash.:ext 直接流式输出文件 (用于 img/audio/video src)
 view.get('/*', async (c) => {
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
+  const config = getConf(c);
 
   const path = c.req.path.replace(/^\/view\.php\//, '');
   let hash: string;
@@ -80,10 +81,11 @@ view.get('/*', async (c) => {
   if (!row) return new Response('404 Not Found', { status: 404 });
   if (row.block >= 1) return new Response('File is blocked!', { status: 403 });
 
-  const exists = await stor.exists(hash);
-  if (!exists) return new Response('File Not Found', { status: 404 });
+  const backends = getStorageBackends(config, c.env);
+  const found = await findStorageBackend(backends, hash);
+  if (!found.backend) return new Response('File Not Found', { status: 404 });
 
-  return fileOutput(c, stor, hash, row.type, row.size, row.name);
+  return fileOutput(c, found.backend.stor, hash, row.type, row.size, row.name);
 });
 
 export default view;

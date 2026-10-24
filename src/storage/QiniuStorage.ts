@@ -193,8 +193,10 @@ export class QiniuStorage implements IStorage {
       const data = await this.callRsApi('GET', `/stat/${en}`);
       // PHP rsGet 返回 {code: 200, data: {...}}，无 error
       return data && (data.code === 200 || data.fsize !== undefined);
-    } catch {
-      return false;
+    } catch (e: any) {
+      // 只有明确的 404 才表示对象不存在；鉴权/网络错误必须抛出
+      if (String(e?.message || e).includes('(404)')) return false;
+      throw e;
     }
   }
 

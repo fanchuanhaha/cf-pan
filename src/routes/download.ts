@@ -2,18 +2,17 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStorOrThrow } from '../middleware';
+import { getDB, getConf } from '../middleware';
 import { getFileByHash, touchFile } from '../db';
 import { fileOutput } from '../services/upload';
-import { getConfig } from '../config';
+import { getStorageBackends, findStorageBackend } from '../storage/backends';
 
 const download = new Hono<AppEnv>();
 
 // 处理 /down.php/:hash.:ext 和 /down.php/:hash.:ext&:pwd
 download.get('/*', async (c) => {
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
-  const config = getConfig();
+  const config = getConf(c);
 
   const path = c.req.path.replace(/^\/down\.php\//, '');
   const parts = path.split('&');
@@ -52,9 +51,12 @@ download.get('/*', async (c) => {
     `);
   }
 
-  // 检查文件是否在存储中存在
-  const exists = await stor.exists(hash);
-  if (!exists) return new Response('File Not Found', { status: 404 });
+  // 检查文件是否在存储中存在。
+  // R2 同时配置绑定和 S3 API 时，文件可能在任一后端，需要逐个查找。
+  const backends = getStorageBackends(config, c.env);
+  const found = await findStorageBackend(backends, hash);
+  if (!found.backend) return new Response('File Not Found', { status: 404 });
+  const stor = found.backend.stor;
 
   await touchFile(db, row.id);
 

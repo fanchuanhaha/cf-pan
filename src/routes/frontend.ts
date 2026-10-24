@@ -10,7 +10,8 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
 import { getDB, getConf, getStor, getStorOrThrow } from '../middleware';
 import { updateConfig, clearConfigCache } from '../config';
-import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileCountByDateRange } from '../db';
+import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileCountByDateRange, getAllFiles } from '../db';
+import { getStorageBackends, deleteObjectFromBackends, objectExistsInBackends, type StorageBackend } from '../storage/backends';
 import { verifyAdminToken, signAdminToken } from '../auth/admin';
 import { getViewType, sizeFormat, typeToIcon, isView } from '../utils/mime';
 import { htmlspecialchars, generateCsrfToken, jsonResult, jsonError } from '../utils/response';
@@ -969,6 +970,308 @@ $.ajax({
 </script>`;
 
   return c.html(adminLayout('后台首页', body, siteUrlStr, 'index', true, config.title));
+});
+
+// ===================== 临时维护页：数据库 / 存储差异检查 /admin/1/ =====================
+// 仅管理员可访问。用于排查“数据库有记录但 R2 没有文件”或“R2 有文件但数据库没记录”。
+// 注意：这是临时维护页面，确认问题解决后可移除。
+
+function storageHashFromKey(key: string): string | null {
+  let name = key;
+  if (name.startsWith('file/')) name = name.slice(5);
+  const m = name.match(/^([0-9a-f]{32})(?:$|\.)/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function checkRedirect(c: any, msg: string, type: 'success' | 'danger' | 'warning' = 'success') {
+  return c.redirect(`/admin/1/?msg=${encodeURIComponent(msg)}&type=${type}`);
+}
+
+async function renderAdminCheckPage(c: any) {
+  if (!await checkAdmin(c)) return c.redirect('/admin/login');
+
+  const config = getConf(c);
+  const db = getDB(c);
+  const backends = getStorageBackends(config, c.env);
+
+  type ListResult = {
+    backend: StorageBackend;
+    supported: boolean;
+    objects: Array<{ key: string; size: number; uploaded?: string }>;
+    error?: string;
+  };
+
+  const listResults: ListResult[] = [];
+  for (const backend of backends) {
+    if (typeof backend.stor.list !== 'function') {
+      listResults.push({
+        backend,
+        supported: false,
+        objects: [],
+        error: '该存储后端不支持列出对象，无法参与对比',
+      });
+      continue;
+    }
+    try {
+      const objects = await backend.stor.list();
+      listResults.push({ backend, supported: true, objects });
+    } catch (e: any) {
+      listResults.push({
+        backend,
+        supported: true,
+        objects: [],
+        error: `列出对象失败：${e?.message || e}`,
+      });
+    }
+  }
+
+  const listing = listResults.filter(r => r.supported && !r.error);
+  // 只有所有配置的后端都成功列出对象时，才能可靠判断“数据库有、存储没有”；
+  // 否则某个后端暂时不可用会把它的文件误报成数据库孤儿。
+  const hasCompleteListing = listResults.length > 0 &&
+    listResults.every(r => r.supported && !r.error);
+
+  // 同一个对象可能同时存在于 R2 绑定和 S3 API 两个后端，按 key 合并
+  const objectMap = new Map<string, {
+    key: string; size: number; uploaded?: string; backendLabels: string[];
+  }>();
+  for (const result of listing) {
+    for (const obj of result.objects) {
+      const old = objectMap.get(obj.key);
+      if (old) {
+        old.backendLabels.push(result.backend.label);
+        if (obj.size > old.size) old.size = obj.size;
+        if (obj.uploaded && !old.uploaded) old.uploaded = obj.uploaded;
+      } else {
+        objectMap.set(obj.key, {
+          key: obj.key,
+          size: obj.size,
+          uploaded: obj.uploaded,
+          backendLabels: [result.backend.label],
+        });
+      }
+    }
+  }
+
+  const dbRows = await getAllFiles(db);
+  const dbHashes = new Set(dbRows.map(r => String(r.hash || '').toLowerCase()));
+  const matchedHashes = new Set<string>();
+  const storageOnly: Array<{ key: string; size: number; uploaded?: string; backendLabels: string[] }> = [];
+
+  for (const obj of objectMap.values()) {
+    const hash = storageHashFromKey(obj.key);
+    if (hash && dbHashes.has(hash)) matchedHashes.add(hash);
+    else storageOnly.push(obj);
+  }
+
+  const dbOnly = hasCompleteListing
+    ? dbRows.filter(r => !matchedHashes.has(String(r.hash || '').toLowerCase()))
+    : [];
+  dbOnly.sort((a, b) => b.id - a.id);
+  storageOnly.sort((a, b) => a.key.localeCompare(b.key));
+
+  const perPage = 100;
+  const dbPage = Math.max(1, parseInt(c.req.query('dbpage') || '1') || 1);
+  const objPage = Math.max(1, parseInt(c.req.query('objpage') || '1') || 1);
+  const dbPages = Math.max(1, Math.ceil(dbOnly.length / perPage));
+  const objPages = Math.max(1, Math.ceil(storageOnly.length / perPage));
+  const dbRowsPage = dbOnly.slice((dbPage - 1) * perPage, dbPage * perPage);
+  const objRowsPage = storageOnly.slice((objPage - 1) * perPage, objPage * perPage);
+
+  const pager = (base: string, page: number, pages: number, param: string) => {
+    if (pages <= 1) return '';
+    const link = (p: number, text: string) =>
+      `<li${p === page ? ' class="active"' : ''}><a href="${base}${base.includes('?') ? '&' : '?'}${param}=${p}">${text}</a></li>`;
+    let html = '<ul class="pagination pagination-sm" style="margin:10px 0">';
+    html += link(Math.max(1, page - 1), '上一页');
+    for (let p = 1; p <= pages; p++) {
+      if (pages > 10 && p > 2 && p < pages - 1 && Math.abs(p - page) > 2) {
+        if (p === 3 || p === pages - 2) html += '<li class="disabled"><span>…</span></li>';
+        continue;
+      }
+      html += link(p, String(p));
+    }
+    html += link(Math.min(pages, page + 1), '下一页');
+    html += '</ul>';
+    return html;
+  };
+
+  const msg = c.req.query('msg') || '';
+  const msgType = c.req.query('type') === 'danger' ? 'danger'
+    : c.req.query('type') === 'warning' ? 'warning' : 'success';
+  const alert = msg
+    ? `<div class="alert alert-${msgType}" style="margin-top:15px">${htmlspecialchars(msg)}</div>`
+    : '';
+
+  const backendRows = listResults.length
+    ? listResults.map(r => `<tr>
+        <td>${htmlspecialchars(r.backend.label)}</td>
+        <td>${r.supported ? (r.error ? '<span class="text-danger">失败</span>' : '<span class="text-success">正常</span>') : '<span class="text-muted">不支持</span>'}</td>
+        <td>${r.supported && !r.error ? r.objects.length : '-'}</td>
+        <td style="word-break:break-all">${r.error ? htmlspecialchars(r.error) : ''}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="4" class="text-center text-danger">没有可用的存储后端</td></tr>';
+
+  const dbOnlyRows = dbRowsPage.length
+    ? dbRowsPage.map(row => `<tr>
+        <td>${row.id}</td>
+        <td style="word-break:break-all">${htmlspecialchars(String(row.name || ''))}</td>
+        <td style="word-break:break-all"><code>${htmlspecialchars(String(row.hash || ''))}</code></td>
+        <td>${htmlspecialchars(sizeFormat(row.size || 0))}</td>
+        <td>${htmlspecialchars(String(row.addtime || ''))}</td>
+        <td>
+          <form method="post" action="/admin/1/delete-db" style="display:inline" onsubmit="return confirm('确定删除这条数据库记录吗？\\n只删除数据库记录，不会删除存储对象。')">
+            <input type="hidden" name="id" value="${row.id}">
+            <button type="submit" class="btn btn-xs btn-danger">删除数据库记录</button>
+          </form>
+        </td>
+      </tr>`).join('')
+    : `<tr><td colspan="6" class="text-center text-muted">${hasCompleteListing ? '没有数据库孤儿记录' : '已暂停检测：存储后端未全部成功列出对象'}</td></tr>`;
+
+  const storageOnlyRows = objRowsPage.length
+    ? objRowsPage.map(obj => `<tr>
+        <td style="word-break:break-all"><code>${htmlspecialchars(obj.key)}</code></td>
+        <td>${htmlspecialchars(sizeFormat(obj.size || 0))}</td>
+        <td>${htmlspecialchars(obj.uploaded || '')}</td>
+        <td>${htmlspecialchars(obj.backendLabels.join('、'))}</td>
+        <td>
+          <form method="post" action="/admin/1/delete-object" style="display:inline" onsubmit="return confirm('确定从存储中删除这个对象吗？\\n此操作不可恢复。')">
+            <input type="hidden" name="key" value="${htmlspecialchars(obj.key)}">
+            <button type="submit" class="btn btn-xs btn-danger">删除存储对象</button>
+          </form>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="text-center text-muted">没有存储孤儿对象</td></tr>';
+
+  const body = `<div class="container" style="padding-top:70px">
+<div class="col-xs-12 center-block" style="float:none">
+  <div class="page-header" style="margin-top:0">
+    <h3 style="margin-top:0"><i class="fa fa-search"></i> 数据库 / 存储差异检查 <small>临时维护页</small></h3>
+  </div>
+  ${alert}
+  <div class="alert alert-info">
+    当前存储类型：<b>${htmlspecialchars(config.storage)}</b>。
+    对比规则：数据库文件 hash 与存储对象 <code>file/&lt;hash&gt;</code> 匹配。
+    ${hasCompleteListing ? '' : '<br><span class="text-danger">部分或全部存储后端无法列出对象，已暂停“数据库孤儿”判断，避免误报；仍可查看和删除已成功列出的存储孤儿对象。</span>'}
+  </div>
+  <div class="row">
+    <div class="col-sm-4"><div class="panel panel-default"><div class="panel-body text-center">
+      <div style="font-size:26px;font-weight:bold">${dbRows.length}</div><div class="text-muted">数据库文件记录</div>
+    </div></div></div>
+    <div class="col-sm-4"><div class="panel panel-default"><div class="panel-body text-center">
+      <div style="font-size:26px;font-weight:bold">${objectMap.size}</div><div class="text-muted">存储对象（去重后）</div>
+    </div></div></div>
+    <div class="col-sm-4"><div class="panel panel-default"><div class="panel-body text-center">
+      <div style="font-size:26px;font-weight:bold">${matchedHashes.size}</div><div class="text-muted">已匹配的 hash</div>
+    </div></div></div>
+  </div>
+
+  <div class="panel panel-default">
+    <div class="panel-heading"><b>存储后端状态</b></div>
+    <div class="table-responsive"><table class="table table-bordered table-condensed" style="margin:0">
+      <thead><tr><th>后端</th><th>状态</th><th>对象数量</th><th>错误</th></tr></thead>
+      <tbody>${backendRows}</tbody>
+    </table></div>
+  </div>
+
+  <div class="panel panel-danger">
+    <div class="panel-heading">
+      <b>数据库有记录，但存储中没有对应对象</b>
+      <span class="badge">${dbOnly.length}</span>
+      <span class="pull-right text-muted" style="font-size:12px">只删除数据库记录</span>
+    </div>
+    <div class="table-responsive"><table class="table table-striped table-bordered table-condensed" style="margin:0">
+      <thead><tr><th>ID</th><th>文件名</th><th>hash</th><th>大小</th><th>上传时间</th><th>操作</th></tr></thead>
+      <tbody>${dbOnlyRows}</tbody>
+    </table></div>
+    <div class="panel-body text-center" style="padding:0 15px">${pager('/admin/1/', dbPage, dbPages, 'dbpage')}</div>
+  </div>
+
+  <div class="panel panel-warning">
+    <div class="panel-heading">
+      <b>存储中有对象，但数据库中没有对应记录</b>
+      <span class="badge">${storageOnly.length}</span>
+      <span class="pull-right text-muted" style="font-size:12px">从存储中删除对象</span>
+    </div>
+    <div class="table-responsive"><table class="table table-striped table-bordered table-condensed" style="margin:0">
+      <thead><tr><th>对象 key</th><th>大小</th><th>上传时间</th><th>所在后端</th><th>操作</th></tr></thead>
+      <tbody>${storageOnlyRows}</tbody>
+    </table></div>
+    <div class="panel-body text-center" style="padding:0 15px">${pager('/admin/1/', objPage, objPages, 'objpage')}</div>
+  </div>
+
+  <p>
+    <a class="btn btn-default" href="/admin/1/"><i class="fa fa-refresh"></i> 重新检测</a>
+    <a class="btn btn-default" href="/admin/file"><i class="fa fa-folder-open"></i> 返回文件管理</a>
+  </p>
+  <p class="text-muted" style="font-size:12px">
+    说明：删除数据库记录前会再次确认存储中确实没有该对象；删除存储对象前会确认数据库中没有该 hash。
+    如果对象同时存在于多个后端，会从所有后端删除。
+  </p>
+</div>
+</div>`;
+
+  c.header('Cache-Control', 'no-store');
+  return c.html(adminOriginalLayout('存储差异检查', body, 'file'));
+}
+
+frontend.get('/admin/1', renderAdminCheckPage);
+frontend.get('/admin/1/', renderAdminCheckPage);
+
+frontend.post('/admin/1/delete-db', async (c) => {
+  if (!await checkAdmin(c)) return c.redirect('/admin/login');
+  const body = await c.req.parseBody<Record<string, string>>();
+  const id = parseInt(String(body['id'] || '0'));
+  if (!id) return checkRedirect(c, '参数错误：缺少文件 ID', 'danger');
+
+  const db = getDB(c);
+  const row = await getFileById(db, id);
+  if (!row) return checkRedirect(c, '数据库记录不存在，可能已被删除', 'warning');
+
+  // 页面可能已经过期：删除前确认存储中确实没有该对象
+  const backends = getStorageBackends(getConf(c), c.env);
+  const exists = await objectExistsInBackends(backends, row.hash);
+  if (exists.exists) {
+    return checkRedirect(c, `存储中仍存在该文件（${exists.foundIn.join('、')}），已拒绝删除数据库记录。请刷新页面重新检测。`, 'danger');
+  }
+  if (exists.errors.length) {
+    return checkRedirect(c, `无法确认存储状态，已拒绝删除数据库记录：${exists.errors.join('；')}`, 'danger');
+  }
+
+  const ok = await deleteFile(db, id);
+  if (!ok) return checkRedirect(c, '删除数据库记录失败', 'danger');
+  purgeHomeCache(c);
+  return checkRedirect(c, '已删除数据库孤儿记录');
+});
+
+frontend.post('/admin/1/delete-object', async (c) => {
+  if (!await checkAdmin(c)) return c.redirect('/admin/login');
+  const body = await c.req.parseBody<Record<string, string>>();
+  const key = String(body['key'] || '');
+  if (!key || !key.startsWith('file/')) {
+    return checkRedirect(c, '参数错误：对象 key 不合法', 'danger');
+  }
+
+  const db = getDB(c);
+  const hash = storageHashFromKey(key);
+  if (hash) {
+    const row = await getFileByHash(db, hash);
+    if (row) {
+      return checkRedirect(c, '该对象在数据库中已有记录，不能作为孤儿对象删除。请刷新页面重新检测。', 'danger');
+    }
+  }
+
+  const backends = getStorageBackends(getConf(c), c.env);
+  const name = key.slice('file/'.length);
+  const result = await deleteObjectFromBackends(backends, name);
+  if (!result.ok) {
+    const detail = [...result.errors];
+    if (result.remaining.length) detail.push(`仍存在：${result.remaining.join('、')}`);
+    return checkRedirect(c, '删除存储对象失败：' + (detail.join('；') || '未知错误'), 'danger');
+  }
+
+  purgeHomeCache(c);
+  return checkRedirect(c, `已删除存储对象 ${key}`, 'success');
 });
 
 // ===================== 管理后台文件管理 /admin/file =====================
@@ -2274,14 +2577,21 @@ frontend.get('/admin/ajax/setBlock', async (c) => {
 frontend.get('/admin/ajax/delFile', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
   const id = parseInt(c.req.query('id') || '0');
   const row = await getFileById(db, id);
   if (!row) return c.json({ code: -1, msg: '文件不存在' });
-  try {
-    await stor.delete(row.hash);
-  } catch {}
-  await deleteFile(db, id);
+
+  const backends = getStorageBackends(getConf(c), c.env);
+  const result = await deleteObjectFromBackends(backends, row.hash);
+  if (!result.ok) {
+    // 存储删除失败时保留数据库记录，避免出现“数据库没了、R2 还在”的孤儿文件
+    const detail = [...result.errors];
+    if (result.remaining.length) detail.push(`仍存在：${result.remaining.join('、')}`);
+    return c.json({ code: -1, msg: '存储删除失败，数据库记录已保留：' + detail.join('；') });
+  }
+
+  const ok = await deleteFile(db, id);
+  if (!ok) return c.json({ code: -1, msg: '数据库记录删除失败' });
   purgeHomeCache(c);
   return c.json({ code: 0, msg: '删除成功' });
 });
@@ -2289,7 +2599,6 @@ frontend.get('/admin/ajax/delFile', async (c) => {
 frontend.post('/admin/ajax/operation', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const status = parseInt(String(body['status'] || '0'));
   // 原版前端提交的是 checkbox: [id1, id2]，jQuery 序列化后为 checkbox[]=...
@@ -2309,21 +2618,36 @@ frontend.post('/admin/ajax/operation', async (c) => {
   else if (status === 2) opname = '解封';
 
   let count = 0;
+  const failures: string[] = [];
+  const backends = status === 0 ? getStorageBackends(getConf(c), c.env) : [];
+
   for (const id of ids) {
     if (status === 0) {
       const row = await getFileById(db, id);
-      if (row) {
-        try { await stor.delete(row.hash); } catch {}
-        await deleteFile(db, id);
+      if (!row) continue;
+      const result = await deleteObjectFromBackends(backends, row.hash);
+      if (!result.ok) {
+        const detail = [...result.errors];
+        if (result.remaining.length) detail.push(`仍存在：${result.remaining.join('、')}`);
+        failures.push(`${row.name || row.hash}：${detail.join('；') || '存储删除失败'}`);
+        continue;
       }
+      if (await deleteFile(db, id)) count++;
     } else if (status === 1) {
       await setFileBlock(db, id, 1);
+      count++;
     } else if (status === 2) {
       await setFileBlock(db, id, 0);
+      count++;
     }
-    count++;
   }
   purgeHomeCache(c);
+  if (failures.length) {
+    return c.json({
+      code: 0,
+      msg: `成功${opname} ${count} 个文件，${failures.length} 个失败：${failures.slice(0, 3).join('；')}${failures.length > 3 ? '……' : ''}`,
+    });
+  }
   return c.json({ code: 0, msg: `成功${opname} ${count} 个文件` });
 });
 

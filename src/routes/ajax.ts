@@ -9,6 +9,7 @@ import { getFileExt, getMimeType, isView as isViewExt } from '../utils/mime';
 import { jsonError, jsonResult, generateCsrfToken, getClientIP } from '../utils/response';
 import { checkImage } from '../services/green';
 import { S3Storage } from '../storage/S3Storage';
+import { getStorageBackends, deleteObjectFromBackends, objectExistsInBackends } from '../storage/backends';
 import { purgeHomeCache } from '../utils/cache';
 
 let csrfTokens: Record<string, string> = {};
@@ -343,9 +344,13 @@ async function handleCompleteUpload(c: any) {
     if (todayCount >= config.upload_limit) return jsonError(c, '你今天上传文件的数量已超过限制');
   }
 
-  // 直传完成后校验文件确实已在存储中
-  const stor = getStorOrThrow(c);
-  if (!(await stor.exists(hash))) return jsonError(c, '文件未上传成功');
+  // 直传完成后校验文件确实已在存储中。
+  // R2 可能同时配置了绑定和 S3 API，直传走 S3 API，因此要检查所有后端。
+  const backends = getStorageBackends(config, c.env);
+  const exists = await objectExistsInBackends(backends, hash);
+  if (!exists.exists) {
+    return jsonError(c, '文件未上传成功' + (exists.errors.length ? '：' + exists.errors.join('；') : ''));
+  }
 
   const hide = String(body['show'] || '1') === '1' ? 0 : 1;
   const id = await insertFile(db, { name, type: ext, size, hash, ip, hide, pwd, uid: 0 });
@@ -394,7 +399,6 @@ async function handleCompleteUpload(c: any) {
 // 删除文件
 async function handleDeleteFile(c: any) {
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
   const body = await c.req.parseBody() as Record<string, string>;
 
   const hash = String(body['hash'] || '');
@@ -409,7 +413,14 @@ async function handleDeleteFile(c: any) {
   if (!row) return jsonError(c, '文件不存在');
   if (row.block === 1) return jsonError(c, '文件已被冻结，无法删除');
 
-  await stor.delete(row.hash);
+  const backends = getStorageBackends(getConf(c), c.env);
+  const result = await deleteObjectFromBackends(backends, row.hash);
+  if (!result.ok) {
+    const detail = [...result.errors];
+    if (result.remaining.length) detail.push(`仍存在：${result.remaining.join('、')}`);
+    return jsonError(c, '存储删除失败，数据库记录已保留：' + (detail.join('；') || '未知错误'));
+  }
+
   const ok = await deleteFile(db, row.id);
   if (ok) {
     purgeHomeCache(c);

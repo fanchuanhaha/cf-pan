@@ -1,5 +1,12 @@
 // 彩虹外链网盘 - 存储抽象接口 (TypeScript 版)
 
+/** 存储中的对象（用于后台差异检查） */
+export interface StorageObject {
+  key: string;
+  size: number;
+  uploaded?: string;
+}
+
 export interface IStorage {
   /** 检查文件是否存在 */
   exists(name: string): Promise<boolean>;
@@ -21,6 +28,9 @@ export interface IStorage {
 
   /** 删除文件 */
   delete(name: string): Promise<boolean>;
+
+  /** 列出存储对象（可选，后台差异检查用） */
+  list?(): Promise<StorageObject[]>;
 
   /** 获取前端直传参数 (云存储用) */
   getUploadParam?(name: string, filename: string, maxFileSize?: number): Promise<{

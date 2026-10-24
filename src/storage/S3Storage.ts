@@ -1,13 +1,13 @@
 // 彩虹外链网盘 - S3 兼容存储实现 (支持 OSS/COS/MinIO 等)
 
-import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { IStorage } from './IStorage';
+import type { IStorage, StorageObject } from './IStorage';
 import { getFileExt, getMimeType } from '../utils/mime';
 
 const FILE_PREFIX = 'file/';
 
-interface S3Config {
+export interface S3Config {
   endpoint: string;
   region: string;
   bucket: string;
@@ -45,8 +45,16 @@ export class S3Storage implements IStorage {
         Key: this.key(name),
       }));
       return true;
-    } catch {
-      return false;
+    } catch (e: any) {
+      // 只有明确的 404 才能当作“对象不存在”。
+      // 网络错误、AK/SK 失效、权限不足等必须抛出，否则删除流程会误以为
+      // 文件已经不在存储里，从而只删数据库记录、留下 R2 孤儿文件。
+      const status = e?.$metadata?.httpStatusCode ?? e?.$response?.statusCode;
+      const code = String(e?.name || e?.Code || e?.code || '');
+      if (status === 404 || code === 'NotFound' || code === 'NoSuchKey' || code === '404') {
+        return false;
+      }
+      throw e;
     }
   }
 
@@ -183,14 +191,80 @@ export class S3Storage implements IStorage {
   }
 
   async delete(name: string): Promise<boolean> {
+    const key = this.key(name);
     try {
       await this.client.send(new DeleteObjectCommand({
         Bucket: this.cfg.bucket,
-        Key: this.key(name),
+        Key: key,
       }));
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      console.error('S3 delete error, trying presigned DELETE fallback:', e);
     }
+
+    // 某些 S3 兼容实现/网络环境下 SDK 请求可能失败，再用预签名 URL 发一次
+    // 原始 DELETE。删除是幂等的，重复请求不会造成额外影响。
+    try {
+      const url = await getSignedUrl(this.client, new DeleteObjectCommand({
+        Bucket: this.cfg.bucket,
+        Key: key,
+      }), { expiresIn: 300 });
+      const response = await fetch(url, { method: 'DELETE' });
+      if (response.ok) return true;
+      console.error('S3 delete fallback failed:', response.status, (await response.text()).slice(0, 300));
+    } catch (e) {
+      console.error('S3 delete fallback error:', e);
+    }
+    return false;
+  }
+
+  async list(): Promise<StorageObject[]> {
+    const out: StorageObject[] = [];
+    let token: string | undefined;
+
+    // 注意：AWS SDK 的 ListObjectsV2Command 反序列化依赖 DOMParser，
+    // Cloudflare Workers 运行时没有 DOMParser，会报 “DOMParser is not defined”。
+    // 这里用预签名 URL + fetch 拿原始 XML，再用简单的标签解析，避免依赖 DOM。
+    const xmlTag = (xml: string, tag: string): string => {
+      const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+      if (!m) return '';
+      return m[1]
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+        .replace(/&amp;/g, '&');
+    };
+
+    // S3 ListObjectsV2 每次最多 1000 个对象，循环取完
+    for (let page = 0; page < 100; page++) {
+      const command = new ListObjectsV2Command({
+        Bucket: this.cfg.bucket,
+        Prefix: FILE_PREFIX,
+        ContinuationToken: token,
+        MaxKeys: 1000,
+      });
+      const url = await getSignedUrl(this.client, command, { expiresIn: 300 });
+      const response = await fetch(url);
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`ListObjectsV2 HTTP ${response.status}: ${text.slice(0, 300)}`);
+      }
+
+      const blocks = text.match(/<Contents>[\s\S]*?<\/Contents>/g) || [];
+      for (const block of blocks) {
+        const key = xmlTag(block, 'Key');
+        if (!key) continue;
+        const size = parseInt(xmlTag(block, 'Size') || '0', 10) || 0;
+        const uploaded = xmlTag(block, 'LastModified') || undefined;
+        out.push({ key, size, uploaded });
+      }
+
+      if (xmlTag(text, 'IsTruncated').toLowerCase() !== 'true') break;
+      token = xmlTag(text, 'NextContinuationToken') || undefined;
+      if (!token) break;
+    }
+    return out;
   }
 }

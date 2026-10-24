@@ -1,6 +1,6 @@
 // 彩虹外链网盘 - Cloudflare R2 存储实现
 
-import type { IStorage } from './IStorage';
+import type { IStorage, StorageObject } from './IStorage';
 
 const FILE_PREFIX = 'file/';
 
@@ -90,6 +90,25 @@ export class R2Storage implements IStorage {
     } catch {
       return false;
     }
+  }
+
+  async list(): Promise<StorageObject[]> {
+    const out: StorageObject[] = [];
+    let cursor: string | undefined;
+    // R2 每次最多返回 1000 个对象，循环取完；上限防止异常情况下无限翻页
+    for (let page = 0; page < 100; page++) {
+      const result = await this.bucket.list({ prefix: FILE_PREFIX, cursor, limit: 1000 });
+      for (const obj of result.objects) {
+        out.push({
+          key: obj.key,
+          size: obj.size,
+          uploaded: obj.uploaded ? obj.uploaded.toISOString() : undefined,
+        });
+      }
+      if (!result.truncated) break;
+      cursor = result.cursor;
+    }
+    return out;
   }
 
   async getDownUrl(name: string, filename: string, contentType?: string): Promise<string | null> {

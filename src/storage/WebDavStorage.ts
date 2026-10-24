@@ -53,12 +53,10 @@ export class WebDavStorage implements IStorage {
   }
 
   async exists(name: string): Promise<boolean> {
-    try {
-      const res = await this.davFetch(this.fileUrl(name), { method: 'HEAD' });
-      return res.ok;
-    } catch {
-      return false;
-    }
+    const res = await this.davFetch(this.fileUrl(name), { method: 'HEAD' });
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error(`WebDAV HEAD ${res.status}`);
+    return true;
   }
 
   async get(name: string): Promise<R2ObjectBody | null> {

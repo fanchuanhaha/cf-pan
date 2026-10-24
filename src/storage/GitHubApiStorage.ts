@@ -145,8 +145,11 @@ export class GitHubApiStorage implements IStorage {
     try {
       await this.fetchJson(this.fileApiUrl(this.hashToPath(name)));
       return true;
-    } catch {
-      return false;
+    } catch (e: any) {
+      // 只有 404 才表示文件不存在；401/403/网络错误必须抛出，
+      // 否则删除流程会误以为文件已不存在而只删除数据库记录。
+      if (String(e?.message || e).includes('GitHub API 404')) return false;
+      throw e;
     }
   }
 

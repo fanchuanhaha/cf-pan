@@ -2,12 +2,13 @@
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
-import { getDB, getStorOrThrow, getConf } from '../middleware';
+import { getDB, getConf } from '../middleware';
 import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock, getUserList, updateUser, deleteUser } from '../db';
 import { updateConfig, clearConfigCache } from '../config';
 import { verifyAdminToken } from '../auth/admin';
 import { typeToIcon, isView, getViewType, sizeFormat } from '../utils/mime';
 import { jsonResult, jsonError } from '../utils/response';
+import { getStorageBackends, deleteObjectFromBackends } from '../storage/backends';
 
 const adminAjax = new Hono<AppEnv>();
 
@@ -104,14 +105,20 @@ adminAjax.get('/setBlock', async (c) => {
 // 删除文件
 adminAjax.get('/delFile', async (c) => {
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
   const id = parseInt(c.req.query('id') || '0');
   if (!id) return jsonError(c, '参数错误');
 
   const row = await getFileById(db, id);
   if (!row) return jsonError(c, '当前文件不存在！');
 
-  await stor.delete(row.hash);
+  const backends = getStorageBackends(getConf(c), c.env);
+  const result = await deleteObjectFromBackends(backends, row.hash);
+  if (!result.ok) {
+    const detail = [...result.errors];
+    if (result.remaining.length) detail.push(`仍存在：${result.remaining.join('、')}`);
+    return jsonError(c, '存储删除失败，数据库记录已保留：' + (detail.join('；') || '未知错误'));
+  }
+
   const ok = await dbDeleteFile(db, id);
   if (ok) return jsonResult(c, { code: 0, msg: '删除文件成功！' });
   return jsonError(c, '删除文件失败');
@@ -120,25 +127,39 @@ adminAjax.get('/delFile', async (c) => {
 // 批量操作
 adminAjax.post('/operation', async (c) => {
   const db = getDB(c);
-  const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const status = parseInt(body['status'] || '0');
   const checkboxStr = body['checkbox[]'] || body['checkbox'];
   const ids = Array.isArray(checkboxStr) ? checkboxStr.map(Number) : [Number(checkboxStr)];
 
   let count = 0;
+  const failures: string[] = [];
+  const backends = status === 0 ? getStorageBackends(getConf(c), c.env) : [];
+
   for (const id of ids) {
     const row = await getFileById(db, id);
     if (!row) continue;
     if (status === 0) {
-      await stor.delete(row.hash);
-      await dbDeleteFile(db, id);
+      const result = await deleteObjectFromBackends(backends, row.hash);
+      if (!result.ok) {
+        const detail = [...result.errors];
+        if (result.remaining.length) detail.push(`仍存在：${result.remaining.join('、')}`);
+        failures.push(`${row.name || row.hash}：${detail.join('；') || '存储删除失败'}`);
+        continue;
+      }
+      if (await dbDeleteFile(db, id)) count++;
     } else if (status === 1 || status === 2) {
       await setFileBlock(db, id, status);
+      count++;
     }
-    count++;
   }
   const opName = status === 0 ? '删除' : (status === 1 ? '封禁' : '解封');
+  if (failures.length) {
+    return jsonResult(c, {
+      code: 0,
+      msg: `成功${opName}${count}个文件，${failures.length}个失败：${failures.slice(0, 3).join('；')}${failures.length > 3 ? '……' : ''}`,
+    });
+  }
   return jsonResult(c, { code: 0, msg: `成功${opName}${count}个文件` });
 });
 

@@ -68,7 +68,9 @@ export class UpYunStorage implements IStorage {
   async exists(name: string): Promise<boolean> {
     const path = this.hashToPath(name);
     const res = await this.request('HEAD', path);
-    return res.ok;
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error(`又拍云 HEAD ${res.status}`);
+    return true;
   }
 
   async get(name: string): Promise<R2ObjectBody | null> {
