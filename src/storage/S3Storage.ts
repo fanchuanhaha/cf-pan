@@ -3,6 +3,7 @@
 import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { IStorage } from './IStorage';
+import { getFileExt, getMimeType } from '../utils/mime';
 
 const FILE_PREFIX = 'file/';
 
@@ -130,17 +131,38 @@ export class S3Storage implements IStorage {
   }
 
   /** 前端直传参数：SigV4 预签名 PUT URL（浏览器直接 PUT，需存储商开启 CORS） */
-  async getUploadParam(name: string, _filename: string, _maxFileSize?: number): Promise<{
-    url: string; post: Record<string, string>; method: 'PUT';
+  async getUploadParam(name: string, filename: string, _maxFileSize?: number): Promise<{
+    url: string; post: Record<string, string>; method: 'PUT'; headers: Record<string, string>;
   } | null> {
     try {
+      // 把 Content-Type 一起签进去，直传后对象才有正确的 MIME（否则 R2/S3 默认 octet-stream）
+      const contentType = getMimeType(getFileExt(filename));
       const url = await getSignedUrl(this.client, new PutObjectCommand({
         Bucket: this.cfg.bucket,
         Key: this.key(name),
+        ContentType: contentType,
       }), { expiresIn: 3600 });
-      return { method: 'PUT', url, post: {} };
+      return { method: 'PUT', url, post: {}, headers: { 'Content-Type': contentType } };
     } catch (e) {
       console.error('S3 presign error:', e);
+      return null;
+    }
+  }
+
+  /** 直链下载：私有桶用 1 小时有效的预签名 GET（只暴露 AK ID 和签名，不暴露 SK） */
+  async getDownUrl(name: string, filename: string, contentType?: string): Promise<string | null> {
+    try {
+      const url = await getSignedUrl(this.client, new GetObjectCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(name),
+        ResponseContentDisposition: filename
+          ? `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
+          : undefined,
+        ResponseContentType: contentType || undefined,
+      }), { expiresIn: 3600 });
+      return url;
+    } catch (e) {
+      console.error('S3 presign download error:', e);
       return null;
     }
   }

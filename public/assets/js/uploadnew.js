@@ -137,7 +137,7 @@ new Vue({
 
             if(result.third){
                 if(result.method == 'PUT'){
-                    await this.uploadThirdPut(result.url, file).then(res =>{
+                    await this.uploadThirdPut(result.url, file, result.headers).then(res =>{
                     }, res => {
                         that.show_msg(res, 'danger');
                         throw Error();
@@ -343,13 +343,16 @@ new Vue({
                 });
             })
         },
-        async uploadThirdPut(url, file){ //第三方PUT直传（S3/R2 预签名）
+        async uploadThirdPut(url, file, headers){ //第三方PUT直传（S3/R2 预签名）
             var that = this;
             var tempTime = new Date().getTime();
             var oloaded = 0;
             return new Promise((resolve, reject) => {
                 var xhr = new XMLHttpRequest();
                 xhr.open('PUT', url, true);
+                if(headers){
+                    for(var hk in headers){ xhr.setRequestHeader(hk, headers[hk]); }
+                }
                 xhr.onload = function(){
                     if(xhr.status >= 200 && xhr.status < 300){
                         resolve();

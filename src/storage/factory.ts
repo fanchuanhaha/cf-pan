@@ -20,7 +20,7 @@ export function createStorage(config: AppConfig, env?: { FILE_R2?: R2Bucket }): 
   switch (config.storage) {
     case 'r2':
       // 优先使用 Worker 的 R2 绑定；没有绑定时用 S3 兼容 API（安装页填写的账号 ID + AK/SK）
-      if (env?.FILE_R2) return new R2Storage(env.FILE_R2);
+      if (env?.FILE_R2) return new R2Storage(env.FILE_R2, config.r2_public_url);
       {
         const endpoint = (config.r2_endpoint || '').trim() ||
           (config.r2_account_id ? `https://${config.r2_account_id}.r2.cloudflarestorage.com` : '');

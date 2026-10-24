@@ -6,9 +6,11 @@ const FILE_PREFIX = 'file/';
 
 export class R2Storage implements IStorage {
   private bucket: R2Bucket;
+  private publicUrl: string;
 
-  constructor(bucket: R2Bucket) {
+  constructor(bucket: R2Bucket, publicUrl?: string) {
     this.bucket = bucket;
+    this.publicUrl = (publicUrl || '').trim().replace(/\/+$/, '');
   }
 
   private key(name: string): string {
@@ -91,8 +93,10 @@ export class R2Storage implements IStorage {
   }
 
   async getDownUrl(name: string, filename: string, contentType?: string): Promise<string | null> {
-    // R2 使用公开 URL 或签名 URL
-    // 在 Worker 中可以直接代理下载，这里返回 null 表示走中转
-    return null;
+    // R2 绑定本身不能签发预签名 URL：
+    // - 配置了公开访问域名（r2_public_url / 自定义域）时返回公开直链
+    // - 否则返回 null，继续走 Worker 中转
+    if (!this.publicUrl) return null;
+    return `${this.publicUrl}/file/${encodeURIComponent(name)}`;
   }
 }
