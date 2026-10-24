@@ -14,6 +14,9 @@ import { purgeHomeCache } from '../utils/cache';
 
 let csrfTokens: Record<string, string> = {};
 
+// 每次只把 8MB 分片发给 Worker，避免 Cloudflare 单次请求 100MB 限制
+const MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024;
+
 const ajax = new Hono<AppEnv>();
 
 // CSRF Token 获取
@@ -28,8 +31,10 @@ ajax.get('/csrf', (c) => {
 ajax.post('/', async (c) => {
   const act = c.req.query('act');
   if (act === 'pre_upload') return handlePreUpload(c);
+  if (act === 'prepare_multipart') return handlePrepareMultipart(c);
   if (act === 'upload_part') return handleUploadPart(c);
   if (act === 'complete_upload') return handleCompleteUpload(c);
+  if (act === 'abort_multipart') return handleAbortMultipart(c);
   if (act === 'deleteFile') return handleDeleteFile(c);
   return jsonError(c, 'Unknown action');
 });
@@ -103,8 +108,10 @@ async function handleList(c: any) {
 
 // 路径方式的路由（兼容）
 ajax.post('/pre_upload', handlePreUpload);
+ajax.post('/prepare_multipart', handlePrepareMultipart);
 ajax.post('/upload_part', handleUploadPart);
 ajax.post('/complete_upload', handleCompleteUpload);
+ajax.post('/abort_multipart', handleAbortMultipart);
 ajax.post('/deleteFile', handleDeleteFile);
 
 // 文件预上传 (秒传检测)
@@ -145,8 +152,10 @@ async function handlePreUpload(c: any) {
     return jsonError(c, '文件密码只能为字母和数字');
   }
 
-  const limitSize = config.upload_size;
-  const size = parseInt(sizeStr);
+  const size = parseInt(sizeStr) || 0;
+  if (config.upload_size > 0 && size > config.upload_size * 1024 * 1024) {
+    return jsonError(c, `文件超过大小限制（最大 ${config.upload_size}MB）`);
+  }
 
   const todayCount = await getTodayUploadCount(db, ip, 0);
   if (config.upload_limit > 0 && todayCount >= config.upload_limit) {
@@ -162,13 +171,18 @@ async function handlePreUpload(c: any) {
     });
   }
 
-  // Workers 没有本地磁盘，强制 chunks=1 让前端一次发送整个文件
-  const chunkSize = 8 * 1024 * 1024;
-  const chunks = 1;
+  const chunkSize = MULTIPART_CHUNK_SIZE;
+  const chunks = size > 0 ? Math.max(1, Math.ceil(size / chunkSize)) : 1;
+
+  let stor: any = null;
+  try {
+    stor = getStorOrThrow(c);
+  } catch (e) {
+    console.error('storage unavailable during pre_upload:', e);
+  }
 
   // 直传模式：云存储支持时返回第三方直传参数（浏览器直接传存储商，Worker 不占流量）
-  if (config.uploadfile_type === 1) {
-    const stor = getStorOrThrow(c);
+  if (config.uploadfile_type === 1 && stor) {
     let param: any = null;
     if (stor.getUploadParam) {
       param = await stor.getUploadParam(hash, name, size);
@@ -197,14 +211,125 @@ async function handlePreUpload(c: any) {
         headers: param.headers || {},
         hash, name, size, type: ext,
         chunksize: chunkSize, chunks,
+        // 直传失败时前端会重新调用 prepare_multipart 走网站中转分片
+        fallback: true,
       });
     }
   }
 
+  // 网站中转：R2/S3 用存储端分片上传，浏览器每次只发 8MB 给 Worker
+  if (size > 0 && stor?.createMultipartUpload) {
+    try {
+      const uploadId = await stor.createMultipartUpload(hash, getMimeType(ext));
+      if (uploadId) {
+        return jsonResult(c, {
+          code: 0, third: false, multipart: true, uploadId,
+          hash, name, size, type: ext,
+          chunksize: chunkSize, chunks,
+        });
+      }
+    } catch (e) {
+      console.error('create multipart upload error:', e);
+    }
+  }
+
+  // 没有分片能力时保留原来的单请求上传（只适合 100MB 以内的文件）
+  if (size > 95 * 1024 * 1024) {
+    return jsonError(c, '当前存储不支持分片上传，无法通过网站中转上传超过 100MB 的文件；请开启直传或更换为 R2/S3 存储');
+  }
+
   return jsonResult(c, {
-    code: 0, third: false, hash,
+    code: 0, third: false, hash, name, size, type: ext,
     chunksize: chunkSize, chunks,
   });
+}
+
+// 直传失败后，按需创建一个网站中转的分片上传任务
+async function handlePrepareMultipart(c: any) {
+  const db = getDB(c);
+  const config = getConf(c);
+  const body = await c.req.parseBody() as Record<string, string>;
+  const ip = getClientIP(c);
+
+  const csrfToken = String(body['csrf_token'] || '');
+  const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
+  if (!csrfToken || csrfToken !== cookieCsrf) return jsonError(c, 'CSRF TOKEN ERROR');
+
+  if (config.forcelogin === 1) {
+    const userToken = c.req.header('cookie')?.match(/user_token=([^;]+)/)?.[1];
+    if (!userToken) return jsonError(c, '请先登录');
+  }
+
+  const name = sanitizeFileName(String(body['name'] || ''));
+  const hash = String(body['hash'] || '');
+  const size = parseInt(String(body['size'] || '0')) || 0;
+  if (!name) return jsonError(c, '文件名不能为空');
+  if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
+  if (config.upload_size > 0 && size > config.upload_size * 1024 * 1024) {
+    return jsonError(c, `文件超过大小限制（最大 ${config.upload_size}MB）`);
+  }
+
+  const ext = getFileExt(name);
+  if (isBlocked(name, ext)) return jsonError(c, '文件上传失败，不支持上传该格式文件');
+
+  const existing = await getFileByHash(db, hash);
+  if (existing) {
+    return jsonResult(c, {
+      code: 1, msg: '本站已存在该文件', exists: 1, hash, name: existing.name,
+      size: existing.size, type: existing.type, id: existing.id,
+    });
+  }
+
+  // 空文件无法做 S3/R2 multipart，回退到单请求上传
+  if (size <= 0) {
+    return jsonResult(c, {
+      code: 0, multipart: false, hash, name, size, type: ext,
+      chunksize: MULTIPART_CHUNK_SIZE, chunks: 1,
+    });
+  }
+
+  if (config.upload_limit > 0) {
+    const todayCount = await getTodayUploadCount(db, ip, 0);
+    if (todayCount >= config.upload_limit) return jsonError(c, '你今天上传文件的数量已超过限制');
+  }
+
+  try {
+    const stor = getStorOrThrow(c);
+    if (!stor.createMultipartUpload) return jsonError(c, '当前存储不支持分片上传');
+    const uploadId = await stor.createMultipartUpload(hash, getMimeType(ext));
+    if (!uploadId) return jsonError(c, '初始化分片上传失败');
+    const chunks = size > 0 ? Math.max(1, Math.ceil(size / MULTIPART_CHUNK_SIZE)) : 1;
+    return jsonResult(c, {
+      code: 0, multipart: true, uploadId,
+      hash, name, size, type: ext,
+      chunksize: MULTIPART_CHUNK_SIZE, chunks,
+    });
+  } catch (e: any) {
+    console.error('prepare multipart upload error:', e);
+    return jsonError(c, '初始化分片上传失败：' + String(e?.message || e));
+  }
+}
+
+// 取消分片上传（前端上传失败时清理存储端的未完成分片）
+async function handleAbortMultipart(c: any) {
+  const body = await c.req.parseBody() as Record<string, string>;
+  const csrfToken = String(body['csrf_token'] || '');
+  const cookieCsrf = c.req.header('cookie')?.match(/upload_csrf=([^;]+)/)?.[1];
+  if (!csrfToken || csrfToken !== cookieCsrf) return jsonError(c, 'CSRF TOKEN ERROR');
+
+  const hash = String(body['hash'] || '');
+  const uploadId = String(body['uploadId'] || '');
+  if (!/^[0-9a-f]{32}$/i.test(hash)) return jsonError(c, 'hash error');
+  if (!uploadId) return jsonError(c, 'uploadId 不能为空');
+
+  try {
+    const stor = getStorOrThrow(c);
+    if (stor.abortMultipartUpload) await stor.abortMultipartUpload(hash, uploadId);
+    return jsonResult(c, { code: 0 });
+  } catch (e: any) {
+    console.error('abort multipart upload error:', e);
+    return jsonError(c, String(e?.message || e));
+  }
 }
 
 // 文件分片上传
@@ -237,6 +362,23 @@ async function handleUploadPart(c: any) {
   const realSize = parseInt(String(body['size'] || '0')) || file.size;
   const ext = getFileExt(realName);
   const arrayBuf = await file.arrayBuffer();
+
+  // 分片上传：只把当前 8MB 分片交给存储，不在这里入库
+  const uploadId = String(body['uploadId'] || '');
+  const partNumber = parseInt(String(body['chunk'] || body['partNumber'] || '1')) || 1;
+  if (uploadId) {
+    if (partNumber < 1 || partNumber > 10000) return jsonError(c, '分片序号错误');
+    const multipartStor = getStorOrThrow(c);
+    if (!multipartStor.uploadPart) return jsonError(c, '当前存储不支持分片上传');
+    try {
+      const etag = await multipartStor.uploadPart(hash, uploadId, partNumber, arrayBuf);
+      if (!etag) return jsonError(c, '分片上传失败');
+      return jsonResult(c, { code: 0, multipart: true, partNumber, etag, hash });
+    } catch (e: any) {
+      console.error('upload multipart part error:', e);
+      return jsonError(c, String(e?.message || e));
+    }
+  }
 
   const stor = getStorOrThrow(c);
   let success = false;
@@ -342,6 +484,36 @@ async function handleCompleteUpload(c: any) {
   if (config.upload_limit > 0) {
     const todayCount = await getTodayUploadCount(db, ip, 0);
     if (todayCount >= config.upload_limit) return jsonError(c, '你今天上传文件的数量已超过限制');
+  }
+
+  // 网站中转的分片上传：先把所有分片合并成完整对象，再做存在性校验
+  const uploadId = String(body['uploadId'] || '');
+  if (uploadId) {
+    let rawParts: any;
+    try {
+      rawParts = JSON.parse(String(body['parts'] || '[]'));
+    } catch {
+      return jsonError(c, '分片信息无效');
+    }
+    if (!Array.isArray(rawParts) || rawParts.length === 0) {
+      return jsonError(c, '分片信息为空');
+    }
+    const parts = rawParts.map((p: any) => ({
+      partNumber: parseInt(String(p?.partNumber || '0')) || 0,
+      etag: String(p?.etag || ''),
+    }));
+    if (parts.some(p => p.partNumber < 1 || p.partNumber > 10000 || !p.etag)) {
+      return jsonError(c, '分片信息无效');
+    }
+    try {
+      const stor = getStorOrThrow(c);
+      if (!stor.completeMultipartUpload) return jsonError(c, '当前存储不支持分片上传');
+      const ok = await stor.completeMultipartUpload(hash, uploadId, parts);
+      if (!ok) return jsonError(c, '合并分片失败');
+    } catch (e: any) {
+      console.error('complete multipart upload error:', e);
+      return jsonError(c, '合并分片失败：' + String(e?.message || e));
+    }
   }
 
   // 直传完成后校验文件确实已在存储中。

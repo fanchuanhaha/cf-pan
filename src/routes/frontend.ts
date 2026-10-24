@@ -573,8 +573,12 @@ if (pwd!=null && pwd!="")
   }
 
   const viewType = getViewType(row.type);
+  const extLower = (row.type || '').toLowerCase();
+  const videoPlug = extLower === 'm3u8' ? 'hls.js' : (extLower === 'flv' || extLower === 'f4v' ? 'flv.js' : '');
+  const embedUrl = `${siteUrlStr}/view.php/embed/${row.hash}?ext=${encodeURIComponent(row.type || 'file')}`;
   let fileTitle = '';
   let htmlcode = '';
+  let htmlcode2 = '';
   let ubbcode = '';
   let linktitle = '文件链接';
   let filetype = 0;
@@ -588,14 +592,16 @@ if (pwd!=null && pwd!="")
   } else if (viewType === 'audio') {
     filetype = 2;
     fileTitle = '<i class="fa fa-music"></i> 音乐播放器'
-    htmlcode = htmlspecialchars(`<audio src="${viewurlAll}" autoplay="autoplay" loop="loop" preload="auto"></audio>`);
-    ubbcode = `[audio]${viewurlAll}[/audio]`;
+    htmlcode = htmlspecialchars(`<audio id="bgmMusic" src="${viewurlAll}" autoplay="autoplay" loop="loop" preload="auto"></audio>`);
+    htmlcode2 = htmlspecialchars(`<iframe src="${embedUrl}" width="407" height="70" scrolling="no" frameborder="0"></iframe>`);
+    ubbcode = `[audio=X]${viewurlAll}[/audio]`;
     linktitle = '音乐链接';
   } else if (viewType === 'video') {
     filetype = 3;
     fileTitle = '<i class="fa fa-video-camera"></i> 视频播放器';
-    htmlcode = htmlspecialchars(`<video src="${viewurlAll}" controls="" width="100%"></video>`);
-    ubbcode = `[movie]${viewurlAll}[/movie]`;
+    htmlcode = htmlspecialchars(`<video id="movies" src="${viewurlAll}" autobuffer="true" controls="" width="100%"></video>`);
+    htmlcode2 = htmlspecialchars(`<iframe src="${embedUrl}" width="800" height="500" scrolling="no" frameborder="0"></iframe>`);
+    ubbcode = `[movie=320*180]${viewurlAll}[/movie]`;
     linktitle = '视频链接';
   } else {
     filetype = 0;
@@ -661,6 +667,15 @@ if (pwd!=null && pwd!="")
         </div>
         <div class="tab-pane fade" id="code">
           ${filetype >= 2 ? `<div class="form-group row">
+            <label class="col-md-2 control-label">播放器代码</label>
+            <div class="col-md-10">
+              <div class="input-group">
+                <input type="text" class="form-control" id="code1" readonly value='${htmlcode2}'>
+                <span class="input-group-btn"><button class="btn btn-primary btn-raised copy-btn" type="button" data-clipboard-text='${htmlcode2}'>复制</button></span>
+              </div>
+            </div>
+          </div>
+          <div class="form-group row">
             <label class="col-md-2 control-label">HTML代码</label>
             <div class="col-md-10">
               <div class="input-group">
@@ -725,6 +740,10 @@ if (pwd!=null && pwd!="")
 </div>
 <script src="${CDN.clipboard}"></script>
 <script src="${CDN.layer}"></script>
+${filetype === 2 ? `<script src="${CDN.aplayerJs}"></script>` : ''}
+${filetype === 3 && row.block === 0 ? `<script src="assets/js/ckplayer.min.js"></script>` : ''}
+${filetype === 3 && row.block === 0 && videoPlug === 'hls.js' ? `<script src="https://s4.zstatic.net/ajax/libs/hls.js/1.2.4/hls.min.js"></script>` : ''}
+${filetype === 3 && row.block === 0 && videoPlug === 'flv.js' ? `<script src="https://s4.zstatic.net/ajax/libs/flv.js/1.6.2/flv.min.js"></script>` : ''}
 <script>
 function delete_confirm(){
   var hash = $("#hash").val();
@@ -756,14 +775,18 @@ $(function(){
     container: document.getElementById('aplayer'),
     loop: 'none',
     theme: '#b2dae6',
-    audio: [{ title: '${htmlspecialchars(row.name).replace(/'/g, "\\'")}', author: 'none', url: '${viewurlAll}', cover: 'assets/img/music.png' }]
+    audio: [{ title: ${JSON.stringify(row.name)}, author: 'none', url: ${JSON.stringify(viewurlAll)}, cover: 'assets/img/music.png' }]
   });
 });` : ''}
 ${filetype === 3 && row.block === 0 ? `
 $(function(){
-  var videoObject = { container: '.videoplayer', video: '${viewurlAll}', autoplay: false };
-  // 简化版视频播放 - 实际项目里用 ckplayer
-  $('.videoplayer').html('<video src="${viewurlAll}" controls style="max-width:100%"></video>');
+  var videoObject = {
+    container: '.videoplayer',
+    plug: ${JSON.stringify(videoPlug)},
+    video: ${JSON.stringify(viewurlAll)},
+    webFull: true
+  };
+  var player = new ckplayer(videoObject);
 });` : ''}
 </script>`;
 
@@ -1064,7 +1087,7 @@ frontend.get('/admin/file', async (c) => {
         <select id="dstatus" name="dstatus" class="form-control"><option value="-1">全部状态</option><option value="0">正常文件</option><option value="1">已屏蔽文件</option><option value="2">待审核文件</option></select>
       </div>
       <div class="form-group">
-        <select id="orderby" name="orderby" class="form-control"><option value="0">默认排序</option><option value="1">按下载量排序</option><option value="2">按大小排序（大到小）</option><option value="3">按大小排序（小到大）</option></select>
+        <select id="orderby" name="orderby" class="form-control" style="width:130px"><option value="0">默认排序</option><option value="1">按下载量排序</option></select>
       </div>
       <div class="form-group">
         <button class="btn btn-primary" type="submit"><i class="fa fa-search"></i> 搜索</button>
@@ -1120,17 +1143,12 @@ $(document).ready(function(){
     ]
   });
 
-  // 点击表头排序时同步“排序方式”下拉框，保证服务端和界面一致
-  $('#listTable').on('sort.bs.table', function(e, name, order){
-    if(name === 'size') $('#orderby').val(order === 'asc' ? '3' : '2');
-    else if(name) $('#orderby').val('0');
+  // 点击“文件大小”表头可按大小排序；下拉框恢复原版两项，避免撑宽工具栏
+  $('#listTable').on('sort.bs.table', function(){
+    $('#orderby').val('0');
   });
-  // 下拉框选择排序方式时同步表头排序状态
   $('#orderby').on('change', function(){
-    var v = $(this).val();
-    var sortName = (v === '2' || v === '3') ? 'size' : '';
-    var sortOrder = v === '3' ? 'asc' : 'desc';
-    $('#listTable').bootstrapTable('refreshOptions', { pageNumber: 1, sortName: sortName, sortOrder: sortOrder });
+    $('#listTable').bootstrapTable('refreshOptions', { pageNumber: 1, sortName: '', sortOrder: 'desc' });
   });
 
   $(document).on('click', '.preview-link', function(){

@@ -136,6 +136,7 @@ new Vue({
             }
 
             if(result.third){
+                var directOk = true;
                 try {
                     if(result.method == 'PUT'){
                         await this.uploadThirdPut(result.url, file, result.headers);
@@ -144,51 +145,126 @@ new Vue({
                     }
                 } catch (e) {
                     // 直传失败（常见原因：R2/S3 桶未配置 CORS、Endpoint/Bucket/AK/SK 不对）
-                    // 自动回退到 Worker 中转，保证文件能传上去
-                    console.warn('直传失败，回退到网站中转:', e);
-                    layer.msg('直传失败，已自动改用网站中转上传');
-                    try {
-                        await this.uploadPart(file, 1);
-                    } catch (err) {
-                        that.show_msg(err, 'danger');
-                        throw Error();
-                    }
+                    // 自动回退到网站中转分片上传，大于 100MB 的文件也能继续传
+                    directOk = false;
+                    console.warn('直传失败，回退到网站中转分片上传:', e);
+                    layer.msg('直传失败，已自动改用网站中转分片上传');
+                    this.loaded_size = 0;
+                    this.progress = 0;
                 }
 
-                await this.completeUpload().then(res =>{
-                    result = res
-                }, res => {
-                    that.show_msg(res, 'danger');
-                    throw Error();
-                });
-
-            }else{
-                var chunkSize = result.chunksize;
-                var chunks = result.chunks;
-                if(chunks == 1){
-                    await this.uploadPart(file, 1).then(res =>{
+                if(directOk){
+                    await this.completeUpload().then(res =>{
                         result = res
                     }, res => {
                         that.show_msg(res, 'danger');
                         throw Error();
                     });
                 }else{
-                    var blobSlice = File.prototype.mozSlice || File.prototype.webkitSlice || File.prototype.slice;
-                    for (chunk = 1; chunk <= chunks; chunk++) {
-                        var start = (chunk - 1) * chunkSize;
-                        var end = start + chunkSize > file.size ? file.size : start + chunkSize;
-                        var blob = blobSlice.call(file, start, end);
-                        await this.uploadPart(blob, chunk).then(res =>{
-                            that.loaded_size = end
-                            result = res
-                        }, res => {
-                            that.show_msg(res, 'danger');
-                            throw Error();
-                        });
+                    try {
+                        var session = await this.prepareMultipart();
+                        if(session.code == 1){
+                            this.uploadSuccess(session.hash);
+                            return;
+                        }
+                        if(session.uploadId){
+                            await this.uploadChunks(file, session);
+                            result = await this.completeUpload(session.uploadId, session.parts);
+                        }else{
+                            result = await this.uploadPart(file, 1);
+                        }
+                    } catch (err) {
+                        that.show_msg(err, 'danger');
+                        throw Error();
                     }
                 }
+            }else if(result.multipart && result.uploadId){
+                try {
+                    await this.uploadChunks(file, result);
+                    result = await this.completeUpload(result.uploadId, result.parts);
+                } catch (err) {
+                    that.show_msg(err, 'danger');
+                    throw Error();
+                }
+            }else{
+                await this.uploadPart(file, 1).then(res =>{
+                    result = res
+                }, res => {
+                    that.show_msg(res, 'danger');
+                    throw Error();
+                });
             }
             this.uploadSuccess(result.hash);
+        },
+        async uploadChunks(file, session){ //按 8MB 分片依次上传到 Worker
+            var that = this;
+            var chunkSize = session.chunksize;
+            var chunks = session.chunks;
+            var parts = [];
+            try {
+                for (var chunk = 1; chunk <= chunks; chunk++) {
+                    var start = (chunk - 1) * chunkSize;
+                    var end = Math.min(start + chunkSize, file.size);
+                    var blob = file.slice(start, end);
+                    var part = await this.uploadPart(blob, chunk, session.uploadId);
+                    parts.push({ partNumber: chunk, etag: part.etag });
+                    that.loaded_size = end;
+                }
+            } catch (e) {
+                // 失败时尽量取消存储端未完成的分片任务，避免留下垃圾分片
+                if (session.uploadId) {
+                    try { await this.abortMultipart(session.uploadId); } catch (_) {}
+                }
+                throw e;
+            }
+            session.parts = parts;
+            return parts;
+        },
+        async prepareMultipart(){ //直传失败后，创建网站中转分片任务
+            var that = this;
+            return new Promise((resolve, reject) => {
+                $.ajax({
+                    type: 'POST',
+                    url: 'ajax.php?act=prepare_multipart',
+                    data: {
+                        csrf_token: that.input.csrf_token,
+                        name: that.input.name,
+                        hash: that.input.hash,
+                        size: that.input.size,
+                        show: that.input.show?'1':'0',
+                        ispwd: that.input.ispwd?'1':'0',
+                        pwd: that.input.pwd,
+                    },
+                    dataType: 'json',
+                    success: function(data) {
+                        if(data.code == 0 || data.code == 1){
+                            resolve(data);
+                        }else{
+                            reject(data.msg || '初始化分片上传失败');
+                        }
+                    },
+                    error: function(){
+                        reject('初始化分片上传失败，请稍后再试');
+                    }
+                });
+            })
+        },
+        async abortMultipart(uploadId){ //清理未完成的分片任务
+            var that = this;
+            return new Promise((resolve) => {
+                $.ajax({
+                    type: 'POST',
+                    url: 'ajax.php?act=abort_multipart',
+                    data: {
+                        csrf_token: that.input.csrf_token,
+                        hash: that.input.hash,
+                        uploadId: uploadId,
+                    },
+                    dataType: 'json',
+                    success: function(){ resolve(); },
+                    error: function(){ resolve(); }
+                });
+            })
         },
         async preUpload(){ //文件预上传，极速秒传查询
             var postData = {
@@ -221,21 +297,24 @@ new Vue({
                 });
             })
         },
-        async completeUpload(){ //第三方上传文件完成上传
+        async completeUpload(uploadId, parts){ //直传或分片上传完成后入库
             var that = this;
+            var postData = {
+                hash: that.input.hash,
+                csrf_token: that.input.csrf_token,
+                name: that.input.name,
+                size: that.input.size,
+                show: that.input.show?'1':'0',
+                ispwd: that.input.ispwd?'1':'0',
+                pwd: that.input.pwd,
+            };
+            if(uploadId) postData.uploadId = uploadId;
+            if(parts) postData.parts = JSON.stringify(parts);
             return new Promise((resolve, reject) => {
                 $.ajax({
                     type: 'POST',
                     url: 'ajax.php?act=complete_upload',
-                    data: {
-                        hash: that.input.hash,
-                        csrf_token: that.input.csrf_token,
-                        name: that.input.name,
-                        size: that.input.size,
-                        show: that.input.show?'1':'0',
-                        ispwd: that.input.ispwd?'1':'0',
-                        pwd: that.input.pwd,
-                    },
+                    data: postData,
                     dataType: 'json',
                     success: function(data) {
                         if(data.code == 0 || data.code == 1){
@@ -251,7 +330,7 @@ new Vue({
                 });
             })
         },
-        async uploadPart(file, chunk){ //上传文件分片
+        async uploadPart(file, chunk, uploadId){ //上传文件分片
             var that = this;
             var tempTime = new Date().getTime();
             var oloaded = 0;
@@ -260,6 +339,7 @@ new Vue({
                 data.append('file', file);
                 data.append('hash', that.input.hash);
                 data.append('chunk', chunk);
+                if(uploadId) data.append('uploadId', uploadId);
                 data.append('name', that.input.name);
                 data.append('size', that.input.size);
                 data.append('csrf_token', that.input.csrf_token);

@@ -1,6 +1,6 @@
 // 彩虹外链网盘 - Cloudflare R2 存储实现
 
-import type { IStorage, StorageObject } from './IStorage';
+import type { IStorage, MultipartPart, StorageObject } from './IStorage';
 
 const FILE_PREFIX = 'file/';
 
@@ -109,6 +109,52 @@ export class R2Storage implements IStorage {
       cursor = result.cursor;
     }
     return out;
+  }
+
+  async createMultipartUpload(name: string, contentType?: string): Promise<string | null> {
+    try {
+      const upload = await this.bucket.createMultipartUpload(this.key(name), {
+        httpMetadata: contentType ? { contentType } : undefined,
+      });
+      return upload.uploadId;
+    } catch (e) {
+      console.error('R2 createMultipartUpload error:', e);
+      return null;
+    }
+  }
+
+  async uploadPart(name: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<string | null> {
+    try {
+      const upload = this.bucket.resumeMultipartUpload(this.key(name), uploadId);
+      const part = await upload.uploadPart(partNumber, body);
+      return part.etag;
+    } catch (e) {
+      console.error('R2 uploadPart error:', e);
+      return null;
+    }
+  }
+
+  async completeMultipartUpload(name: string, uploadId: string, parts: MultipartPart[]): Promise<boolean> {
+    try {
+      const upload = this.bucket.resumeMultipartUpload(this.key(name), uploadId);
+      const sorted = [...parts].sort((a, b) => a.partNumber - b.partNumber);
+      await upload.complete(sorted);
+      return true;
+    } catch (e) {
+      console.error('R2 completeMultipartUpload error:', e);
+      return false;
+    }
+  }
+
+  async abortMultipartUpload(name: string, uploadId: string): Promise<boolean> {
+    try {
+      const upload = this.bucket.resumeMultipartUpload(this.key(name), uploadId);
+      await upload.abort();
+      return true;
+    } catch (e) {
+      console.error('R2 abortMultipartUpload error:', e);
+      return false;
+    }
   }
 
   async getDownUrl(name: string, filename: string, contentType?: string): Promise<string | null> {

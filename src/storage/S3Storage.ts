@@ -1,11 +1,44 @@
 // 彩虹外链网盘 - S3 兼容存储实现 (支持 OSS/COS/MinIO 等)
 
-import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  HeadObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { IStorage, StorageObject } from './IStorage';
+import type { IStorage, MultipartPart, StorageObject } from './IStorage';
 import { getFileExt, getMimeType } from '../utils/mime';
 
 const FILE_PREFIX = 'file/';
+
+/** 从 S3 XML 响应中取一个简单标签值（Workers 没有 DOMParser，不能交给 SDK 反序列化） */
+function xmlTag(xml: string, tag: string): string {
+  const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+  if (!m) return '';
+  return m[1]
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&amp;/g, '&');
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 export interface S3Config {
   endpoint: string;
@@ -162,6 +195,120 @@ export class S3Storage implements IStorage {
 
   async savefile(name: string, _tmpfile: string, _contentType?: string): Promise<boolean> {
     return false; // S3 使用 upload 替代
+  }
+
+  // ===== 分片上传 =====
+  // CreateMultipartUpload / CompleteMultipartUpload 的响应是 XML，AWS SDK
+  // 在 Workers 里会调用 DOMParser 反序列化并报错。这里统一用预签名 URL +
+  // fetch 发原始请求，再自己用正则取 UploadId，避免依赖 DOM。
+  async createMultipartUpload(name: string, contentType?: string): Promise<string | null> {
+    try {
+      const url = await getSignedUrl(this.client, new CreateMultipartUploadCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(name),
+        ContentType: contentType || 'application/octet-stream',
+      }), { expiresIn: 3600 });
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': contentType || 'application/octet-stream' },
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        console.error('S3 CreateMultipartUpload HTTP error:', response.status, text.slice(0, 300));
+        return null;
+      }
+      const uploadId = xmlTag(text, 'UploadId');
+      if (!uploadId) {
+        console.error('S3 CreateMultipartUpload missing UploadId:', text.slice(0, 300));
+        return null;
+      }
+      return uploadId;
+    } catch (e) {
+      console.error('S3 createMultipartUpload error:', e);
+      return null;
+    }
+  }
+
+  async uploadPart(name: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<string | null> {
+    try {
+      const bytes = new Uint8Array(body);
+      const url = await getSignedUrl(this.client, new UploadPartCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(name),
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        Body: bytes,
+        ContentLength: bytes.byteLength,
+      }), { expiresIn: 3600 });
+
+      const response = await fetch(url, { method: 'PUT', body: bytes });
+      const etag = response.headers.get('etag');
+      if (!response.ok || !etag) {
+        const text = await response.text();
+        console.error('S3 UploadPart HTTP error:', response.status, text.slice(0, 300));
+        return null;
+      }
+      return etag;
+    } catch (e) {
+      console.error('S3 uploadPart error:', e);
+      return null;
+    }
+  }
+
+  async completeMultipartUpload(name: string, uploadId: string, parts: MultipartPart[]): Promise<boolean> {
+    try {
+      const sorted = [...parts].sort((a, b) => a.partNumber - b.partNumber);
+      // 必须与 SDK 预签名时序列化出的 XML 完全一致（Content-Length 会被签名）。
+      // SDK 的格式是：XML 声明 + S3 命名空间，Part 内先 ETag 后 PartNumber，
+      // 且 ETag 里的引号会转义成 &quot;。不要加空格或换行。
+      const xml = '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+        sorted.map(p =>
+          `<Part><ETag>${xmlEscape(p.etag)}</ETag><PartNumber>${p.partNumber}</PartNumber></Part>`
+        ).join('') +
+        '</CompleteMultipartUpload>';
+
+      const url = await getSignedUrl(this.client, new CompleteMultipartUploadCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(name),
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: sorted.map(p => ({ PartNumber: p.partNumber, ETag: p.etag })),
+        },
+      }), { expiresIn: 3600 });
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/xml' },
+        body: xml,
+      });
+      const text = await response.text();
+      if (!response.ok || /<Error>[\s\S]*?<\/Error>/i.test(text)) {
+        console.error('S3 CompleteMultipartUpload HTTP error:', response.status, text.slice(0, 500));
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error('S3 completeMultipartUpload error:', e);
+      return false;
+    }
+  }
+
+  async abortMultipartUpload(name: string, uploadId: string): Promise<boolean> {
+    try {
+      const url = await getSignedUrl(this.client, new AbortMultipartUploadCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(name),
+        UploadId: uploadId,
+      }), { expiresIn: 300 });
+      const response = await fetch(url, { method: 'DELETE' });
+      // 404 表示分片任务本来就不存在，按成功处理
+      return response.ok || response.status === 404;
+    } catch (e) {
+      console.error('S3 abortMultipartUpload error:', e);
+      return false;
+    }
   }
 
   /** 前端直传参数：SigV4 预签名 PUT URL（浏览器直接 PUT，需存储商开启 CORS） */

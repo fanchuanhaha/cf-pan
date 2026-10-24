@@ -7,6 +7,12 @@ export interface StorageObject {
   uploaded?: string;
 }
 
+/** 分片上传完成时提交给存储的单个分片信息 */
+export interface MultipartPart {
+  partNumber: number;
+  etag: string;
+}
+
 export interface IStorage {
   /** 检查文件是否存在 */
   exists(name: string): Promise<boolean>;
@@ -40,4 +46,20 @@ export interface IStorage {
 
   /** 获取直链下载 URL */
   getDownUrl?(name: string, filename: string, contentType?: string): Promise<string | null>;
+
+  // ===== 分片上传（R2/S3 等对象存储） =====
+  // 浏览器每次只把 8MB 分片发给 Worker，Worker 再调用存储的 UploadPart，
+  // 这样单个请求不会触发 Cloudflare 100MB 请求体限制，大文件也能上传。
+
+  /** 初始化分片上传，返回存储端的 uploadId */
+  createMultipartUpload?(name: string, contentType?: string): Promise<string | null>;
+
+  /** 上传一个分片，返回存储端 ETag */
+  uploadPart?(name: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<string | null>;
+
+  /** 合并分片 */
+  completeMultipartUpload?(name: string, uploadId: string, parts: MultipartPart[]): Promise<boolean>;
+
+  /** 取消分片上传（失败清理用） */
+  abortMultipartUpload?(name: string, uploadId: string): Promise<boolean>;
 }
