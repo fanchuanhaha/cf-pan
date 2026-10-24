@@ -230,7 +230,7 @@ new Vue({
                         }
                         if(session.uploadId){
                             await this.uploadChunks(file, session);
-                            result = await this.completeUpload(session.uploadId, session.parts);
+                            result = await this.completeUpload(session.uploadId, session.parts, session.backend);
                         }else{
                             result = await this.uploadPart(file, 1);
                         }
@@ -243,7 +243,7 @@ new Vue({
                 try {
                     this.beginTransfer();
                     await this.uploadChunks(file, result);
-                    result = await this.completeUpload(result.uploadId, result.parts);
+                    result = await this.completeUpload(result.uploadId, result.parts, result.backend);
                 } catch (err) {
                     that.show_msg(err, 'danger');
                     throw Error();
@@ -259,14 +259,69 @@ new Vue({
             }
             this.uploadSuccess(result.hash);
         },
-        async uploadChunks(file, session){ //分片并发上传（服务端决定并发数，25MB 一片，减少请求次数）
+        async uploadChunks(file, session){ //优先浏览器直传分片，失败自动回退到 Worker 中转
+            if(session.direct && session.partUrls && session.partUrls.length){
+                try {
+                    return await this.uploadDirectChunks(file, session);
+                } catch (e) {
+                    console.warn('分片直传失败，回退到网站中转分片上传:', e);
+                    layer.msg('直传分片失败，已自动改用网站中转上传');
+                    this.beginTransfer();
+                }
+            }
+            return await this.uploadRelayChunks(file, session);
+        },
+        async uploadDirectChunks(file, session){ //浏览器直接 PUT 到 R2/S3，不经过 Worker
             var that = this;
             var chunkSize = session.chunksize;
             var chunks = session.chunks;
             var parts = new Array(chunks);
             var next = 1;
             var failure = null;
-            var concurrency = Math.min(session.concurrency || 2, chunks);
+            var concurrency = Math.min(session.concurrency || 4, chunks);
+            async function worker(){
+                while(true){
+                    if(failure) return;
+                    var chunk = next++;
+                    if(chunk > chunks) return;
+                    var start = (chunk - 1) * chunkSize;
+                    var end = Math.min(start + chunkSize, file.size);
+                    var blob = file.slice(start, end, '');
+                    var url = session.partUrls[chunk - 1];
+                    if(!url){
+                        failure = '缺少第 ' + chunk + ' 个分片的直传地址';
+                        throw failure;
+                    }
+                    try {
+                        var etag = await that.uploadDirectPart(url, blob, chunk);
+                        parts[chunk - 1] = { partNumber: chunk, etag: etag };
+                    } catch (e) {
+                        failure = e;
+                        throw e;
+                    }
+                }
+            }
+            var workers = [];
+            for (var i = 0; i < concurrency; i++) {
+                workers.push(worker().then(function(){ return null; }, function(e){ return e; }));
+            }
+            var workerErrors = await Promise.all(workers);
+            for (var j = 0; j < workerErrors.length; j++) {
+                if (workerErrors[j] && !failure) failure = workerErrors[j];
+            }
+            if (failure) throw failure;
+            parts = parts.filter(function(p){ return !!p; });
+            session.parts = parts;
+            return parts;
+        },
+        async uploadRelayChunks(file, session){ //Worker 中转分片
+            var that = this;
+            var chunkSize = session.chunksize;
+            var chunks = session.chunks;
+            var parts = new Array(chunks);
+            var next = 1;
+            var failure = null;
+            var concurrency = Math.min(session.relayConcurrency || session.concurrency || 2, chunks);
             async function worker(){
                 while(true){
                     if(failure) return;
@@ -276,7 +331,7 @@ new Vue({
                     var end = Math.min(start + chunkSize, file.size);
                     var blob = file.slice(start, end);
                     try {
-                        var part = await that.uploadPart(blob, chunk, session.uploadId);
+                        var part = await that.uploadPart(blob, chunk, session.uploadId, session.backend);
                         parts[chunk - 1] = { partNumber: chunk, etag: part.etag };
                     } catch (e) {
                         failure = e;
@@ -295,13 +350,41 @@ new Vue({
             if (failure) {
                 // 失败时尽量取消存储端未完成的分片任务，避免留下垃圾分片
                 if (session.uploadId) {
-                    try { await this.abortMultipart(session.uploadId); } catch (_) {}
+                    try { await this.abortMultipart(session.uploadId, session.backend); } catch (_) {}
                 }
                 throw failure;
             }
             parts = parts.filter(function(p){ return !!p; });
             session.parts = parts;
             return parts;
+        },
+        async uploadDirectPart(url, file, partNumber){ //浏览器直传单个分片
+            var that = this;
+            return new Promise((resolve, reject) => {
+                var xhr = new XMLHttpRequest();
+                xhr.open('PUT', url, true);
+                xhr.onload = function(){
+                    if(xhr.status >= 200 && xhr.status < 300){
+                        var etag = xhr.getResponseHeader('ETag');
+                        if(!etag){
+                            reject('直传分片成功但未拿到 ETag。请在存储桶 CORS 中设置 ExposeHeaders: ETag');
+                            return;
+                        }
+                        that.onChunkDone(partNumber, file.size);
+                        resolve(etag);
+                    }else{
+                        var detail = (xhr.responseText || '').slice(0, 300);
+                        reject('直传分片失败(HTTP ' + xhr.status + ')' + (detail ? '：' + detail : ''));
+                    }
+                };
+                xhr.onerror = function(){
+                    reject('直传分片失败：网络错误或被 CORS 拦截。请检查存储桶 CORS 是否允许 PUT 并暴露 ETag');
+                };
+                xhr.upload.addEventListener('progress', function (e) {
+                    if(e.lengthComputable) that.onChunkProgress(partNumber, e.loaded);
+                });
+                xhr.send(file);
+            })
         },
         async prepareMultipart(){ //直传失败后，创建网站中转分片任务
             var that = this;
@@ -332,7 +415,7 @@ new Vue({
                 });
             })
         },
-        async abortMultipart(uploadId){ //清理未完成的分片任务
+        async abortMultipart(uploadId, backend){ //清理未完成的分片任务
             var that = this;
             return new Promise((resolve) => {
                 $.ajax({
@@ -342,6 +425,7 @@ new Vue({
                         csrf_token: that.input.csrf_token,
                         hash: that.input.hash,
                         uploadId: uploadId,
+                        backend: backend || '',
                     },
                     dataType: 'json',
                     success: function(){ resolve(); },
@@ -380,7 +464,7 @@ new Vue({
                 });
             })
         },
-        async completeUpload(uploadId, parts){ //直传或分片上传完成后入库
+        async completeUpload(uploadId, parts, backend){ //直传或分片上传完成后入库
             var that = this;
             var postData = {
                 hash: that.input.hash,
@@ -393,6 +477,7 @@ new Vue({
             };
             if(uploadId) postData.uploadId = uploadId;
             if(parts) postData.parts = JSON.stringify(parts);
+            if(backend) postData.backend = backend;
             return new Promise((resolve, reject) => {
                 $.ajax({
                     type: 'POST',
@@ -413,7 +498,7 @@ new Vue({
                 });
             })
         },
-        async uploadPart(file, chunk, uploadId){ //上传文件分片
+        async uploadPart(file, chunk, uploadId, backend){ //上传文件分片
             var that = this;
             return new Promise((resolve, reject) => {
                 var data = new FormData();
@@ -421,6 +506,7 @@ new Vue({
                 data.append('hash', that.input.hash);
                 data.append('chunk', chunk);
                 if(uploadId) data.append('uploadId', uploadId);
+                if(backend) data.append('backend', backend);
                 data.append('name', that.input.name);
                 data.append('size', that.input.size);
                 data.append('csrf_token', that.input.csrf_token);

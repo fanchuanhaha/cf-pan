@@ -60,6 +60,9 @@ export interface IStorage {
   /** 合并分片 */
   completeMultipartUpload?(name: string, uploadId: string, parts: MultipartPart[]): Promise<boolean>;
 
+  /** 为浏览器直传生成某个分片的预签名 URL（R2/S3 API 可用） */
+  getMultipartUploadPartUrl?(name: string, uploadId: string, partNumber: number): Promise<string | null>;
+
   /** 取消分片上传（失败清理用） */
   abortMultipartUpload?(name: string, uploadId: string): Promise<boolean>;
 }

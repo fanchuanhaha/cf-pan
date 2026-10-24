@@ -256,6 +256,21 @@ export class S3Storage implements IStorage {
     }
   }
 
+  /** 浏览器直传分片：host-only 预签名 URL，CORS 需要允许 PUT 并暴露 ETag */
+  async getMultipartUploadPartUrl(name: string, uploadId: string, partNumber: number): Promise<string | null> {
+    try {
+      return await getSignedUrl(this.client, new UploadPartCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(name),
+        UploadId: uploadId,
+        PartNumber: partNumber,
+      }), { expiresIn: 3600 });
+    } catch (e) {
+      console.error('S3 presign multipart part error:', e);
+      return null;
+    }
+  }
+
   async completeMultipartUpload(name: string, uploadId: string, parts: MultipartPart[]): Promise<boolean> {
     try {
       const sorted = [...parts].sort((a, b) => a.partNumber - b.partNumber);
