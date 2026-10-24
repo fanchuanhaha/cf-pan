@@ -9,6 +9,7 @@ import { getFileExt, getMimeType, isView as isViewExt } from '../utils/mime';
 import { jsonError, jsonResult, generateCsrfToken, getClientIP } from '../utils/response';
 import { checkImage } from '../services/green';
 import { S3Storage } from '../storage/S3Storage';
+import { purgeHomeCache } from '../utils/cache';
 
 let csrfTokens: Record<string, string> = {};
 
@@ -258,6 +259,7 @@ async function handleUploadPart(c: any) {
   const id = await insertFile(db, {
     name: realName, type: ext, size: realSize, hash, ip, hide: 0, pwd: null, uid: 0,
   });
+  purgeHomeCache(c);
 
   // 鉴黄
   if (config.green_check > 0) {
@@ -347,6 +349,7 @@ async function handleCompleteUpload(c: any) {
 
   const hide = String(body['show'] || '1') === '1' ? 0 : 1;
   const id = await insertFile(db, { name, type: ext, size, hash, ip, hide, pwd, uid: 0 });
+  purgeHomeCache(c);
 
   // 鉴黄
   if (config.green_check > 0) {
@@ -408,7 +411,10 @@ async function handleDeleteFile(c: any) {
 
   await stor.delete(row.hash);
   const ok = await deleteFile(db, row.id);
-  if (ok) return jsonResult(c, { code: 0, msg: '删除文件成功！' });
+  if (ok) {
+    purgeHomeCache(c);
+    return jsonResult(c, { code: 0, msg: '删除文件成功！' });
+  }
   return jsonError(c, '删除文件失败');
 }
 

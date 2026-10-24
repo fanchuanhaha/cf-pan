@@ -14,6 +14,7 @@ import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touch
 import { verifyAdminToken, signAdminToken } from '../auth/admin';
 import { getViewType, sizeFormat, typeToIcon, isView } from '../utils/mime';
 import { htmlspecialchars, generateCsrfToken, jsonResult, jsonError } from '../utils/response';
+import { purgeHomeCache } from '../utils/cache';
 
 const frontend = new Hono<AppEnv>();
 
@@ -191,6 +192,20 @@ frontend.get('/', async (c) => {
   const siteUrlStr = siteUrl(c);
 
   const isMine = c.req.query('m') === 'mine';
+  // 首页可缓存：m=mine 依赖 cookie，不能进公共缓存
+  const cacheable = !isMine && c.req.method === 'GET';
+  const edgeCache = (globalThis as any).caches?.default as any;
+  const cacheKey = cacheable ? new Request(c.req.url, { method: 'GET' }) : null;
+  if (cacheable && edgeCache && cacheKey) {
+    try {
+      const hit = await edgeCache.match(cacheKey);
+      if (hit) {
+        const res = new Response(hit.body, hit);
+        res.headers.set('X-Cache', 'HIT');
+        return res;
+      }
+    } catch {}
+  }
   const kw = (c.req.query('kw') || '').trim();
   const page = Math.max(1, parseInt(c.req.query('page') || '1'));
   const pageSize = 15;
@@ -325,8 +340,16 @@ frontend.get('/', async (c) => {
 </div>`;
 
   // 首页可被 Cloudflare 缓存（用户上传/删除后等待缓存过期即可刷新）
-  c.header('Cache-Control', 'public, max-age=300, s-maxage=300');
-  return c.html(publicLayout(title, body, siteUrlStr, isMine ? 'mine' : 'index', false, config.title));
+  const res = c.html(publicLayout(title, body, siteUrlStr, isMine ? 'mine' : 'index', false, config.title));
+  res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300');
+  res.headers.set('CDN-Cache-Control', 'public, max-age=300');
+  res.headers.set('X-Cache', 'MISS');
+  if (cacheable && edgeCache && cacheKey) {
+    try {
+      c.executionCtx.waitUntil(edgeCache.put(cacheKey, res.clone()));
+    } catch {}
+  }
+  return res;
 });
 
 // ===================== 上传页面/upload.php =====================
@@ -1972,6 +1995,7 @@ frontend.post('/admin/ajax/saveFileInfo', async (c) => {
   }
 
   await updateFile(db, { id, name, type, hide, pwd });
+  purgeHomeCache(c);
   return c.json({ code: 0, msg: '提交成功' });
 });
 
@@ -1981,6 +2005,7 @@ frontend.get('/admin/ajax/setBlock', async (c) => {
   const id = parseInt(c.req.query('id') || '0');
   const status = parseInt(c.req.query('status') || '0');
   await setFileBlock(db, id, status);
+  purgeHomeCache(c);
   return c.json({ code: 0, msg: '提交成功' });
 });
 
@@ -1995,6 +2020,7 @@ frontend.get('/admin/ajax/delFile', async (c) => {
     await stor.delete(row.hash);
   } catch {}
   await deleteFile(db, id);
+  purgeHomeCache(c);
   return c.json({ code: 0, msg: '删除成功' });
 });
 
@@ -2028,6 +2054,7 @@ frontend.post('/admin/ajax/operation', async (c) => {
     }
     count++;
   }
+  purgeHomeCache(c);
   return c.json({ code: 0, msg: `成功${opname} ${count} 个文件件` });
 });
 
