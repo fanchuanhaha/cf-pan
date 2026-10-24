@@ -3,7 +3,7 @@
 import { getConfig } from '../config';
 import { insertFile, getFileByHash, getTodayUploadCount, now } from '../db';
 import type { IStorage } from '../storage/IStorage';
-import { getFileExt } from '../utils/mime';
+import { getFileExt, getMimeType } from '../utils/mime';
 import { getClientIP, htmlspecialchars } from '../utils/response';
 import type { Context } from 'hono';
 
@@ -48,6 +48,10 @@ export async function fileOutput(
     'mp4', 'webm', 'mov', 'flv', 'avi', 'mkv',
   ];
   const isInline = !forceDownload && inlineExtList.includes(ext);
+  // 按扩展名给出正确的 MIME，避免存储返回 application/octet-stream 时浏览器直接下载
+  const mimeByExt = getMimeType(ext);
+  const pickContentType = (storType: string | null) =>
+    mimeByExt !== 'application/octet-stream' ? mimeByExt : (storType || 'application/octet-stream');
 
   const contentDisposition = isInline
     ? `inline; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`
@@ -63,7 +67,8 @@ export async function fileOutput(
       if (response) {
         const headers = new Headers(response.headers);
         headers.set('Content-Disposition', contentDisposition);
-        headers.set('Content-Type', headers.get('Content-Type') || 'application/octet-stream');
+        headers.set('Content-Type', pickContentType(headers.get('Content-Type')));
+        headers.set('Accept-Ranges', 'bytes');
         return new Response(response.body, {
           status: 206,
           headers,
@@ -77,7 +82,8 @@ export async function fileOutput(
 
   const headers = new Headers(response.headers);
   headers.set('Content-Disposition', contentDisposition);
-  headers.set('Content-Type', headers.get('Content-Type') || 'application/octet-stream');
+  headers.set('Content-Type', pickContentType(headers.get('Content-Type')));
+  headers.set('Accept-Ranges', 'bytes');
   headers.set('Content-Length', String(size));
   
   return new Response(response.body, {
