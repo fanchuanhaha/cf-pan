@@ -41,7 +41,8 @@ export async function fileOutput(
   name: string,
   forceDownload: boolean = false
 ): Promise<Response> {
-  const ext = type.toLowerCase();
+  let ext = (type || '').toLowerCase().trim().replace(/^\./, '');
+  if (!ext && name) ext = getFileExt(name).toLowerCase();
   const inlineExtList = [
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico',
     'mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a',
@@ -54,7 +55,7 @@ export async function fileOutput(
     mimeByExt !== 'application/octet-stream' ? mimeByExt : (storType || 'application/octet-stream');
 
   const contentDisposition = isInline
-    ? `inline; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`
+    ? 'inline'
     : `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 
   const rangeHeader = c.req.header('range');
