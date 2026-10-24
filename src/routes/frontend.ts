@@ -185,6 +185,76 @@ ${body}
 </html>`;
 }
 
+/**
+ * 原版 admin/head.php 的 1:1 复刻（只把 PHP 链接换成 Worker 路由）。
+ * 文件管理页必须用这个 layout：原版没有 admin.css / dark.css / layer 2.3，
+ * 并且 bootstrap-table 用的是本地 assets/css/bootstrap-table.css?v=1。
+ */
+function adminOriginalLayout(title: string, body: string, active: 'index' | 'file' | 'user' | 'set' = 'index'): string {
+  const cls = (key: string) => active === key ? 'active' : '';
+  return `<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="renderer" content="webkit">
+  <meta name="viewport" content="width=device-width,height=device-height,inital-scale=1.0,maximum-scale=1.0,user-scalable=no;">
+  <title>${htmlspecialchars(title)}</title>
+  <link href="${CDN.bootstrapCss}" rel="stylesheet"/>
+  <link href="${CDN.fontAwesome}" rel="stylesheet"/>
+  <link href="/assets/css/bootstrap-table.css?v=1" rel="stylesheet"/>
+  <script src="${CDN.jquery2}"></script>
+  <script src="${CDN.bootstrapJs}"></script>
+  <!--[if lt IE 9]>
+    <script src="https://s4.zstatic.net/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
+    <script src="https://s4.zstatic.net/ajax/libs/respond.js/1.4.2/respond.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+  <nav class="navbar navbar-fixed-top navbar-default">
+    <div class="container">
+      <div class="navbar-header">
+        <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar">
+          <span class="sr-only">导航按钮</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="/admin">彩虹外链网盘管理中心</a>
+      </div><!-- /.navbar-header -->
+      <div id="navbar" class="collapse navbar-collapse">
+        <ul class="nav navbar-nav navbar-right">
+          <li class="${cls('index')}">
+            <a href="/admin"><i class="fa fa-home"></i> 后台首页</a>
+          </li>
+          <li class="${cls('file')}">
+            <a href="/admin/file"><i class="fa fa-folder-open"></i> 文件管理</a>
+          </li>
+          <li class="${cls('user')}">
+            <a href="/admin/user"><i class="fa fa-users"></i> 用户管理</a>
+          </li>
+          <li class="${cls('set')}">
+            <a href="#" class="dropdown-toggle" data-toggle="dropdown"><i class="fa fa-cog"></i> 系统设置<b class="caret"></b></a>
+            <ul class="dropdown-menu">
+              <li><a href="/admin/set?mod=site">网站信息设置</a></li>
+              <li><a href="/admin/set?mod=user">用户登录设置</a></li>
+              <li><a href="/admin/set?mod=stor">存储类型设置</a></li>
+              <li><a href="/admin/set?mod=file">文件上传设置</a></li>
+              <li><a href="/admin/set?mod=green">图片检测设置</a></li>
+              <li><a href="/admin/set?mod=api">上传API设置</a></li>
+              <li><a href="/admin/set?mod=iptype">用户IP地址设置</a></li>
+              <li><a href="/admin/set?mod=account">管理账号设置</a></li>
+            </ul>
+          </li>
+          <li><a href="/admin/login?logout=1" onclick="return confirm('是否确定退出登录？')"><i class="fa fa-sign-out"></i> 退出登录</a></li>
+        </ul>
+      </div><!-- /.navbar-collapse -->
+    </div><!-- /.container -->
+  </nav><!-- /.navbar -->
+${body}
+</body>
+</html>`;
+}
+
 // ===================== 首页（服务端渲染，老浏览器兼容） =====================
 frontend.get('/', async (c) => {
   const config = getConf(c);
@@ -903,8 +973,6 @@ $.ajax({
 
 // ===================== 管理后台文件管理 /admin/file =====================
 frontend.get('/admin/file', async (c) => {
-  const siteUrlStr = siteUrl(c);
-  const config = getConf(c);
   if (!await checkAdmin(c)) {
     return c.html(`<script>window.location.href='/admin/login';</script>`);
   }
@@ -990,36 +1058,22 @@ frontend.get('/admin/file', async (c) => {
 <script src="${CDN.layer}"></script>
 <script src="${CDN.bootstrapTableJs}"></script>
 <script src="${CDN.bootstrapTablePageJump}"></script>
-<script src="/assets/js/custom.js?v=20261024"></script>
+<script src="/assets/js/custom.js"></script>
 <script>
 $(document).ready(function(){
   updateToolbar();
   var defaultPageSize = 15;
   var pageNumber = typeof window.$_GET['pageNumber'] != 'undefined' ? parseInt(window.$_GET['pageNumber']) : 1;
   var pageSize = typeof window.$_GET['pageSize'] != 'undefined' ? parseInt(window.$_GET['pageSize']) : defaultPageSize;
-  var orderbyFromUrl = window.$_GET['orderby'] || '0';
-  var initSortName = '';
-  var initSortOrder = 'asc';
-  if(orderbyFromUrl === '2'){
-    initSortName = 'size'; initSortOrder = 'desc';
-  }else if(orderbyFromUrl === '3'){
-    initSortName = 'size'; initSortOrder = 'asc';
-  }else if(orderbyFromUrl === '0'){
-    initSortName = window.$_GET['sortName'] || window.$_GET['sort'] || '';
-    initSortOrder = window.$_GET['sortOrder'] || window.$_GET['order'] || 'asc';
-  }
-
   $('#listTable').bootstrapTable({
     url: '/admin/ajax/fileList',
     pageNumber: pageNumber,
     pageSize: pageSize,
-    sortName: initSortName,
-    sortOrder: initSortOrder,
     classes: 'table table-striped table-hover table-bordered',
     columns: [
       { field: '', checkbox: true },
       { field: 'id', title: 'ID', formatter: function(value, row, index){ return '<b>'+value+'</b>'; } },
-      { field: 'uid', title: '用户', formatter: function(value, row, index){ return value>0?'<a href="./user?type=1&kw='+value+'" target="_blank">'+value+'</a>':'游客'; } },
+      { field: 'uid', title: '用户', formatter: function(value, row, index){ return value>0?'<a href="/admin/user?type=1&kw='+value+'" target="_blank">'+value+'</a>':'游客'; } },
       { field: 'name', title: '文件名', formatter: function(value, row, index){
           var html = '<a href="'+escHtml(row.fileurl)+'" title="点击下载"><i class="fa '+row.icon+' fa-fw"></i>'+escHtml(value)+'</a>';
           if(row.view){
@@ -1037,7 +1091,7 @@ $(document).ready(function(){
           else if(value == '1') return '<a href="javascript:setBlock('+row.id+',0)" class="btn btn-xs btn-danger">封禁</a>';
           else return '<a href="javascript:setBlock('+row.id+',1)" class="btn btn-xs btn-success">正常</a>';
         } },
-      { field: 'status', title: '操作', sortable: false, formatter: function(value, row, index){
+      { field: 'status', title: '操作', formatter: function(value, row, index){
           return '<a href="javascript:editframe('+row.id+')" class="btn btn-xs btn-info">编辑</a>&nbsp;<a href="'+escHtml(row.pageurl)+'" class="btn btn-xs btn-warning" target="_blank">查看</a>&nbsp;<a href="javascript:delFile('+row.id+')" class="btn btn-xs btn-danger">删除</a>';
         } }
     ]
@@ -1073,14 +1127,14 @@ function change_ispwd(obj){
   else $('#pwd_frame').hide();
 }
 function setBlock(id, status){
-  $.ajax({ type:'GET', url:'ajax/setBlock?id='+id+'&status='+status, dataType:'json',
+  $.ajax({ type:'GET', url:'/admin/ajax/setBlock?id='+id+'&status='+status, dataType:'json',
     success:function(data){ searchSubmit(); },
     error:function(){ layer.msg('服务器错误'); }
   });
 }
 function editframe(id){
   var ii = layer.load(2, {shade:[0.1,'#fff']});
-  $.ajax({ type:'GET', url:'ajax/getFileInfo?id='+id, dataType:'json',
+  $.ajax({ type:'GET', url:'/admin/ajax/getFileInfo?id='+id, dataType:'json',
     success:function(data){
       layer.close(ii);
       if(data.code == 0){
@@ -1114,7 +1168,7 @@ function save(){
     return false;
   }
   var ii = layer.load(2, {shade:[0.1,'#fff']});
-  $.ajax({ type:'POST', url:'ajax/saveFileInfo', data:$('#form-store').serialize(), dataType:'json',
+  $.ajax({ type:'POST', url:'/admin/ajax/saveFileInfo', data:$('#form-store').serialize(), dataType:'json',
     success:function(data){
       layer.close(ii);
       if(data.code == 0){
@@ -1132,7 +1186,7 @@ function save(){
 }
 function delFile(id){
   var confirmobj = layer.confirm('你确定要删除此文件吗？', { btn:['确定','取消'], icon:0 }, function(){
-    $.ajax({ type:'GET', url:'ajax/delFile?id='+id, dataType:'json',
+    $.ajax({ type:'GET', url:'/admin/ajax/delFile?id='+id, dataType:'json',
       success:function(data){
         if(data.code == 0){ searchSubmit(); layer.alert('删除成功', {icon:1}); }
         else layer.alert(data.msg, {icon:2});
@@ -1148,7 +1202,7 @@ function operation(status){
   var checkbox = [];
   $.each(selected, function(key, item){ checkbox.push(item.id); });
   var ii = layer.load(2, {shade:[0.1,'#fff']});
-  $.ajax({ type:'POST', url:'ajax/operation', data:{ ids: checkbox.join(','), status: status }, dataType:'json',
+  $.ajax({ type:'POST', url:'/admin/ajax/operation', data:{ checkbox: checkbox, status: status }, dataType:'json',
     success:function(data){
       layer.close(ii);
       if(data.code == 0){ searchSubmit(); layer.alert(data.msg, {icon:1}); }
@@ -1203,7 +1257,8 @@ function showimage(resourcesUrl){
 }
 </script>`;
 
-  return c.html(adminLayout('文件管理', body, siteUrlStr, 'file', true, config.title));
+  c.header('Cache-Control', 'no-store');
+  return c.html(adminOriginalLayout('文件管理', body, 'file'));
 });
 
 // ===================== 管理后台用户管理 /admin/user =====================
@@ -1229,6 +1284,11 @@ async function loadUsers(page){if(page<1)return false;var rowsEl=document.getEle
 async function setEnable(uid,enable){var fd=new FormData();fd.set('uid',uid);fd.set('enable',enable);await fetch('/admin/ajax/setUserEnable',{method:'POST',body:fd,credentials:'same-origin'});loadUsers(userPage);}
 async function setLevel(uid,level){var fd=new FormData();fd.set('uid',uid);fd.set('level',level);await fetch('/admin/ajax/saveUserInfo',{method:'POST',body:fd,credentials:'same-origin'});loadUsers(userPage);}
 async function delUser(uid){if(!confirm('确定删除此用户吗？'))return;var fd=new FormData();fd.set('uid',uid);await fetch('/admin/ajax/delUser',{method:'POST',body:fd,credentials:'same-origin'});loadUsers(userPage);}
+(function(){
+  var q = new URLSearchParams(window.location.search);
+  if(q.get('type')) document.getElementById('userType').value = q.get('type');
+  if(q.get('kw')) document.getElementById('userKw').value = q.get('kw');
+})();
 loadUsers(1);
 </script>`;
   return c.html(adminLayout('用户管理', body, siteUrl(c), 'user', true, config.title));
@@ -1852,6 +1912,30 @@ downurl - 下载地址
 </pre>
 </div>
 </div>`;
+  } else if (mod === 'iptype') {
+    pageTitle = '用户IP地址获取设置';
+    panelBody = `<div class="panel panel-primary">
+<div class="panel-heading"><h3 class="panel-title">用户IP地址获取设置</h3></div>
+<div class="panel-body">
+  <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
+    <div class="form-group">
+      <label class="col-sm-2 control-label">用户IP地址获取方式</label>
+      <div class="col-sm-10"><select class="form-control" name="ip_type" default="${config.ip_type}"><option value="0">0_X_FORWARDED_FOR</option><option value="1">1_X_REAL_IP</option><option value="2">2_REMOTE_ADDR</option></select></div>
+    </div>
+    <div class="form-group">
+      <div class="col-sm-offset-2 col-sm-10"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/></div>
+    </div>
+  </form>
+</div>
+<div class="panel-footer">
+<span class="glyphicon glyphicon-info-sign"></span>
+此功能设置用于防止用户伪造IP请求。<br/>
+X_FORWARDED_FOR：之前的获取真实IP方式，极易被伪造IP<br/>
+X_REAL_IP：在网站使用CDN的情况下选择此项，在不使用CDN的情况下也会被伪造<br/>
+REMOTE_ADDR：直接获取真实请求IP，无法被伪造，但可能获取到的是CDN节点IP<br/>
+<b>你可以从中选择一个能显示你真实地址的IP，优先选下方的选项。</b>
+</div>
+</div>`;
   } else if (mod === 'account') {
     pageTitle = '管理员账号设置';
     panelBody = `<div class="panel panel-primary">
@@ -2188,9 +2272,16 @@ frontend.post('/admin/ajax/operation', async (c) => {
   const stor = getStorOrThrow(c);
   const body = await c.req.parseBody<Record<string, string>>();
   const status = parseInt(String(body['status'] || '0'));
-  const idsStr = String(body['ids'] || '');
-  const ids = idsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-  if (ids.length === 0) return c.json({ code: -1, msg: '您选中的文件' });
+  // 原版前端提交的是 checkbox: [id1, id2]，jQuery 序列化后为 checkbox[]=...
+  // 同时兼容旧的 ids=1,2 写法。
+  const rawIds: any = (body as any)['checkbox'] ?? (body as any)['checkbox[]'] ?? body['ids'];
+  let ids: number[] = [];
+  if (Array.isArray(rawIds)) {
+    ids = rawIds.map((v: any) => parseInt(String(v))).filter((n: number) => !isNaN(n));
+  } else if (rawIds != null && String(rawIds) !== '') {
+    ids = String(rawIds).split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+  }
+  if (ids.length === 0) return c.json({ code: -1, msg: '您未选中文件' });
 
   let opname = '处理';
   if (status === 0) opname = '删除';
@@ -2213,7 +2304,7 @@ frontend.post('/admin/ajax/operation', async (c) => {
     count++;
   }
   purgeHomeCache(c);
-  return c.json({ code: 0, msg: `成功${opname} ${count} 个文件件` });
+  return c.json({ code: 0, msg: `成功${opname} ${count} 个文件` });
 });
 
 export default frontend;
