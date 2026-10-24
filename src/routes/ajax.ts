@@ -241,8 +241,9 @@ async function handlePreUpload(c: any) {
     }
   }
 
-  // 代理上传：R2/S3 用存储端分片上传，浏览器每次只发 50MB 给 Worker
-  if (size > 0 && stor?.createMultipartUpload) {
+  // 代理上传：只有超过 50MB 才分片；小文件直接用一次请求更快，也能避免
+  // 某些存储在 1 字节等极小文件上初始化 multipart 失败。
+  if (size > MULTIPART_CHUNK_SIZE && stor?.createMultipartUpload) {
     try {
       const uploadId = await stor.createMultipartUpload(hash, getMimeType(ext));
       if (uploadId) {
@@ -306,8 +307,8 @@ async function handlePrepareMultipart(c: any) {
     });
   }
 
-  // 空文件无法做 S3/R2 multipart，回退到单请求上传
-  if (size <= 0) {
+  // 空文件或小文件不做 multipart，直接走单请求代理上传
+  if (size <= MULTIPART_CHUNK_SIZE) {
     return jsonResult(c, {
       code: 0, multipart: false, hash, name, size, type: ext,
       chunksize: MULTIPART_CHUNK_SIZE, chunks: 1,
@@ -319,12 +320,23 @@ async function handlePrepareMultipart(c: any) {
     if (todayCount >= config.upload_limit) return jsonError(c, '你今天上传文件的数量已超过限制');
   }
 
+  const singleFallback = () => jsonResult(c, {
+    code: 0, multipart: false, hash, name, size, type: ext,
+    chunksize: MULTIPART_CHUNK_SIZE, chunks: 1,
+  });
+
   try {
     const backend = getDefaultMultipartBackend(c, config);
     const stor = getMultipartStorage(c, config, backend);
-    if (!stor.createMultipartUpload) return jsonError(c, '当前存储不支持分片上传');
+    if (!stor.createMultipartUpload) {
+      if (size <= 95 * 1024 * 1024) return singleFallback();
+      return jsonError(c, '当前存储不支持分片上传，无法上传超过 100MB 的文件');
+    }
     const uploadId = await stor.createMultipartUpload(hash, getMimeType(ext));
-    if (!uploadId) return jsonError(c, '初始化分片上传失败');
+    if (!uploadId) {
+      if (size <= 95 * 1024 * 1024) return singleFallback();
+      return jsonError(c, '初始化分片上传失败');
+    }
     const chunks = size > 0 ? Math.max(1, Math.ceil(size / MULTIPART_CHUNK_SIZE)) : 1;
     return jsonResult(c, {
       code: 0, multipart: true, uploadId,
@@ -335,6 +347,7 @@ async function handlePrepareMultipart(c: any) {
     });
   } catch (e: any) {
     console.error('prepare multipart upload error:', e);
+    if (size <= 95 * 1024 * 1024) return singleFallback();
     return jsonError(c, '初始化分片上传失败：' + String(e?.message || e));
   }
 }
