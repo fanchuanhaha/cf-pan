@@ -1486,6 +1486,26 @@ function saveSetting(obj){
       <div class="col-sm-9"><input type="text" name="r2_public_url" value="${config.r2_public_url}" class="form-control" placeholder="https://files.example.com"/></div>
     </div><br/>
     <div class="form-group">
+      <label class="col-sm-3 control-label">Account ID</label>
+      <div class="col-sm-9"><input type="text" name="r2_account_id" value="${config.r2_account_id}" class="form-control" placeholder="Cloudflare Account ID"/><font color="green">未配置 FILE_R2 绑定时，使用 Account ID + AK/SK 通过 S3 API 访问 R2</font></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">Bucket</label>
+      <div class="col-sm-9"><input type="text" name="r2_bucket" value="${config.r2_bucket}" class="form-control" placeholder="R2 存储桶名称"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">AccessKey</label>
+      <div class="col-sm-9"><input type="text" name="r2_access_key_id" value="${config.r2_access_key_id}" class="form-control" placeholder="R2 Access Key ID"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">SecretKey</label>
+      <div class="col-sm-9"><input type="text" name="r2_secret_access_key" value="${config.r2_secret_access_key}" class="form-control" placeholder="R2 Secret Access Key"/></div>
+    </div><br/>
+    <div class="form-group">
+      <label class="col-sm-3 control-label">S3 API Endpoint（可选）</label>
+      <div class="col-sm-9"><input type="text" name="r2_endpoint" value="${config.r2_endpoint}" class="form-control" placeholder="https://ACCOUNT_ID.r2.cloudflarestorage.com"/></div>
+    </div><br/>
+    <div class="form-group">
       <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="提交" class="btn btn-primary btn-block"/>
       </div>
     </div>
