@@ -10,8 +10,8 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../middleware';
 import { getDB, getConf, getStor, getStorOrThrow } from '../middleware';
 import { updateConfig, clearConfigCache } from '../config';
-import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileCountByDateRange, getAllFiles } from '../db';
-import { getStorageBackends, deleteObjectFromBackends, objectExistsInBackends, type StorageBackend } from '../storage/backends';
+import { getFileByHash, getFileById, setFileBlock, deleteFile, updateFile, touchFile, getFileCountByDateRange } from '../db';
+import { getStorageBackends, deleteObjectFromBackends } from '../storage/backends';
 import { verifyAdminToken, signAdminToken } from '../auth/admin';
 import { getViewType, sizeFormat, typeToIcon, isView } from '../utils/mime';
 import { htmlspecialchars, generateCsrfToken, jsonResult, jsonError } from '../utils/response';
@@ -188,8 +188,10 @@ ${body}
 
 /**
  * 原版 admin/head.php 的 1:1 复刻（只把 PHP 链接换成 Worker 路由）。
- * 文件管理页必须用这个 layout：原版没有 admin.css / dark.css / layer 2.3，
+ * 文件管理页必须用这个 layout：原版没有 admin.css / layer 2.3，
  * 并且 bootstrap-table 用的是本地 assets/css/bootstrap-table.css?v=1。
+ * dark.css 仅在系统深色模式（prefers-color-scheme: dark）下生效，
+ * 浅色模式仍保持原版外观。
  */
 function adminOriginalLayout(title: string, body: string, active: 'index' | 'file' | 'user' | 'set' = 'index'): string {
   const cls = (key: string) => active === key ? 'active' : '';
@@ -203,6 +205,7 @@ function adminOriginalLayout(title: string, body: string, active: 'index' | 'fil
   <link href="${CDN.bootstrapCss}" rel="stylesheet"/>
   <link href="${CDN.fontAwesome}" rel="stylesheet"/>
   <link href="/assets/css/bootstrap-table.css?v=1" rel="stylesheet"/>
+  <link href="/assets/css/dark.css" rel="stylesheet"/>
   <script src="${CDN.jquery2}"></script>
   <script src="${CDN.bootstrapJs}"></script>
   <!--[if lt IE 9]>
@@ -890,7 +893,7 @@ frontend.get('/admin', async (c) => {
         <div class="col-xs-3"><i class="fa fa-cloud fa-5x"></i></div>
         <div class="col-xs-9 text-right"><div class="huge" id="count1">0</div><div>文件总数</div></div>
       </div></div>
-      <a href="/admin/file"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
+      <a href="/admin/file"><div class="panel-footer" style="font-size:12px;line-height:20px"><span class="pull-left">总大小：<span id="totalSize">0 B</span></span><span class="pull-right">查看详情 <i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
     </div>
   </div>
   <div class="col-lg-3 col-md-6">
@@ -915,7 +918,7 @@ frontend.get('/admin', async (c) => {
     <div class="panel panel-red">
       <div class="panel-heading"><div class="row">
         <div class="col-xs-3"><i class="fa fa-hdd-o fa-5x"></i></div>
-        <div class="col-xs-9 text-right"><div class="huge" id="count4">0</div><div>存储类型</div></div>
+        <div class="col-xs-9 text-right"><div class="huge" id="count4" style="font-size:22px;line-height:1.5;word-break:break-word">0</div><div>存储类型</div></div>
       </div></div>
        <a href="/admin/set?mod=stor"><div class="panel-footer"><span class="pull-left">查看详情</span><span class="pull-right"><i class="fa fa-arrow-circle-right"></i></span><div class="clearfix"></div></div></a>
     </div>
@@ -958,6 +961,7 @@ $.ajax({
       $('#count2').html(data.count2);
       $('#count3').html(data.count3);
       $('#count4').html(data.count4);
+      $('#totalSize').text(data.totalSizeText || '0 B');
       console.log('[getcount]', data);
     } else {
       console.warn('[getcount] unexpected response', data);
@@ -972,308 +976,6 @@ $.ajax({
   return c.html(adminLayout('后台首页', body, siteUrlStr, 'index', true, config.title));
 });
 
-// ===================== 临时维护页：数据库 / 存储差异检查 /admin/1/ =====================
-// 仅管理员可访问。用于排查“数据库有记录但 R2 没有文件”或“R2 有文件但数据库没记录”。
-// 注意：这是临时维护页面，确认问题解决后可移除。
-
-function storageHashFromKey(key: string): string | null {
-  let name = key;
-  if (name.startsWith('file/')) name = name.slice(5);
-  const m = name.match(/^([0-9a-f]{32})(?:$|\.)/i);
-  return m ? m[1].toLowerCase() : null;
-}
-
-function checkRedirect(c: any, msg: string, type: 'success' | 'danger' | 'warning' = 'success') {
-  return c.redirect(`/admin/1/?msg=${encodeURIComponent(msg)}&type=${type}`);
-}
-
-async function renderAdminCheckPage(c: any) {
-  if (!await checkAdmin(c)) return c.redirect('/admin/login');
-
-  const config = getConf(c);
-  const db = getDB(c);
-  const backends = getStorageBackends(config, c.env);
-
-  type ListResult = {
-    backend: StorageBackend;
-    supported: boolean;
-    objects: Array<{ key: string; size: number; uploaded?: string }>;
-    error?: string;
-  };
-
-  const listResults: ListResult[] = [];
-  for (const backend of backends) {
-    if (typeof backend.stor.list !== 'function') {
-      listResults.push({
-        backend,
-        supported: false,
-        objects: [],
-        error: '该存储后端不支持列出对象，无法参与对比',
-      });
-      continue;
-    }
-    try {
-      const objects = await backend.stor.list();
-      listResults.push({ backend, supported: true, objects });
-    } catch (e: any) {
-      listResults.push({
-        backend,
-        supported: true,
-        objects: [],
-        error: `列出对象失败：${e?.message || e}`,
-      });
-    }
-  }
-
-  const listing = listResults.filter(r => r.supported && !r.error);
-  // 只有所有配置的后端都成功列出对象时，才能可靠判断“数据库有、存储没有”；
-  // 否则某个后端暂时不可用会把它的文件误报成数据库孤儿。
-  const hasCompleteListing = listResults.length > 0 &&
-    listResults.every(r => r.supported && !r.error);
-
-  // 同一个对象可能同时存在于 R2 绑定和 S3 API 两个后端，按 key 合并
-  const objectMap = new Map<string, {
-    key: string; size: number; uploaded?: string; backendLabels: string[];
-  }>();
-  for (const result of listing) {
-    for (const obj of result.objects) {
-      const old = objectMap.get(obj.key);
-      if (old) {
-        old.backendLabels.push(result.backend.label);
-        if (obj.size > old.size) old.size = obj.size;
-        if (obj.uploaded && !old.uploaded) old.uploaded = obj.uploaded;
-      } else {
-        objectMap.set(obj.key, {
-          key: obj.key,
-          size: obj.size,
-          uploaded: obj.uploaded,
-          backendLabels: [result.backend.label],
-        });
-      }
-    }
-  }
-
-  const dbRows = await getAllFiles(db);
-  const dbHashes = new Set(dbRows.map(r => String(r.hash || '').toLowerCase()));
-  const matchedHashes = new Set<string>();
-  const storageOnly: Array<{ key: string; size: number; uploaded?: string; backendLabels: string[] }> = [];
-
-  for (const obj of objectMap.values()) {
-    const hash = storageHashFromKey(obj.key);
-    if (hash && dbHashes.has(hash)) matchedHashes.add(hash);
-    else storageOnly.push(obj);
-  }
-
-  const dbOnly = hasCompleteListing
-    ? dbRows.filter(r => !matchedHashes.has(String(r.hash || '').toLowerCase()))
-    : [];
-  dbOnly.sort((a, b) => b.id - a.id);
-  storageOnly.sort((a, b) => a.key.localeCompare(b.key));
-
-  const perPage = 100;
-  const dbPage = Math.max(1, parseInt(c.req.query('dbpage') || '1') || 1);
-  const objPage = Math.max(1, parseInt(c.req.query('objpage') || '1') || 1);
-  const dbPages = Math.max(1, Math.ceil(dbOnly.length / perPage));
-  const objPages = Math.max(1, Math.ceil(storageOnly.length / perPage));
-  const dbRowsPage = dbOnly.slice((dbPage - 1) * perPage, dbPage * perPage);
-  const objRowsPage = storageOnly.slice((objPage - 1) * perPage, objPage * perPage);
-
-  const pager = (base: string, page: number, pages: number, param: string) => {
-    if (pages <= 1) return '';
-    const link = (p: number, text: string) =>
-      `<li${p === page ? ' class="active"' : ''}><a href="${base}${base.includes('?') ? '&' : '?'}${param}=${p}">${text}</a></li>`;
-    let html = '<ul class="pagination pagination-sm" style="margin:10px 0">';
-    html += link(Math.max(1, page - 1), '上一页');
-    for (let p = 1; p <= pages; p++) {
-      if (pages > 10 && p > 2 && p < pages - 1 && Math.abs(p - page) > 2) {
-        if (p === 3 || p === pages - 2) html += '<li class="disabled"><span>…</span></li>';
-        continue;
-      }
-      html += link(p, String(p));
-    }
-    html += link(Math.min(pages, page + 1), '下一页');
-    html += '</ul>';
-    return html;
-  };
-
-  const msg = c.req.query('msg') || '';
-  const msgType = c.req.query('type') === 'danger' ? 'danger'
-    : c.req.query('type') === 'warning' ? 'warning' : 'success';
-  const alert = msg
-    ? `<div class="alert alert-${msgType}" style="margin-top:15px">${htmlspecialchars(msg)}</div>`
-    : '';
-
-  const backendRows = listResults.length
-    ? listResults.map(r => `<tr>
-        <td>${htmlspecialchars(r.backend.label)}</td>
-        <td>${r.supported ? (r.error ? '<span class="text-danger">失败</span>' : '<span class="text-success">正常</span>') : '<span class="text-muted">不支持</span>'}</td>
-        <td>${r.supported && !r.error ? r.objects.length : '-'}</td>
-        <td style="word-break:break-all">${r.error ? htmlspecialchars(r.error) : ''}</td>
-      </tr>`).join('')
-    : '<tr><td colspan="4" class="text-center text-danger">没有可用的存储后端</td></tr>';
-
-  const dbOnlyRows = dbRowsPage.length
-    ? dbRowsPage.map(row => `<tr>
-        <td>${row.id}</td>
-        <td style="word-break:break-all">${htmlspecialchars(String(row.name || ''))}</td>
-        <td style="word-break:break-all"><code>${htmlspecialchars(String(row.hash || ''))}</code></td>
-        <td>${htmlspecialchars(sizeFormat(row.size || 0))}</td>
-        <td>${htmlspecialchars(String(row.addtime || ''))}</td>
-        <td>
-          <form method="post" action="/admin/1/delete-db" style="display:inline" onsubmit="return confirm('确定删除这条数据库记录吗？\\n只删除数据库记录，不会删除存储对象。')">
-            <input type="hidden" name="id" value="${row.id}">
-            <button type="submit" class="btn btn-xs btn-danger">删除数据库记录</button>
-          </form>
-        </td>
-      </tr>`).join('')
-    : `<tr><td colspan="6" class="text-center text-muted">${hasCompleteListing ? '没有数据库孤儿记录' : '已暂停检测：存储后端未全部成功列出对象'}</td></tr>`;
-
-  const storageOnlyRows = objRowsPage.length
-    ? objRowsPage.map(obj => `<tr>
-        <td style="word-break:break-all"><code>${htmlspecialchars(obj.key)}</code></td>
-        <td>${htmlspecialchars(sizeFormat(obj.size || 0))}</td>
-        <td>${htmlspecialchars(obj.uploaded || '')}</td>
-        <td>${htmlspecialchars(obj.backendLabels.join('、'))}</td>
-        <td>
-          <form method="post" action="/admin/1/delete-object" style="display:inline" onsubmit="return confirm('确定从存储中删除这个对象吗？\\n此操作不可恢复。')">
-            <input type="hidden" name="key" value="${htmlspecialchars(obj.key)}">
-            <button type="submit" class="btn btn-xs btn-danger">删除存储对象</button>
-          </form>
-        </td>
-      </tr>`).join('')
-    : '<tr><td colspan="5" class="text-center text-muted">没有存储孤儿对象</td></tr>';
-
-  const body = `<div class="container" style="padding-top:70px">
-<div class="col-xs-12 center-block" style="float:none">
-  <div class="page-header" style="margin-top:0">
-    <h3 style="margin-top:0"><i class="fa fa-search"></i> 数据库 / 存储差异检查 <small>临时维护页</small></h3>
-  </div>
-  ${alert}
-  <div class="alert alert-info">
-    当前存储类型：<b>${htmlspecialchars(config.storage)}</b>。
-    对比规则：数据库文件 hash 与存储对象 <code>file/&lt;hash&gt;</code> 匹配。
-    ${hasCompleteListing ? '' : '<br><span class="text-danger">部分或全部存储后端无法列出对象，已暂停“数据库孤儿”判断，避免误报；仍可查看和删除已成功列出的存储孤儿对象。</span>'}
-  </div>
-  <div class="row">
-    <div class="col-sm-4"><div class="panel panel-default"><div class="panel-body text-center">
-      <div style="font-size:26px;font-weight:bold">${dbRows.length}</div><div class="text-muted">数据库文件记录</div>
-    </div></div></div>
-    <div class="col-sm-4"><div class="panel panel-default"><div class="panel-body text-center">
-      <div style="font-size:26px;font-weight:bold">${objectMap.size}</div><div class="text-muted">存储对象（去重后）</div>
-    </div></div></div>
-    <div class="col-sm-4"><div class="panel panel-default"><div class="panel-body text-center">
-      <div style="font-size:26px;font-weight:bold">${matchedHashes.size}</div><div class="text-muted">已匹配的 hash</div>
-    </div></div></div>
-  </div>
-
-  <div class="panel panel-default">
-    <div class="panel-heading"><b>存储后端状态</b></div>
-    <div class="table-responsive"><table class="table table-bordered table-condensed" style="margin:0">
-      <thead><tr><th>后端</th><th>状态</th><th>对象数量</th><th>错误</th></tr></thead>
-      <tbody>${backendRows}</tbody>
-    </table></div>
-  </div>
-
-  <div class="panel panel-danger">
-    <div class="panel-heading">
-      <b>数据库有记录，但存储中没有对应对象</b>
-      <span class="badge">${dbOnly.length}</span>
-      <span class="pull-right text-muted" style="font-size:12px">只删除数据库记录</span>
-    </div>
-    <div class="table-responsive"><table class="table table-striped table-bordered table-condensed" style="margin:0">
-      <thead><tr><th>ID</th><th>文件名</th><th>hash</th><th>大小</th><th>上传时间</th><th>操作</th></tr></thead>
-      <tbody>${dbOnlyRows}</tbody>
-    </table></div>
-    <div class="panel-body text-center" style="padding:0 15px">${pager('/admin/1/', dbPage, dbPages, 'dbpage')}</div>
-  </div>
-
-  <div class="panel panel-warning">
-    <div class="panel-heading">
-      <b>存储中有对象，但数据库中没有对应记录</b>
-      <span class="badge">${storageOnly.length}</span>
-      <span class="pull-right text-muted" style="font-size:12px">从存储中删除对象</span>
-    </div>
-    <div class="table-responsive"><table class="table table-striped table-bordered table-condensed" style="margin:0">
-      <thead><tr><th>对象 key</th><th>大小</th><th>上传时间</th><th>所在后端</th><th>操作</th></tr></thead>
-      <tbody>${storageOnlyRows}</tbody>
-    </table></div>
-    <div class="panel-body text-center" style="padding:0 15px">${pager('/admin/1/', objPage, objPages, 'objpage')}</div>
-  </div>
-
-  <p>
-    <a class="btn btn-default" href="/admin/1/"><i class="fa fa-refresh"></i> 重新检测</a>
-    <a class="btn btn-default" href="/admin/file"><i class="fa fa-folder-open"></i> 返回文件管理</a>
-  </p>
-  <p class="text-muted" style="font-size:12px">
-    说明：删除数据库记录前会再次确认存储中确实没有该对象；删除存储对象前会确认数据库中没有该 hash。
-    如果对象同时存在于多个后端，会从所有后端删除。
-  </p>
-</div>
-</div>`;
-
-  c.header('Cache-Control', 'no-store');
-  return c.html(adminOriginalLayout('存储差异检查', body, 'file'));
-}
-
-frontend.get('/admin/1', renderAdminCheckPage);
-frontend.get('/admin/1/', renderAdminCheckPage);
-
-frontend.post('/admin/1/delete-db', async (c) => {
-  if (!await checkAdmin(c)) return c.redirect('/admin/login');
-  const body = await c.req.parseBody<Record<string, string>>();
-  const id = parseInt(String(body['id'] || '0'));
-  if (!id) return checkRedirect(c, '参数错误：缺少文件 ID', 'danger');
-
-  const db = getDB(c);
-  const row = await getFileById(db, id);
-  if (!row) return checkRedirect(c, '数据库记录不存在，可能已被删除', 'warning');
-
-  // 页面可能已经过期：删除前确认存储中确实没有该对象
-  const backends = getStorageBackends(getConf(c), c.env);
-  const exists = await objectExistsInBackends(backends, row.hash);
-  if (exists.exists) {
-    return checkRedirect(c, `存储中仍存在该文件（${exists.foundIn.join('、')}），已拒绝删除数据库记录。请刷新页面重新检测。`, 'danger');
-  }
-  if (exists.errors.length) {
-    return checkRedirect(c, `无法确认存储状态，已拒绝删除数据库记录：${exists.errors.join('；')}`, 'danger');
-  }
-
-  const ok = await deleteFile(db, id);
-  if (!ok) return checkRedirect(c, '删除数据库记录失败', 'danger');
-  purgeHomeCache(c);
-  return checkRedirect(c, '已删除数据库孤儿记录');
-});
-
-frontend.post('/admin/1/delete-object', async (c) => {
-  if (!await checkAdmin(c)) return c.redirect('/admin/login');
-  const body = await c.req.parseBody<Record<string, string>>();
-  const key = String(body['key'] || '');
-  if (!key || !key.startsWith('file/')) {
-    return checkRedirect(c, '参数错误：对象 key 不合法', 'danger');
-  }
-
-  const db = getDB(c);
-  const hash = storageHashFromKey(key);
-  if (hash) {
-    const row = await getFileByHash(db, hash);
-    if (row) {
-      return checkRedirect(c, '该对象在数据库中已有记录，不能作为孤儿对象删除。请刷新页面重新检测。', 'danger');
-    }
-  }
-
-  const backends = getStorageBackends(getConf(c), c.env);
-  const name = key.slice('file/'.length);
-  const result = await deleteObjectFromBackends(backends, name);
-  if (!result.ok) {
-    const detail = [...result.errors];
-    if (result.remaining.length) detail.push(`仍存在：${result.remaining.join('、')}`);
-    return checkRedirect(c, '删除存储对象失败：' + (detail.join('；') || '未知错误'), 'danger');
-  }
-
-  purgeHomeCache(c);
-  return checkRedirect(c, `已删除存储对象 ${key}`, 'success');
-});
-
 // ===================== 管理后台文件管理 /admin/file =====================
 frontend.get('/admin/file', async (c) => {
   if (!await checkAdmin(c)) {
@@ -1282,6 +984,24 @@ frontend.get('/admin/file', async (c) => {
 
   const body = `<style>
 .table>tbody>tr>td{vertical-align:middle;max-width:360px;word-break:break-all}
+@media (prefers-color-scheme: dark) {
+  /* 编辑文件弹窗：Bootstrap 默认是白底，dark.css 只覆盖了通用表格/表单 */
+  #modal-store .modal-content { background:#252525; border-color:#3a3a3a; color:#ccc; }
+  #modal-store .modal-header,
+  #modal-store .modal-footer { border-color:#3a3a3a; }
+  #modal-store .modal-title { color:#ddd; }
+  #modal-store .btn-white { background:#333; border-color:#444; color:#ccc; }
+  #modal-store .btn-white:hover,
+  #modal-store .btn-white:focus { background:#444; color:#fff; }
+  /* bootstrap-table 的加载遮罩默认固定白底 */
+  .bootstrap-table .fixed-table-container .fixed-table-body .fixed-table-loading { background:#252525; }
+  .bootstrap-table .fixed-table-container .fixed-table-body .fixed-table-loading .loading-wrap .animation-dot,
+  .bootstrap-table .fixed-table-container .fixed-table-body .fixed-table-loading .loading-wrap .animation-wrap::before,
+  .bootstrap-table .fixed-table-container .fixed-table-body .fixed-table-loading .loading-wrap .animation-wrap::after { background:#ccc; }
+  .bootstrap-table .fixed-table-container .table tbody tr.selected td { background-color:rgba(90,138,180,.25) !important; }
+  .bootstrap-table .fixed-table-pagination .page-jump-to input { background:#2a2a2a; border-color:#3a3a3a; color:#eee; }
+  .bootstrap-table.fullscreen { background:#1a1a1a !important; }
+}
 </style>
 <div class="modal" id="modal-store" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
   <div class="modal-dialog">
@@ -2370,13 +2090,22 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     const db = getDB(c);
     const config = getConf(c);
 
-    // 文件总数：按 max(id) 取最新一个 id 作为显示。
+    // 文件总数：实际记录数，与“总大小”统计口径一致。
     let total = 0;
     try {
-      const r = await db.prepare('SELECT MAX(id) as c FROM pre_file').first<{ c: number }>();
+      const r = await db.prepare('SELECT COUNT(*) as c FROM pre_file').first<{ c: number }>();
       total = r?.c ?? 0;
     } catch (e: any) {
-      console.error('[getcount] getFileTotal(max id) failed:', e?.message || e);
+      console.error('[getcount] getFileTotal failed:', e?.message || e);
+    }
+
+    // 当前全部文件总大小（字节）
+    let totalSize = 0;
+    try {
+      const r = await db.prepare('SELECT COALESCE(SUM(size), 0) as s FROM pre_file').first<{ s: number }>();
+      totalSize = Number(r?.s) || 0;
+    } catch (e: any) {
+      console.error('[getcount] totalSize failed:', e?.message || e);
     }
 
     // 抽样选一条验证。
@@ -2430,11 +2159,13 @@ frontend.get('/admin/ajax/getcount', async (c) => {
     };
     const count4 = storageNames[config.storage] || config.storage || '未配置';
 
-    console.log(`[getcount] total=${count1} today=${count2} yesterday=${count3} storage=${count4} sample=${sample ? sample.id + ':' + sample.name : 'none'} todayBoundary=${todayBoundary} tomorrow=${tomorrowBoundary} yesterday=${yesterdayBoundary}`);
+    console.log(`[getcount] total=${count1} totalSize=${totalSize} today=${count2} yesterday=${count3} storage=${count4} sample=${sample ? sample.id + ':' + sample.name : 'none'} todayBoundary=${todayBoundary} tomorrow=${tomorrowBoundary} yesterday=${yesterdayBoundary}`);
 
     return c.json({
       code: 0,
       count1, count2, count3, count4,
+      totalSize,
+      totalSizeText: sizeFormat(totalSize),
       debug: {
         today: todayBoundary,
         tomorrow: tomorrowBoundary,
@@ -2451,6 +2182,8 @@ frontend.get('/admin/ajax/getcount', async (c) => {
       count2: 0,
       count3: 0,
       count4: 'UNKNOWN',
+      totalSize: 0,
+      totalSizeText: '0 B',
       error: e?.message || String(e),
     });
   }

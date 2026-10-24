@@ -82,6 +82,12 @@
     background-color: var(--dark-card, #252525) !important;
     color: var(--dark-text, #ccc) !important;
   }
+  .panel-footer {
+    background-color: var(--dark-nav, #2a2a2a) !important;
+    border-color: var(--dark-border, #3a3a3a) !important;
+    color: var(--dark-text, #ccc) !important;
+  }
+  .panel-footer a { color: var(--dark-link, #8ab4d8); }
 
   /* === 表格 === */
   .table { color: var(--dark-text, #ccc) !important; }
