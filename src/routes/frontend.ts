@@ -912,174 +912,295 @@ frontend.get('/admin/file', async (c) => {
   const body = `<style>
 .table>tbody>tr>td{vertical-align:middle;max-width:360px;word-break:break-all}
 </style>
-<div class="modal" id="modal-store" role="dialog">
+<div class="modal" id="modal-store" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content animated flipInX">
       <div class="modal-header">
-        <button type="button" class="close" data-dismiss="modal"><span aria-hidden="true">&times;</span></button>
-        <h4 class="modal-title">文件信息修改</h4>
+        <button type="button" class="close" data-dismiss="modal"><span aria-hidden="true">&times;</span><span class="sr-only">Close</span></button>
+        <h4 class="modal-title" id="modal-title">文件信息修改</h4>
       </div>
       <div class="modal-body">
         <form class="form-horizontal" id="form-store">
-          <input type="hidden" name="id" id="store_id">
-          <div class="form-group"><label class="col-sm-2 control-label">文件名称</label>
-            <div class="col-sm-10"><input type="text" class="form-control" name="name" id="store_name"></div></div>
-          <div class="form-group"><label class="col-sm-2 control-label">文件类型</label>
-            <div class="col-sm-10"><input type="text" class="form-control" name="type" id="store_type"></div></div>
-          <div class="form-group"><label class="col-sm-2 control-label">文件大小</label>
-            <div class="col-sm-10"><input type="text" class="form-control" id="store_size" disabled></div></div>
-          <div class="form-group"><label class="col-sm-2 control-label">文件Hash</label>
-            <div class="col-sm-10"><input type="text" class="form-control" id="store_hash" disabled></div></div>
-          <div class="form-group"><label class="col-sm-2 control-label">隐藏文件</label>
-            <div class="col-sm-10"><select id="store_hide" name="hide" class="form-control"><option value="0">0_</option><option value="1">1_</option></select></div></div>
-          <div class="form-group"><label class="col-sm-2 control-label">生成密码</label>
-            <div class="col-sm-10"><select id="store_ispwd" name="ispwd" class="form-control" onchange="change_ispwd(this)"><option value="0">0_</option><option value="1">1_</option></select></div></div>
-          <div class="form-group" id="pwd_frame" style="display:none"><label class="col-sm-2 control-label">下载密码</label>
-            <div class="col-sm-10"><input type="text" class="form-control" name="pwd" id="store_pwd"></div></div>
+          <input type="hidden" name="action" id="action"/>
+          <input type="hidden" name="id" id="id"/>
+          <div class="form-group">
+            <label class="col-sm-2 control-label no-padding-right">文件名称</label>
+            <div class="col-sm-10"><input type="text" class="form-control" name="name" id="name"></div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label no-padding-right">文件类型</label>
+            <div class="col-sm-10"><input type="text" class="form-control" name="type" id="type"></div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label no-padding-right">文件大小</label>
+            <div class="col-sm-10"><input type="text" class="form-control" name="size" id="size" disabled></div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label no-padding-right">文件MD5</label>
+            <div class="col-sm-10"><input type="text" class="form-control" name="hash" id="hash" disabled></div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label no-padding-right">是否隐藏</label>
+            <div class="col-sm-10"><select id="hide" name="hide" class="form-control"><option value="0">0_否</option><option value="1">1_是</option></select></div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label no-padding-right">开启密码</label>
+            <div class="col-sm-10"><select id="ispwd" name="ispwd" class="form-control" onchange="change_ispwd(this)"><option value="0">0_否</option><option value="1">1_是</option></select></div>
+          </div>
+          <div class="form-group" id="pwd_frame">
+            <label class="col-sm-2 control-label no-padding-right">下载密码</label>
+            <div class="col-sm-10"><input type="text" class="form-control" name="pwd" id="pwd"></div>
+          </div>
         </form>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-white" data-dismiss="modal">关闭</button>
-        <button type="button" class="btn btn-primary" onclick="saveFile()">保存</button>
+        <button type="button" class="btn btn-primary" id="store" onclick="save()">保存</button>
       </div>
     </div>
   </div>
 </div>
-<div class="container" style="padding-top:70px">
-<div class="col-xs-12 center-block" style="float:none">
-  <form onsubmit="return searchSubmit()" method="GET" class="form-inline" id="searchToolbar">
-    <div class="form-group">
-      <label>搜索</label>
-      <select name="type" class="form-control"><option value="1">文件</option><option value="2">文件Hash</option></select>
-    </div>
-    <div class="form-group"><input type="text" class="form-control" name="kw" placeholder="搜索内容"></div>
-    <div class="form-group">
-      <select id="dstatus" name="dstatus" class="form-control"><option value="-1">全部状态</option><option value="0">正常文件</option><option value="1">已屏蔽文件</option><option value="2">待审核文件</option></select>
-    </div>
-    <div class="form-group">
-      <select id="orderby" name="orderby" class="form-control"><option value="0">默认排序</option><option value="1">按下载量排序</option></select>
-    </div>
-    <div class="form-group">
-      <button class="btn btn-primary" type="submit"><i class="fa fa-search"></i> 搜索</button>
-      <a href="javascript:searchClear()" class="btn btn-default"><i class="fa fa-repeat"></i> 重置</a>
-    </div>
-    <div class="btn-group" role="group">
-      <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">批量操作 <span class="caret"></span></button>
-      <ul class="dropdown-menu">
-        <li><a href="javascript:operation(0)"><i class="fa fa-trash"></i> 删除</a></li>
-        <li><a href="javascript:operation(1)"><i class="fa fa-times-circle"></i> 封禁</a></li>
-        <li><a href="javascript:operation(2)"><i class="fa fa-check-circle"></i> 解封</a></li>
-      </ul>
-    </div>
-  </form>
-  <table id="listTable"></table>
-</div>
+<div class="container" style="padding-top:70px;">
+  <div class="col-xs-12 center-block" style="float: none;">
+    <form onsubmit="return searchSubmit()" method="GET" class="form-inline" id="searchToolbar">
+      <div class="form-group">
+        <label>搜索</label>
+        <select name="type" class="form-control"><option value="1">文件名</option><option value="2">文件Hash</option><option value="3">文件格式</option><option value="4">上传者IP</option></select>
+      </div>
+      <div class="form-group"><input type="text" class="form-control" name="kw" placeholder="搜索内容"></div>
+      <div class="form-group"><input type="text" class="form-control" name="uid" style="width: 100px;" placeholder="UID"></div>
+      <div class="form-group">
+        <select id="dstatus" name="dstatus" class="form-control"><option value="-1">全部状态</option><option value="0">正常文件</option><option value="1">已屏蔽文件</option><option value="2">待审核文件</option></select>
+      </div>
+      <div class="form-group">
+        <select id="orderby" name="orderby" class="form-control"><option value="0">默认排序</option><option value="1">按下载量排序</option><option value="2">按大小排序（大到小）</option><option value="3">按大小排序（小到大）</option></select>
+      </div>
+      <div class="form-group">
+        <button class="btn btn-primary" type="submit"><i class="fa fa-search"></i> 搜索</button>
+        <a href="javascript:resetSearch()" class="btn btn-default"><i class="fa fa-repeat"></i> 重置</a>
+      </div>
+      <div class="btn-group" role="group">
+        <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">批量操作 <span class="caret"></span></button>
+        <ul class="dropdown-menu"><li><a href="javascript:operation(0)"><i class="fa fa-trash"></i> 删除</a></li><li><a href="javascript:operation(1)"><i class="fa fa-times-circle"></i> 封禁</a></li><li><a href="javascript:operation(2)"><i class="fa fa-check-circle"></i> 解封</a></li></ul>
+      </div>
+    </form>
+    <table id="listTable"></table>
+  </div>
 </div>
 <script src="${CDN.layer}"></script>
 <script src="${CDN.bootstrapTableJs}"></script>
 <script src="${CDN.bootstrapTablePageJump}"></script>
+<script src="/assets/js/custom.js?v=20261024"></script>
 <script>
-function change_ispwd(obj){ if($(obj).val()==1) $('#pwd_frame').show(); else $('#pwd_frame').hide(); }
-
-function showPreview(url, type){
-  if(type === 'image'){
-    layer.open({type: 1, title: '图片预览', area: ['90%', '90%'], shadeClose: true,
-      content: '<div style="text-align:center;padding:15px"><img src="'+url+'" style="max-width:100%;max-height:75vh"></div>'});
-  } else {
-    layer.open({type: 2, title: '文件预览', area: ['90%', '90%'], shadeClose: true, content: url});
+$(document).ready(function(){
+  updateToolbar();
+  var defaultPageSize = 15;
+  var pageNumber = typeof window.$_GET['pageNumber'] != 'undefined' ? parseInt(window.$_GET['pageNumber']) : 1;
+  var pageSize = typeof window.$_GET['pageSize'] != 'undefined' ? parseInt(window.$_GET['pageSize']) : defaultPageSize;
+  var orderbyFromUrl = window.$_GET['orderby'] || '0';
+  var initSortName = '';
+  var initSortOrder = 'asc';
+  if(orderbyFromUrl === '2'){
+    initSortName = 'size'; initSortOrder = 'desc';
+  }else if(orderbyFromUrl === '3'){
+    initSortName = 'size'; initSortOrder = 'asc';
+  }else if(orderbyFromUrl === '0'){
+    initSortName = window.$_GET['sortName'] || window.$_GET['sort'] || '';
+    initSortOrder = window.$_GET['sortOrder'] || window.$_GET['order'] || 'asc';
   }
-}
 
-var \$_GET = {};
-document.location.search.replace(/\\??(?:(\\w+)=(\\w*)(?:&|$))*/g, function(_, k, v){ \$_GET[k] = v; });
-
-$(function(){
-  var pageNumber = \$_GET['pageNumber'] ? parseInt(\$_GET['pageNumber']) : 1;
-  var pageSize = \$_GET['pageSize'] ? parseInt(\$_GET['pageSize']) : 15;
   $('#listTable').bootstrapTable({
     url: '/admin/ajax/fileList',
-    method: 'post',
     pageNumber: pageNumber,
     pageSize: pageSize,
+    sortName: initSortName,
+    sortOrder: initSortOrder,
     classes: 'table table-striped table-hover table-bordered',
     columns: [
       { field: '', checkbox: true },
-      { field: 'id', title: 'ID', formatter: function(v){ return '<b>'+v+'</b>'; } },
-      { field: 'name', title: '文件', formatter: function(v, row){
-           var html = '<a href="'+row.pageurl+'" title="点击查看"><i class="fa '+row.icon+' fa-fw"></i>'+v+'</a>';
-           if(row.view){ html += ' [<a href="javascript:showPreview(\\\''+(row.view_type==='image'?row.viewurl:row.embedurl)+'\\\',\\\''+row.view_type+'\\\')">预览</a>]'; }
+      { field: 'id', title: 'ID', formatter: function(value, row, index){ return '<b>'+value+'</b>'; } },
+      { field: 'uid', title: '用户', formatter: function(value, row, index){ return value>0?'<a href="./user?type=1&kw='+value+'" target="_blank">'+value+'</a>':'游客'; } },
+      { field: 'name', title: '文件名', formatter: function(value, row, index){
+          var html = '<a href="'+escHtml(row.fileurl)+'" title="点击下载"><i class="fa '+row.icon+' fa-fw"></i>'+escHtml(value)+'</a>';
+          if(row.view){
+            var previewUrl = row.view_type == 'image' ? row.viewurl : row.embedurl;
+            html += ' [<a href="javascript:;" class="preview-link" data-url="'+escHtml(previewUrl)+'" data-type="'+escHtml(row.view_type)+'">预览</a>]';
+          }
           return html;
-      } },
-      { field: 'size', title: '文件大小' },
-      { field: 'type', title: '文件格式', formatter: function(v){ return v ? v : '未知类型'; } },
-      { field: 'addtime', title: '上传日期', formatter: function(v, row){ return v + '<br/>' + (row.lasttime||''); } },
-      { field: 'ip', title: '上传IP/下载', formatter: function(v, row){ return v + '<br/><b>'+row.count+'</b>'; } },
-      { field: 'block', title: '状态', formatter: function(v, row){
-          if(v==2) return '<a href="javascript:setBlock('+row.id+',0)" class="btn btn-xs btn-warning">待审核</a>';
-          else if(v==1) return '<a href="javascript:setBlock('+row.id+',0)" class="btn btn-xs btn-danger">封禁</a>';
+        } },
+      { field: 'size', title: '文件大小', sortable: true },
+      { field: 'type', title: '文件格式', formatter: function(value, row, index){ return value ? escHtml(value) : '未知'; } },
+      { field: 'addtime', title: '上传日期/上次下载', formatter: function(value, row, index){ return escHtml(value) + '<br/>' + escHtml(row.lasttime||''); } },
+      { field: 'ip', title: '上传IP/下载量', formatter: function(value, row, index){ return '<a href="https://m.ip138.com/iplookup.asp?ip='+encodeURIComponent(value||'')+'" target="_blank" rel="noreferrer">'+escHtml(value)+'</a><br/><b>'+row.count+'</b>'; } },
+      { field: 'block', title: '状态', formatter: function(value, row, index){
+          if(value == '2') return '<a href="javascript:setBlock('+row.id+',0)" class="btn btn-xs btn-warning">待审</a>';
+          else if(value == '1') return '<a href="javascript:setBlock('+row.id+',0)" class="btn btn-xs btn-danger">封禁</a>';
           else return '<a href="javascript:setBlock('+row.id+',1)" class="btn btn-xs btn-success">正常</a>';
-      } },
-      { field: 'status', title: '操作', formatter: function(v, row){
-          return '<a href="javascript:editframe('+row.id+')" class="btn btn-xs btn-info">编辑</a>&nbsp;<a href="'+row.fileurl+'" class="btn btn-xs btn-default" target="_blank"><i class="fa fa-download"></i> 下载</a>&nbsp;<a href="'+row.pageurl+'" class="btn btn-xs btn-warning" target="_blank">查看</a>&nbsp;<a href="javascript:delFile('+row.id+')" class="btn btn-xs btn-danger">删除</a>';
-      } }
+        } },
+      { field: 'status', title: '操作', sortable: false, formatter: function(value, row, index){
+          return '<a href="javascript:editframe('+row.id+')" class="btn btn-xs btn-info">编辑</a>&nbsp;<a href="'+escHtml(row.pageurl)+'" class="btn btn-xs btn-warning" target="_blank">查看</a>&nbsp;<a href="javascript:delFile('+row.id+')" class="btn btn-xs btn-danger">删除</a>';
+        } }
     ]
+  });
+
+  // 点击表头排序时同步“排序方式”下拉框，保证服务端和界面一致
+  $('#listTable').on('sort.bs.table', function(e, name, order){
+    if(name === 'size') $('#orderby').val(order === 'asc' ? '3' : '2');
+    else if(name) $('#orderby').val('0');
+  });
+  // 下拉框选择排序方式时同步表头排序状态
+  $('#orderby').on('change', function(){
+    var v = $(this).val();
+    var sortName = (v === '2' || v === '3') ? 'size' : '';
+    var sortOrder = v === '3' ? 'asc' : 'desc';
+    $('#listTable').bootstrapTable('refreshOptions', { pageNumber: 1, sortName: sortName, sortOrder: sortOrder });
+  });
+
+  $(document).on('click', '.preview-link', function(){
+    var url = $(this).attr('data-url');
+    var type = $(this).attr('data-type');
+    if(type == 'image') showimage(url);
+    else showfile(url, type);
+    return false;
   });
 });
 
-function setBlock(id, status) {
+function escHtml(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function change_ispwd(obj){
+  if($(obj).val()==1) $('#pwd_frame').show();
+  else $('#pwd_frame').hide();
+}
+function setBlock(id, status){
   $.ajax({ type:'GET', url:'ajax/setBlock?id='+id+'&status='+status, dataType:'json',
-    success: function(){ searchSubmit(); }, error: function(){ layer.msg('服务器错误'); } });
+    success:function(data){ searchSubmit(); },
+    error:function(){ layer.msg('服务器错误'); }
+  });
 }
 function editframe(id){
   var ii = layer.load(2, {shade:[0.1,'#fff']});
   $.ajax({ type:'GET', url:'ajax/getFileInfo?id='+id, dataType:'json',
-    success: function(data){
+    success:function(data){
       layer.close(ii);
       if(data.code == 0){
         $('#modal-store').modal('show');
-        $('#store_id').val(data.id);
-        $('#store_name').val(data.name);
-        $('#store_type').val(data.type);
-        $('#store_size').val(data.size2+' ('+data.size+' 字节)');
-        $('#store_hash').val(data.hash);
-        $('#store_hide').val(data.hide);
-        if(data.pwd==null||data.pwd==''){
-          $('#store_ispwd').val(0); $('#store_pwd').val(''); $('#pwd_frame').hide();
-        } else { $('#store_ispwd').val(1); $('#store_pwd').val(data.pwd); $('#pwd_frame').show(); }
-      } else layer.alert(data.msg, {icon:2});
-    }, error: function(){ layer.msg('服务器错误'); }
+        $('#action').val('edit');
+        $('#form-store #id').val(data.id);
+        $('#form-store #name').val(data.name);
+        $('#form-store #type').val(data.type);
+        $('#form-store #size').val(data.size2+' ('+data.size+' 字节)');
+        $('#form-store #hash').val(data.hash);
+        $('#form-store #hide').val(data.hide);
+        if(data.pwd==null || data.pwd==''){
+          $('#form-store #ispwd').val(0);
+          $('#form-store #pwd').val('');
+          $('#pwd_frame').hide();
+        }else{
+          $('#form-store #ispwd').val(1);
+          $('#form-store #pwd').val(data.pwd);
+          $('#pwd_frame').show();
+        }
+      }else{
+        layer.alert(data.msg, {icon:2});
+      }
+    },
+    error:function(){ layer.msg('服务器错误'); }
   });
 }
-function saveFile(){
-  if($('#store_name').val()==''){ layer.alert('请确保各项不能为空！'); return; }
-  var ii = layer.load(2);
-  $.ajax({ type:'POST', url:'ajax/saveFileInfo', data: $('#form-store').serialize(), dataType:'json',
-    success: function(data){
+function save(){
+  if($('#name').val()==''){
+    layer.alert('请确保各项不能为空！');
+    return false;
+  }
+  var ii = layer.load(2, {shade:[0.1,'#fff']});
+  $.ajax({ type:'POST', url:'ajax/saveFileInfo', data:$('#form-store').serialize(), dataType:'json',
+    success:function(data){
       layer.close(ii);
-      if(data.code==0){ layer.alert(data.msg,{icon:1,closeBtn:false}, function(){ $('#modal-store').modal('hide'); searchSubmit(); }); }
-      else layer.alert(data.msg, {icon:2});
-    }, error: function(){ layer.msg('服务器错误'); }
+      if(data.code == 0){
+        layer.alert(data.msg, {icon:1, closeBtn:false}, function(){
+          $('#modal-store').modal('hide');
+          searchSubmit();
+          layer.closeAll();
+        });
+      }else{
+        layer.alert(data.msg, {icon:2});
+      }
+    },
+    error:function(){ layer.msg('服务器错误'); }
   });
 }
 function delFile(id){
-  layer.confirm('你确定要删除此文件吗？', { btn:['确定','取消'], icon:0 }, function(){
+  var confirmobj = layer.confirm('你确定要删除此文件吗？', { btn:['确定','取消'], icon:0 }, function(){
     $.ajax({ type:'GET', url:'ajax/delFile?id='+id, dataType:'json',
-      success: function(d){ if(d.code==0){ layer.msg('删除成功',{icon:1}); searchSubmit(); } else layer.alert(d.msg,{icon:2}); }
+      success:function(data){
+        if(data.code == 0){ searchSubmit(); layer.alert('删除成功', {icon:1}); }
+        else layer.alert(data.msg, {icon:2});
+      },
+      error:function(){ layer.msg('服务器错误'); }
     });
-  });
+  }, function(){ layer.close(confirmobj); });
 }
 function operation(status){
-  var sel = $('#listTable').bootstrapTable('getSelections');
-  if(sel.length==0){ layer.msg('请先选择文件'); return; }
-  var ids = sel.map(function(r){ return r.id; });
-  layer.confirm('您确定要对选中'+ids.length+' 个文件执行此操作？', { btn:['确定','取消'], icon:0 }, function(){
-    $.ajax({ type:'POST', url:'ajax/operation', data: { status: status, ids: ids.join(',') }, dataType:'json',
-      success: function(d){ if(d.code==0){ layer.msg(d.msg,{icon:1}); searchSubmit(); } else layer.alert(d.msg,{icon:2}); }
-    });
+  var selected = $('#listTable').bootstrapTable('getSelections');
+  if(selected.length == 0){ layer.msg('未选中文件', {time:1500}); return; }
+  if(status == 0 && !confirm('确定要删除已选中的'+selected.length+'个文件吗？')) return;
+  var checkbox = [];
+  $.each(selected, function(key, item){ checkbox.push(item.id); });
+  var ii = layer.load(2, {shade:[0.1,'#fff']});
+  $.ajax({ type:'POST', url:'ajax/operation', data:{ ids: checkbox.join(','), status: status }, dataType:'json',
+    success:function(data){
+      layer.close(ii);
+      if(data.code == 0){ searchSubmit(); layer.alert(data.msg, {icon:1}); }
+      else layer.alert(data.msg, {icon:2});
+    },
+    error:function(){ layer.msg('请求超时'); searchSubmit(); }
   });
 }
-function searchSubmit(){ window.location.href = './file?' + $('#searchToolbar').serialize(); }
-function searchClear(){ window.location.href = './file'; }
+function resetSearch(){
+  $('#searchToolbar').find('input[name]').each(function(){ $(this).val(''); });
+  $('#searchToolbar').find('select[name]').each(function(){ $(this).find('option:first').prop('selected','selected'); });
+  $('#listTable').bootstrapTable('refreshOptions', { pageNumber: 1, sortName: '', sortOrder: 'desc' });
+}
+function showfile(url, type){
+  var area;
+  if(type == 'audio'){
+    if($(window).width() >= 1200) area = ['50%','120px'];
+    else if($(window).width() >= 992) area = ['75%','120px'];
+    else if($(window).width() >= 768) area = ['95%','120px'];
+    else area = ['100%','120px'];
+  }else if(type == 'video'){
+    if($(window).width() >= 1200) area = ['50%','60%'];
+    else if($(window).width() >= 992) area = ['75%','70%'];
+    else if($(window).width() >= 768) area = ['95%','75%'];
+    else area = ['100%','55%'];
+  }else{
+    area = ['90%','90%'];
+  }
+  layer.open({ type:2, title:'文件预览', shadeClose:true, area:area, content:url });
+}
+function showimage(resourcesUrl){
+  var ii = layer.load(2, {shade:[0.1,'#fff']});
+  var img = new Image();
+  img.onload = function(){
+    var max_height = $(window).height() - 200;
+    var max_width = $(window).width();
+    var rate1 = max_height / img.height;
+    var rate2 = max_width / img.width;
+    var rate3 = 1;
+    var rate = Math.min(rate1, rate2, rate3);
+    var imgHeight = img.height * rate;
+    var imgWidth = img.width * rate;
+    var imgHtml = '<div id="showimg" style="width:'+imgWidth+'px; height:'+imgHeight+'px;"></div>';
+    img.style.width = '100%';
+    layer.close(ii);
+    layer.open({ type:1, shade:0.6, title:false, area:['auto','auto'], shadeClose:true, content:imgHtml,
+      success:function(){ $('#showimg').append(img); }
+    });
+  };
+  img.onerror = function(){ layer.close(ii); layer.msg('图片加载错误'); };
+  img.src = resourcesUrl;
+}
 </script>`;
 
   return c.html(adminLayout('文件管理', body, siteUrlStr, 'file', true, config.title));
@@ -1933,21 +2054,58 @@ frontend.post('/admin/ajax/fileList', async (c) => {
   if (!await checkAdmin(c)) return c.json({ code: -1 });
   const db = getDB(c);
   const body = await c.req.parseBody<Record<string, string>>();
-  const offset = parseInt(String(body['offset'] || '0'));
-  const limit = parseInt(String(body['limit'] || '15'));
-  const search = String(body['search'] || '');
-  const order = body['sort'] === 'count' ? 'count DESC' : 'id DESC';
+  const offset = Math.max(0, parseInt(String(body['offset'] || '0')) || 0);
+  const limit = Math.min(200, Math.max(1, parseInt(String(body['limit'] || '15')) || 15));
 
   const where: string[] = ['1=1'];
   const params: any[] = [];
-  if (body['dstatus'] && parseInt(body['dstatus']) >= 0) {
+
+  // UID 筛选
+  const uid = parseInt(String(body['uid'] || '0'));
+  if (!isNaN(uid) && uid > 0) {
+    where.push('uid = ?');
+    params.push(uid);
+  }
+
+  // 状态筛选：-1 为全部
+  const dstatus = parseInt(String(body['dstatus'] ?? '-1'));
+  if (!isNaN(dstatus) && dstatus >= 0) {
     where.push('block = ?');
-    params.push(parseInt(body['dstatus']));
+    params.push(dstatus);
   }
-  if (search) {
-    where.push('name LIKE ?');
-    params.push(`%${search}%`);
+
+  // 关键词筛选，type 1=文件名 2=Hash 3=格式 4=上传IP
+  const kw = String(body['kw'] || body['search'] || '').trim();
+  if (kw) {
+    const searchType = parseInt(String(body['type'] || '1'));
+    if (searchType === 2) {
+      where.push('hash = ?');
+      params.push(kw);
+    } else if (searchType === 3) {
+      where.push('type = ?');
+      params.push(kw);
+    } else if (searchType === 4) {
+      where.push('ip = ?');
+      params.push(kw);
+    } else {
+      where.push('name LIKE ?');
+      params.push(`%${kw}%`);
+    }
   }
+
+  // 排序：orderby 2/3 为按大小排序；0 时允许点击表头排序
+  const orderby = String(body['orderby'] || '0');
+  const sort = String(body['sort'] || body['sortName'] || '');
+  const sortDir = String(body['order'] || body['sortOrder'] || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const sortableColumns: Record<string, string> = {
+    id: 'id', uid: 'uid', name: 'name', size: 'size', type: 'type',
+    addtime: 'addtime', lasttime: 'lasttime', ip: 'ip', count: 'count', block: 'block',
+  };
+  let order = 'id DESC';
+  if (orderby === '1') order = 'count DESC';
+  else if (orderby === '2') order = 'size DESC';
+  else if (orderby === '3') order = 'size ASC';
+  else if (sort && sortableColumns[sort]) order = `${sortableColumns[sort]} ${sortDir}`;
 
   const total = (await db.prepare(`SELECT count(*) as c FROM pre_file WHERE ${where.join(' AND ')}`).bind(...params).first<{ c: number }>())?.c || 0;
   const { results } = await db.prepare(
