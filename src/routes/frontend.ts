@@ -406,7 +406,7 @@ ${config.videoreview == 1 ? `<div class="list-group-item">**当前网站已开�
 <script src="https://s4.zstatic.net/ajax/libs/spark-md5/3.0.2/spark-md5.min.js"></script>
 <script src="https://s4.zstatic.net/ajax/libs/layer/3.1.1/layer.js"></script>
 <script>var upload_max_filesize = '${config.upload_size}';</script>
-<script src="assets/js/uploadnew.js"></script>`;
+<script src="assets/js/uploadnew.js?v=20261024"></script>`;
 
   return c.html(publicLayout('上传文件 - ' + config.title, body, siteUrlStr, 'upload', false, config.title));
 });

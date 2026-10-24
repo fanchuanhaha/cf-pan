@@ -136,18 +136,23 @@ new Vue({
             }
 
             if(result.third){
-                if(result.method == 'PUT'){
-                    await this.uploadThirdPut(result.url, file, result.headers).then(res =>{
-                    }, res => {
-                        that.show_msg(res, 'danger');
+                try {
+                    if(result.method == 'PUT'){
+                        await this.uploadThirdPut(result.url, file, result.headers);
+                    }else{
+                        await this.uploadThird(result.url, result.post, result.headers, file);
+                    }
+                } catch (e) {
+                    // 直传失败（常见原因：R2/S3 桶未配置 CORS、Endpoint/Bucket/AK/SK 不对）
+                    // 自动回退到 Worker 中转，保证文件能传上去
+                    console.warn('直传失败，回退到网站中转:', e);
+                    layer.msg('直传失败，已自动改用网站中转上传');
+                    try {
+                        await this.uploadPart(file, 1);
+                    } catch (err) {
+                        that.show_msg(err, 'danger');
                         throw Error();
-                    });
-                }else{
-                    await this.uploadThird(result.url, result.post, result.headers, file).then(res =>{
-                    }, res => {
-                        that.show_msg(res, 'danger');
-                        throw Error();
-                    });
+                    }
                 }
 
                 await this.completeUpload().then(res =>{
@@ -357,11 +362,12 @@ new Vue({
                     if(xhr.status >= 200 && xhr.status < 300){
                         resolve();
                     }else{
-                        reject('上传失败(HTTP ' + xhr.status + ')，请检查存储桶是否允许跨域(CORS)');
+                        var detail = (xhr.responseText || '').slice(0, 300);
+                        reject('直传失败(HTTP ' + xhr.status + ')' + (detail ? '：' + detail : '') + '。请检查存储桶 CORS、Endpoint、Bucket 和 AK/SK');
                     }
                 };
                 xhr.onerror = function(){
-                    reject('上传失败，请检查存储桶是否允许跨域(CORS)');
+                    reject('直传失败：网络错误或被 CORS 拦截。请检查存储桶 CORS 是否允许 PUT 和 Content-Type');
                 };
                 xhr.upload.addEventListener('progress', function (e) {
                     if(e.lengthComputable){
