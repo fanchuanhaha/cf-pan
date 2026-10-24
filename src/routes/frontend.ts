@@ -983,8 +983,8 @@ $(function(){
       { field: '', checkbox: true },
       { field: 'id', title: 'ID', formatter: function(v){ return '<b>'+v+'</b>'; } },
       { field: 'name', title: '文件', formatter: function(v, row){
-           var html = '<a href="'+row.fileurl+'" title="点击下载"><i class="fa '+row.icon+' fa-fw"></i>'+v+'</a>';
-           if(row.view){ html += ' [<a href="javascript:showPreview(\\\''+row.viewurl+'\\\',\\\''+row.view_type+'\\\')">预览</a>]'; }
+           var html = '<a href="'+row.pageurl+'" title="点击查看"><i class="fa '+row.icon+' fa-fw"></i>'+v+'</a>';
+           if(row.view){ html += ' [<a href="javascript:showPreview(\\\''+(row.view_type==='image'?row.viewurl:row.pageurl)+'\\\',\\\''+row.view_type+'\\\')">预览</a>]'; }
           return html;
       } },
       { field: 'size', title: '文件大小' },
@@ -997,7 +997,7 @@ $(function(){
           else return '<a href="javascript:setBlock('+row.id+',1)" class="btn btn-xs btn-success">正常</a>';
       } },
       { field: 'status', title: '操作', formatter: function(v, row){
-          return '<a href="javascript:editframe('+row.id+')" class="btn btn-xs btn-info">编辑</a>&nbsp;<a href="'+row.pageurl+'" class="btn btn-xs btn-warning" target="_blank">查看</a>&nbsp;<a href="javascript:delFile('+row.id+')" class="btn btn-xs btn-danger">删除</a>';
+          return '<a href="javascript:editframe('+row.id+')" class="btn btn-xs btn-info">编辑</a>&nbsp;<a href="'+row.fileurl+'" class="btn btn-xs btn-default" target="_blank"><i class="fa fa-download"></i> 下载</a>&nbsp;<a href="'+row.pageurl+'" class="btn btn-xs btn-warning" target="_blank">查看</a>&nbsp;<a href="javascript:delFile('+row.id+')" class="btn btn-xs btn-danger">删除</a>';
       } }
     ]
   });
