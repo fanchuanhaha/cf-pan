@@ -123,7 +123,7 @@ export class R2Storage implements IStorage {
     }
   }
 
-  async uploadPart(name: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<string | null> {
+  async uploadPart(name: string, uploadId: string, partNumber: number, body: ArrayBuffer | Blob): Promise<string | null> {
     try {
       const upload = this.bucket.resumeMultipartUpload(this.key(name), uploadId);
       const part = await upload.uploadPart(partNumber, body);

@@ -14,13 +14,12 @@ import { purgeHomeCache } from '../utils/cache';
 
 let csrfTokens: Record<string, string> = {};
 
-// 每次只把 25MB 分片发给 Worker，避免 Cloudflare 单次请求 100MB 限制。
-// 25MB 比原来的 8MB 少 3 倍请求，配合前端 3 路并发可明显提高中转上传速度。
-const MULTIPART_CHUNK_SIZE = 25 * 1024 * 1024;
+// 代理上传：每次只把 50MB 分片发给 Worker，避免 Cloudflare 单次请求 100MB 限制。
+// 前端固定 2 路并发。
+const MULTIPART_CHUNK_SIZE = 50 * 1024 * 1024;
 
-/** 中转分片并发数：R2 绑定内存占用低可用 3 路，S3 API 每片会多占内存，保守用 2 路 */
-function getMultipartConcurrency(c: any, config: any): number {
-  if (config?.storage === 'r2' && c?.env?.FILE_R2) return 3;
+/** 代理中转分片并发数：固定 2 路 */
+function getMultipartConcurrency(_c: any, _config: any): number {
   return 2;
 }
 
@@ -40,23 +39,6 @@ function getMultipartStorage(c: any, config: any, backend?: string): any {
     if (cfg) return new S3Storage(cfg);
   }
   return getStorOrThrow(c);
-}
-
-/** 能生成预签名分片 URL 的存储后端（浏览器可绕过 Worker 直传） */
-function getDirectMultipartStorage(c: any, config: any): { stor: any; backend: string } | null {
-  try {
-    if (config?.storage === 's3') {
-      const stor = getStorOrThrow(c);
-      if (stor?.getMultipartUploadPartUrl) return { stor, backend: 's3' };
-    }
-    if (config?.storage === 'r2') {
-      const cfg = getR2S3Config(config);
-      if (cfg) return { stor: new S3Storage(cfg), backend: 'r2-s3' };
-    }
-  } catch (e) {
-    console.error('direct multipart storage unavailable:', e);
-  }
-  return null;
 }
 
 const ajax = new Hono<AppEnv>();
@@ -259,41 +241,7 @@ async function handlePreUpload(c: any) {
     }
   }
 
-  // 大文件自动尝试“浏览器直传分片”：浏览器直接 PUT 到 R2/S3 的预签名地址，
-  // 数据不经过 Worker，才能真正跑满宽带。CORS 不通时前端会自动回退到中转分片。
-  if (size > 95 * 1024 * 1024) {
-    const direct = getDirectMultipartStorage(c, config);
-    if (direct) {
-      let uploadId = '';
-      try {
-        uploadId = await direct.stor.createMultipartUpload(hash, getMimeType(ext)) || '';
-        if (uploadId) {
-          const partUrls: string[] = [];
-          for (let i = 1; i <= chunks; i++) {
-            const partUrl = await direct.stor.getMultipartUploadPartUrl(hash, uploadId, i);
-            if (!partUrl) throw new Error('生成直传分片地址失败');
-            partUrls.push(partUrl);
-          }
-          return jsonResult(c, {
-            code: 0, third: false, multipart: true, direct: true,
-            uploadId, backend: direct.backend,
-            hash, name, size, type: ext,
-            chunksize: chunkSize, chunks,
-            concurrency: 4,
-            relayConcurrency: getMultipartConcurrency(c, config),
-            partUrls,
-          });
-        }
-      } catch (e) {
-        console.error('direct multipart setup error:', e);
-        if (uploadId && direct.stor.abortMultipartUpload) {
-          try { await direct.stor.abortMultipartUpload(hash, uploadId); } catch {}
-        }
-      }
-    }
-  }
-
-  // 网站中转：R2/S3 用存储端分片上传，浏览器每次只发 25MB 给 Worker
+  // 代理上传：R2/S3 用存储端分片上传，浏览器每次只发 50MB 给 Worker
   if (size > 0 && stor?.createMultipartUpload) {
     try {
       const uploadId = await stor.createMultipartUpload(hash, getMimeType(ext));
@@ -443,9 +391,9 @@ async function handleUploadPart(c: any) {
   const realName = sanitizeFileName(String(body['name'] || file.name || 'file'));
   const realSize = parseInt(String(body['size'] || '0')) || file.size;
   const ext = getFileExt(realName);
-  const arrayBuf = await file.arrayBuffer();
 
-  // 分片上传：只把当前 25MB 分片交给存储，不在这里入库
+  // 分片上传：只把当前 50MB 分片交给存储，不在这里入库。
+  // 直接把 File 交给 R2/S3，避免 arrayBuffer() 再复制 50MB。
   const uploadId = String(body['uploadId'] || '');
   const backend = String(body['backend'] || '');
   const partNumber = parseInt(String(body['chunk'] || body['partNumber'] || '1')) || 1;
@@ -454,7 +402,7 @@ async function handleUploadPart(c: any) {
     const multipartStor = getMultipartStorage(c, config, backend);
     if (!multipartStor.uploadPart) return jsonError(c, '当前存储不支持分片上传');
     try {
-      const etag = await multipartStor.uploadPart(hash, uploadId, partNumber, arrayBuf);
+      const etag = await multipartStor.uploadPart(hash, uploadId, partNumber, file);
       if (!etag) return jsonError(c, '分片上传失败');
       return jsonResult(c, { code: 0, multipart: true, partNumber, etag, hash });
     } catch (e: any) {
@@ -463,6 +411,7 @@ async function handleUploadPart(c: any) {
     }
   }
 
+  const arrayBuf = await file.arrayBuffer();
   const stor = getStorOrThrow(c);
   let success = false;
   try {

@@ -230,11 +230,11 @@ export class S3Storage implements IStorage {
     }
   }
 
-  async uploadPart(name: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<string | null> {
+  async uploadPart(name: string, uploadId: string, partNumber: number, body: ArrayBuffer | Blob): Promise<string | null> {
     try {
       // 只签 host，不把 Body/Content-Length 交给预签名器：
-      // 这样不会为 25MB 分片再复制一份 Uint8Array，Worker 内存占用更低；
-      // 浏览器/Worker fetch 会自动带上正确的 Content-Length。
+      // 直接把 File/Blob 交给 fetch，不再复制 50MB 到 Uint8Array，Worker 内存占用更低；
+      // fetch 会自动带上正确的 Content-Length。
       const url = await getSignedUrl(this.client, new UploadPartCommand({
         Bucket: this.cfg.bucket,
         Key: this.key(name),
@@ -252,21 +252,6 @@ export class S3Storage implements IStorage {
       return etag;
     } catch (e) {
       console.error('S3 uploadPart error:', e);
-      return null;
-    }
-  }
-
-  /** 浏览器直传分片：host-only 预签名 URL，CORS 需要允许 PUT 并暴露 ETag */
-  async getMultipartUploadPartUrl(name: string, uploadId: string, partNumber: number): Promise<string | null> {
-    try {
-      return await getSignedUrl(this.client, new UploadPartCommand({
-        Bucket: this.cfg.bucket,
-        Key: this.key(name),
-        UploadId: uploadId,
-        PartNumber: partNumber,
-      }), { expiresIn: 3600 });
-    } catch (e) {
-      console.error('S3 presign multipart part error:', e);
       return null;
     }
   }

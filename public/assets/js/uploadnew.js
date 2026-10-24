@@ -259,69 +259,14 @@ new Vue({
             }
             this.uploadSuccess(result.hash);
         },
-        async uploadChunks(file, session){ //优先浏览器直传分片，失败自动回退到 Worker 中转
-            if(session.direct && session.partUrls && session.partUrls.length){
-                try {
-                    return await this.uploadDirectChunks(file, session);
-                } catch (e) {
-                    console.warn('分片直传失败，回退到网站中转分片上传:', e);
-                    layer.msg('直传分片失败，已自动改用网站中转上传');
-                    this.beginTransfer();
-                }
-            }
-            return await this.uploadRelayChunks(file, session);
-        },
-        async uploadDirectChunks(file, session){ //浏览器直接 PUT 到 R2/S3，不经过 Worker
+        async uploadChunks(file, session){ //代理分片上传：50MB 一片，固定 2 路并发
             var that = this;
             var chunkSize = session.chunksize;
             var chunks = session.chunks;
             var parts = new Array(chunks);
             var next = 1;
             var failure = null;
-            var concurrency = Math.min(session.concurrency || 4, chunks);
-            async function worker(){
-                while(true){
-                    if(failure) return;
-                    var chunk = next++;
-                    if(chunk > chunks) return;
-                    var start = (chunk - 1) * chunkSize;
-                    var end = Math.min(start + chunkSize, file.size);
-                    var blob = file.slice(start, end, '');
-                    var url = session.partUrls[chunk - 1];
-                    if(!url){
-                        failure = '缺少第 ' + chunk + ' 个分片的直传地址';
-                        throw failure;
-                    }
-                    try {
-                        var etag = await that.uploadDirectPart(url, blob, chunk);
-                        parts[chunk - 1] = { partNumber: chunk, etag: etag };
-                    } catch (e) {
-                        failure = e;
-                        throw e;
-                    }
-                }
-            }
-            var workers = [];
-            for (var i = 0; i < concurrency; i++) {
-                workers.push(worker().then(function(){ return null; }, function(e){ return e; }));
-            }
-            var workerErrors = await Promise.all(workers);
-            for (var j = 0; j < workerErrors.length; j++) {
-                if (workerErrors[j] && !failure) failure = workerErrors[j];
-            }
-            if (failure) throw failure;
-            parts = parts.filter(function(p){ return !!p; });
-            session.parts = parts;
-            return parts;
-        },
-        async uploadRelayChunks(file, session){ //Worker 中转分片
-            var that = this;
-            var chunkSize = session.chunksize;
-            var chunks = session.chunks;
-            var parts = new Array(chunks);
-            var next = 1;
-            var failure = null;
-            var concurrency = Math.min(session.relayConcurrency || session.concurrency || 2, chunks);
+            var concurrency = Math.min(session.concurrency || 2, chunks);
             async function worker(){
                 while(true){
                     if(failure) return;
@@ -357,34 +302,6 @@ new Vue({
             parts = parts.filter(function(p){ return !!p; });
             session.parts = parts;
             return parts;
-        },
-        async uploadDirectPart(url, file, partNumber){ //浏览器直传单个分片
-            var that = this;
-            return new Promise((resolve, reject) => {
-                var xhr = new XMLHttpRequest();
-                xhr.open('PUT', url, true);
-                xhr.onload = function(){
-                    if(xhr.status >= 200 && xhr.status < 300){
-                        var etag = xhr.getResponseHeader('ETag');
-                        if(!etag){
-                            reject('直传分片成功但未拿到 ETag。请在存储桶 CORS 中设置 ExposeHeaders: ETag');
-                            return;
-                        }
-                        that.onChunkDone(partNumber, file.size);
-                        resolve(etag);
-                    }else{
-                        var detail = (xhr.responseText || '').slice(0, 300);
-                        reject('直传分片失败(HTTP ' + xhr.status + ')' + (detail ? '：' + detail : ''));
-                    }
-                };
-                xhr.onerror = function(){
-                    reject('直传分片失败：网络错误或被 CORS 拦截。请检查存储桶 CORS 是否允许 PUT 并暴露 ETag');
-                };
-                xhr.upload.addEventListener('progress', function (e) {
-                    if(e.lengthComputable) that.onChunkProgress(partNumber, e.loaded);
-                });
-                xhr.send(file);
-            })
         },
         async prepareMultipart(){ //直传失败后，创建网站中转分片任务
             var that = this;

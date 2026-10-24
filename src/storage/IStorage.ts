@@ -48,20 +48,17 @@ export interface IStorage {
   getDownUrl?(name: string, filename: string, contentType?: string): Promise<string | null>;
 
   // ===== 分片上传（R2/S3 等对象存储） =====
-  // 浏览器每次只把 25MB 分片发给 Worker，Worker 再调用存储的 UploadPart，
+  // 浏览器每次只把 50MB 分片发给 Worker，Worker 再调用存储的 UploadPart，
   // 这样单个请求不会触发 Cloudflare 100MB 请求体限制，大文件也能上传。
 
   /** 初始化分片上传，返回存储端的 uploadId */
   createMultipartUpload?(name: string, contentType?: string): Promise<string | null>;
 
   /** 上传一个分片，返回存储端 ETag */
-  uploadPart?(name: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<string | null>;
+  uploadPart?(name: string, uploadId: string, partNumber: number, body: ArrayBuffer | Blob): Promise<string | null>;
 
   /** 合并分片 */
   completeMultipartUpload?(name: string, uploadId: string, parts: MultipartPart[]): Promise<boolean>;
-
-  /** 为浏览器直传生成某个分片的预签名 URL（R2/S3 API 可用） */
-  getMultipartUploadPartUrl?(name: string, uploadId: string, partNumber: number): Promise<string | null>;
 
   /** 取消分片上传（失败清理用） */
   abortMultipartUpload?(name: string, uploadId: string): Promise<boolean>;
