@@ -984,7 +984,7 @@ $(function(){
       { field: 'id', title: 'ID', formatter: function(v){ return '<b>'+v+'</b>'; } },
       { field: 'name', title: '文件', formatter: function(v, row){
            var html = '<a href="'+row.pageurl+'" title="点击查看"><i class="fa '+row.icon+' fa-fw"></i>'+v+'</a>';
-           if(row.view){ html += ' [<a href="javascript:showPreview(\\\''+(row.view_type==='image'?row.viewurl:row.pageurl)+'\\\',\\\''+row.view_type+'\\\')">预览</a>]'; }
+           if(row.view){ html += ' [<a href="javascript:showPreview(\\\''+row.viewurl+'\\\',\\\''+row.view_type+'\\\')">预览</a>]'; }
           return html;
       } },
       { field: 'size', title: '文件大小' },
