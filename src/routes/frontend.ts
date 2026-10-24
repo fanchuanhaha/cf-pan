@@ -1571,15 +1571,15 @@ function pollMigrateProgress(taskId){
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
   <div class="form-group">
     <label class="col-sm-3 control-label">图片文件类型</label>
-    <div class="col-sm-9"><input type="text" name="type_image" value="${config.type_image}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面上以上文件类型将以图片的形式展示</font></div>
+    <div class="col-sm-9"><input type="text" name="type_image" value="${config.type_image}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面，以上文件类型将以图片的形式展示</font></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">音频文件类型</label>
-    <div class="col-sm-9"><input type="text" name="type_audio" value="${config.type_audio}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面上以上文件类型将以音频的形式展示</font></div>
+    <div class="col-sm-9"><input type="text" name="type_audio" value="${config.type_audio}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面，以上文件类型将以音频的形式展示</font></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">视频文件类型</label>
-    <div class="col-sm-9"><input type="text" name="type_video" value="${config.type_video}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面上以上文件类型将以视频的形式展示</font></div>
+    <div class="col-sm-9"><input type="text" name="type_video" value="${config.type_video}" class="form-control" placeholder="多个文件类型用|隔开"/><font color="green">在文件预览页面，以上文件类型将以视频的形式展示</font></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">禁止上传的文件类型</label>
@@ -1591,22 +1591,22 @@ function pollMigrateProgress(taskId){
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">每IP每天限制上传数量</label>
-    <div class="col-sm-9"><input type="text" name="upload_limit" value="${config.upload_limit}" class="form-control" placeholder="0或留空为不限<//div>
+    <div class="col-sm-9"><input type="text" name="upload_limit" value="${config.upload_limit}" class="form-control" placeholder="0或留空为不限制"/></div>
   </div><br/>
   <div class="form-group">
-    <label class="col-sm-3 control-label">视频文件类型</label>
-    <div class="col-sm-9"><select class="form-control" name="videoreview" default="${config.videoreview}"><option value="0">关闭</option><option value="1"></option></select></div>
+    <label class="col-sm-3 control-label">视频文件需要审核</label>
+    <div class="col-sm-9"><select class="form-control" name="videoreview" default="${config.videoreview}"><option value="0">关闭</option><option value="1">开启</option></select></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">上传大小限制</label>
-    <div class="col-sm-9"><div class="input-group"><input type="text" name="upload_size" value="${config.upload_size}" class="form-control" placeholder="不填写则不限制大小</span class="input-group-addon">MB</span></div></div>
+    <div class="col-sm-9"><div class="input-group"><input type="text" name="upload_size" value="${config.upload_size}" class="form-control" placeholder="不填写则不限制大小"/><span class="input-group-addon">MB</span></div></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">仅限登录用户上传</label>
-    <div class="col-sm-9"><select class="form-control" name="forcelogin" default="${config.forcelogin}"><option value="0">否</option><option value="1">/option></select></div>
+    <div class="col-sm-9"><select class="form-control" name="forcelogin" default="${config.forcelogin}"><option value="0">否</option><option value="1">是</option></select></div>
   </div><br/>
   <div class="form-group">
-    <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="提交" class="btn btn-primary form-control"/><br/>
+    <div class="col-sm-offset-3 col-sm-9"><input type="submit" name="submit" value="修改" class="btn btn-primary form-control"/><br/>
    </div>
   </div>
   </form>
