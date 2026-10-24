@@ -232,17 +232,17 @@ export class S3Storage implements IStorage {
 
   async uploadPart(name: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<string | null> {
     try {
-      const bytes = new Uint8Array(body);
+      // 只签 host，不把 Body/Content-Length 交给预签名器：
+      // 这样不会为 25MB 分片再复制一份 Uint8Array，Worker 内存占用更低；
+      // 浏览器/Worker fetch 会自动带上正确的 Content-Length。
       const url = await getSignedUrl(this.client, new UploadPartCommand({
         Bucket: this.cfg.bucket,
         Key: this.key(name),
         UploadId: uploadId,
         PartNumber: partNumber,
-        Body: bytes,
-        ContentLength: bytes.byteLength,
       }), { expiresIn: 3600 });
 
-      const response = await fetch(url, { method: 'PUT', body: bytes });
+      const response = await fetch(url, { method: 'PUT', body });
       const etag = response.headers.get('etag');
       if (!response.ok || !etag) {
         const text = await response.text();

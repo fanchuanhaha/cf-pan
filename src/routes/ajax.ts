@@ -14,8 +14,15 @@ import { purgeHomeCache } from '../utils/cache';
 
 let csrfTokens: Record<string, string> = {};
 
-// 每次只把 8MB 分片发给 Worker，避免 Cloudflare 单次请求 100MB 限制
-const MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024;
+// 每次只把 25MB 分片发给 Worker，避免 Cloudflare 单次请求 100MB 限制。
+// 25MB 比原来的 8MB 少 3 倍请求，配合前端 3 路并发可明显提高中转上传速度。
+const MULTIPART_CHUNK_SIZE = 25 * 1024 * 1024;
+
+/** 中转分片并发数：R2 绑定内存占用低可用 3 路，S3 API 每片会多占内存，保守用 2 路 */
+function getMultipartConcurrency(c: any, config: any): number {
+  if (config?.storage === 'r2' && c?.env?.FILE_R2) return 3;
+  return 2;
+}
 
 const ajax = new Hono<AppEnv>();
 
@@ -217,7 +224,7 @@ async function handlePreUpload(c: any) {
     }
   }
 
-  // 网站中转：R2/S3 用存储端分片上传，浏览器每次只发 8MB 给 Worker
+  // 网站中转：R2/S3 用存储端分片上传，浏览器每次只发 25MB 给 Worker
   if (size > 0 && stor?.createMultipartUpload) {
     try {
       const uploadId = await stor.createMultipartUpload(hash, getMimeType(ext));
@@ -226,6 +233,7 @@ async function handlePreUpload(c: any) {
           code: 0, third: false, multipart: true, uploadId,
           hash, name, size, type: ext,
           chunksize: chunkSize, chunks,
+          concurrency: getMultipartConcurrency(c, config),
         });
       }
     } catch (e) {
@@ -303,6 +311,7 @@ async function handlePrepareMultipart(c: any) {
       code: 0, multipart: true, uploadId,
       hash, name, size, type: ext,
       chunksize: MULTIPART_CHUNK_SIZE, chunks,
+      concurrency: getMultipartConcurrency(c, config),
     });
   } catch (e: any) {
     console.error('prepare multipart upload error:', e);
@@ -363,7 +372,7 @@ async function handleUploadPart(c: any) {
   const ext = getFileExt(realName);
   const arrayBuf = await file.arrayBuffer();
 
-  // 分片上传：只把当前 8MB 分片交给存储，不在这里入库
+  // 分片上传：只把当前 25MB 分片交给存储，不在这里入库
   const uploadId = String(body['uploadId'] || '');
   const partNumber = parseInt(String(body['chunk'] || body['partNumber'] || '1')) || 1;
   if (uploadId) {

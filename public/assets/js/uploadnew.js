@@ -10,7 +10,12 @@ new Vue({
             msg: ''
         },
         beginTime: 0,
-        loaded_size: 0,
+        uploadStartTime: 0,
+        completedBytes: 0,
+        chunkLoaded: {},
+        _speedLastTime: 0,
+        _speedLastBytes: 0,
+        _speedValue: 0,
         progress: 0,
         progress_tip: '',
         filename: '',
@@ -84,6 +89,63 @@ new Vue({
             this.isBlock=false;
             $("#file").val('');
         },
+        resetUploadProgress(){
+            this.progress = 0;
+            this.progress_tip = '';
+            this.uploadspeed = '';
+            this.completedBytes = 0;
+            this.chunkLoaded = {};
+            this._speedLastTime = 0;
+            this._speedLastBytes = 0;
+            this._speedValue = 0;
+        },
+        beginTransfer(){
+            this.uploadStartTime = new Date().getTime();
+            this.resetUploadProgress();
+        },
+        refreshProgress(){
+            var total = this.completedBytes;
+            for(var k in this.chunkLoaded){
+                total += this.chunkLoaded[k];
+            }
+            var totalSize = this.input.size > 0 ? this.input.size : 1;
+            if(total > this.input.size) total = this.input.size;
+            this.progress = this.input.size > 0 ? Math.min(100, Math.round(total / totalSize * 100)) : 100;
+            if(this.progress >= 100){
+                this.progress_tip = '正在保存中，请稍候';
+                this.uploadspeed = '';
+                return;
+            }
+
+            var now = new Date().getTime();
+            var elapsed = (now - this.uploadStartTime) / 1000;
+            if(this._speedLastTime === 0){
+                this._speedLastTime = now;
+                this._speedLastBytes = total;
+            }
+            var dt = (now - this._speedLastTime) / 1000;
+            if(dt >= 0.5){
+                var instantaneous = (total - this._speedLastBytes) / dt;
+                if(instantaneous < 0) instantaneous = 0;
+                // 平滑一下，避免单个分片完成时速度数字乱跳
+                this._speedValue = this._speedValue > 0 ? this._speedValue * 0.6 + instantaneous * 0.4 : instantaneous;
+                this._speedLastTime = now;
+                this._speedLastBytes = total;
+            }
+            var speed = this._speedValue;
+            if(speed <= 0 && elapsed > 0.3) speed = total / elapsed;
+            if(speed > 0 && isFinite(speed)) this.uploadspeed = this.size_format(speed) + '/s';
+        },
+        onChunkProgress(chunk, loaded){
+            this.chunkLoaded[chunk] = loaded;
+            this.refreshProgress();
+        },
+        onChunkDone(chunk, size){
+            delete this.chunkLoaded[chunk];
+            this.completedBytes += size;
+            if(this.completedBytes > this.input.size) this.completedBytes = this.input.size;
+            this.refreshProgress();
+        },
         clickUpload(){
             if(this.isBlock) return;
             $("#file").trigger("click");
@@ -108,8 +170,7 @@ new Vue({
             }
             this.input.name = file.name;
             this.input.size = file.size;
-            this.progress = 0;
-            this.loaded_size = 0;
+            this.resetUploadProgress();
             this.showtype = 1;
             this.beginTime = new Date().getTime();
 
@@ -137,6 +198,7 @@ new Vue({
 
             if(result.third){
                 var directOk = true;
+                this.beginTransfer();
                 try {
                     if(result.method == 'PUT'){
                         await this.uploadThirdPut(result.url, file, result.headers);
@@ -149,8 +211,7 @@ new Vue({
                     directOk = false;
                     console.warn('直传失败，回退到网站中转分片上传:', e);
                     layer.msg('直传失败，已自动改用网站中转分片上传');
-                    this.loaded_size = 0;
-                    this.progress = 0;
+                    this.beginTransfer();
                 }
 
                 if(directOk){
@@ -180,6 +241,7 @@ new Vue({
                 }
             }else if(result.multipart && result.uploadId){
                 try {
+                    this.beginTransfer();
                     await this.uploadChunks(file, result);
                     result = await this.completeUpload(result.uploadId, result.parts);
                 } catch (err) {
@@ -187,6 +249,7 @@ new Vue({
                     throw Error();
                 }
             }else{
+                this.beginTransfer();
                 await this.uploadPart(file, 1).then(res =>{
                     result = res
                 }, res => {
@@ -196,27 +259,47 @@ new Vue({
             }
             this.uploadSuccess(result.hash);
         },
-        async uploadChunks(file, session){ //按 8MB 分片依次上传到 Worker
+        async uploadChunks(file, session){ //分片并发上传（服务端决定并发数，25MB 一片，减少请求次数）
             var that = this;
             var chunkSize = session.chunksize;
             var chunks = session.chunks;
-            var parts = [];
-            try {
-                for (var chunk = 1; chunk <= chunks; chunk++) {
+            var parts = new Array(chunks);
+            var next = 1;
+            var failure = null;
+            var concurrency = Math.min(session.concurrency || 2, chunks);
+            async function worker(){
+                while(true){
+                    if(failure) return;
+                    var chunk = next++;
+                    if(chunk > chunks) return;
                     var start = (chunk - 1) * chunkSize;
                     var end = Math.min(start + chunkSize, file.size);
                     var blob = file.slice(start, end);
-                    var part = await this.uploadPart(blob, chunk, session.uploadId);
-                    parts.push({ partNumber: chunk, etag: part.etag });
-                    that.loaded_size = end;
+                    try {
+                        var part = await that.uploadPart(blob, chunk, session.uploadId);
+                        parts[chunk - 1] = { partNumber: chunk, etag: part.etag };
+                    } catch (e) {
+                        failure = e;
+                        throw e;
+                    }
                 }
-            } catch (e) {
+            }
+            var workers = [];
+            for (var i = 0; i < concurrency; i++) {
+                workers.push(worker().then(function(){ return null; }, function(e){ return e; }));
+            }
+            var workerErrors = await Promise.all(workers);
+            for (var j = 0; j < workerErrors.length; j++) {
+                if (workerErrors[j] && !failure) failure = workerErrors[j];
+            }
+            if (failure) {
                 // 失败时尽量取消存储端未完成的分片任务，避免留下垃圾分片
                 if (session.uploadId) {
                     try { await this.abortMultipart(session.uploadId); } catch (_) {}
                 }
-                throw e;
+                throw failure;
             }
+            parts = parts.filter(function(p){ return !!p; });
             session.parts = parts;
             return parts;
         },
@@ -332,8 +415,6 @@ new Vue({
         },
         async uploadPart(file, chunk, uploadId){ //上传文件分片
             var that = this;
-            var tempTime = new Date().getTime();
-            var oloaded = 0;
             return new Promise((resolve, reject) => {
                 var data = new FormData();
                 data.append('file', file);
@@ -352,6 +433,7 @@ new Vue({
                     dataType : 'json',
                     success : function(data) {
                         if(data.code == 0 || data.code == 1){
+                            that.onChunkDone(chunk, file.size);
                             resolve(data);
                         }else{
                             reject(data.msg);
@@ -363,19 +445,7 @@ new Vue({
                     xhr: function() {
                         var xhr = new XMLHttpRequest();
                         xhr.upload.addEventListener('progress', function (e) {
-                            var progressRate = Math.round((e.loaded + that.loaded_size) / that.input.size * 100);
-                            if(progressRate>100)progressRate=100;
-                            that.progress = progressRate;
-                            if(progressRate == 100) that.progress_tip = '正在保存中，请稍候'
-
-                            //上传速度计算
-                            var nowTime = new Date().getTime();
-                            var pertime = (nowTime - tempTime) / 1000;
-                            tempTime = nowTime;
-                            var perload = e.loaded - oloaded;
-                            oloaded = e.loaded;
-	                        var speed = that.size_format(perload/pertime)+'/s';
-                            that.uploadspeed = speed
+                            if(e.lengthComputable) that.onChunkProgress(chunk, e.loaded);
                         })
                         return xhr;
                     }
@@ -384,8 +454,6 @@ new Vue({
         },
         async uploadThird(url, postdata, headers, file){ //第三方POST直传（七牛/又拍表单上传）
             var that = this;
-            var tempTime = new Date().getTime();
-            var oloaded = 0;
             return new Promise((resolve, reject) => {
                 var data = new FormData();
                 for(key in postdata){
@@ -401,6 +469,7 @@ new Vue({
                     contentType: false,
                     dataType : 'html',
                     success : function(data) {
+                        that.onChunkDone(1, file.size);
                         resolve();
                     },
                     error : function(){
@@ -409,19 +478,7 @@ new Vue({
                     xhr: function() {
                         var xhr = new XMLHttpRequest();
                         xhr.upload.addEventListener('progress', function (e) {
-                            var progressRate = Math.round((e.loaded + that.loaded_size) / that.input.size * 100);
-                            if(progressRate>100)progressRate=100;
-                            that.progress = progressRate;
-                            if(progressRate == 100) that.progress_tip = '正在保存中，请稍候'
-
-                            //上传速度计算
-                            var nowTime = new Date().getTime();
-                            var pertime = (nowTime - tempTime) / 1000;
-                            tempTime = nowTime;
-                            var perload = e.loaded - oloaded;
-                            oloaded = e.loaded;
-	                        var speed = that.size_format(perload/pertime)+'/s';
-                            that.uploadspeed = speed
+                            if(e.lengthComputable) that.onChunkProgress(1, e.loaded);
                         })
                         return xhr;
                     }
@@ -430,8 +487,6 @@ new Vue({
         },
         async uploadThirdPut(url, file, headers){ //第三方PUT直传（S3/R2 预签名）
             var that = this;
-            var tempTime = new Date().getTime();
-            var oloaded = 0;
             return new Promise((resolve, reject) => {
                 var xhr = new XMLHttpRequest();
                 xhr.open('PUT', url, true);
@@ -440,6 +495,7 @@ new Vue({
                 }
                 xhr.onload = function(){
                     if(xhr.status >= 200 && xhr.status < 300){
+                        that.onChunkDone(1, file.size);
                         resolve();
                     }else{
                         var detail = (xhr.responseText || '').slice(0, 300);
@@ -450,19 +506,7 @@ new Vue({
                     reject('直传失败：网络错误或被 CORS 拦截。请检查存储桶 CORS 是否允许 PUT 和 Content-Type');
                 };
                 xhr.upload.addEventListener('progress', function (e) {
-                    if(e.lengthComputable){
-                        var progressRate = Math.round((e.loaded + that.loaded_size) / that.input.size * 100);
-                        if(progressRate>100)progressRate=100;
-                        that.progress = progressRate;
-                        if(progressRate == 100) that.progress_tip = '正在保存中，请稍候'
-                        var nowTime = new Date().getTime();
-                        var pertime = (nowTime - tempTime) / 1000;
-                        tempTime = nowTime;
-                        var perload = e.loaded - oloaded;
-                        oloaded = e.loaded;
-                        var speed = that.size_format(perload/pertime)+'/s';
-                        that.uploadspeed = speed
-                    }
+                    if(e.lengthComputable) that.onChunkProgress(1, e.loaded);
                 });
                 xhr.send(file);
             })
@@ -511,6 +555,7 @@ new Vue({
             setTimeout(function(){ window.location.href=jumpurl; }, 800);
         },
         size_format(size){
+            if(!isFinite(size) || size <= 0) return '0.00B';
             var units = 'B';
             if(size/1024>1){
                 size = size/1024;

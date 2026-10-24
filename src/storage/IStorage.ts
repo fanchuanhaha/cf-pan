@@ -48,7 +48,7 @@ export interface IStorage {
   getDownUrl?(name: string, filename: string, contentType?: string): Promise<string | null>;
 
   // ===== 分片上传（R2/S3 等对象存储） =====
-  // 浏览器每次只把 8MB 分片发给 Worker，Worker 再调用存储的 UploadPart，
+  // 浏览器每次只把 25MB 分片发给 Worker，Worker 再调用存储的 UploadPart，
   // 这样单个请求不会触发 Cloudflare 100MB 请求体限制，大文件也能上传。
 
   /** 初始化分片上传，返回存储端的 uploadId */
