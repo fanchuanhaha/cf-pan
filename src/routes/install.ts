@@ -728,7 +728,7 @@ function applyFreshTransferView() {
   const uploadWrap = document.getElementById('freshUploadTypeWrap');
   const downloadWrap = document.getElementById('freshDownloadTypeWrap');
   if (uploadWrap) uploadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 's3' || t === 'r2') ? '' : 'none';
-  if (downloadWrap) downloadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 'github') ? '' : 'none';
+  if (downloadWrap) downloadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 'github' || t === 's3' || t === 'r2') ? '' : 'none';
 }
 
 async function submitFresh() {
@@ -1012,7 +1012,7 @@ function applyRestoreTransferView() {
   const uploadWrap = document.getElementById('restoreUploadTypeWrap');
   const downloadWrap = document.getElementById('restoreDownloadTypeWrap');
   if (uploadWrap) uploadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 's3' || t === 'r2') ? '' : 'none';
-  if (downloadWrap) downloadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 'github') ? '' : 'none';
+  if (downloadWrap) downloadWrap.style.display = (t === 'qiniu' || t === 'upyun' || t === 'github' || t === 's3' || t === 'r2') ? '' : 'none';
   const download = document.getElementById('restore_downfile_type');
   const domainGroup = document.getElementById('restoreDownloadDomainGroup');
   if (domainGroup) {

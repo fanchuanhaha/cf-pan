@@ -1454,8 +1454,8 @@ function applyStorView(){
   var t = $("select[name='storage']").val();
   // 上传方式：支持浏览器直传的存储（七牛/又拍/云/S3/R2）
   $("#uploadfile_type_form").toggle(t === 'qiniu' || t === 'upyun' || t === 's3' || t === 'r2');
-  // 下载方式：有直链能力的存储（七牛/又拍/GitHub）
-  $("#downfile_type_mode_form").toggle(t === 'qiniu' || t === 'upyun' || t === 'github');
+  // 下载方式：有直链能力的存储（七牛/又拍/GitHub/S3/R2）
+  $("#downfile_type_mode_form").toggle(t === 'qiniu' || t === 'upyun' || t === 'github' || t === 's3' || t === 'r2');
   // 只显示与当前存储类型匹配的配置面板
   $(".stor-panel").each(function(){
     $(this).css('display', $(this).data('stor') === t ? '' : 'none');
