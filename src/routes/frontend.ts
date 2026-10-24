@@ -1087,7 +1087,7 @@ frontend.get('/admin/file', async (c) => {
         <select id="dstatus" name="dstatus" class="form-control"><option value="-1">全部状态</option><option value="0">正常文件</option><option value="1">已屏蔽文件</option><option value="2">待审核文件</option></select>
       </div>
       <div class="form-group">
-        <select id="orderby" name="orderby" class="form-control" style="width:130px"><option value="0">默认排序</option><option value="1">按下载量排序</option></select>
+        <select id="orderby" name="orderby" class="form-control" style="width:150px"><option value="0">默认排序</option><option value="1">按下载量排序</option><option value="2">按大小降序</option><option value="3">按大小升序</option></select>
       </div>
       <div class="form-group">
         <button class="btn btn-primary" type="submit"><i class="fa fa-search"></i> 搜索</button>
@@ -1143,12 +1143,17 @@ $(document).ready(function(){
     ]
   });
 
-  // 点击“文件大小”表头可按大小排序；下拉框恢复原版两项，避免撑宽工具栏
-  $('#listTable').on('sort.bs.table', function(){
-    $('#orderby').val('0');
+  // 点击表头排序时同步“排序方式”下拉框，保证服务端和界面一致
+  $('#listTable').on('sort.bs.table', function(e, name, order){
+    if(name === 'size') $('#orderby').val(order === 'asc' ? '3' : '2');
+    else if(name) $('#orderby').val('0');
   });
+  // 下拉框选择排序方式时同步表头排序状态
   $('#orderby').on('change', function(){
-    $('#listTable').bootstrapTable('refreshOptions', { pageNumber: 1, sortName: '', sortOrder: 'desc' });
+    var v = $(this).val();
+    var sortName = (v === '2' || v === '3') ? 'size' : '';
+    var sortOrder = v === '3' ? 'asc' : 'desc';
+    $('#listTable').bootstrapTable('refreshOptions', { pageNumber: 1, sortName: sortName, sortOrder: sortOrder });
   });
 
   $(document).on('click', '.preview-link', function(){
