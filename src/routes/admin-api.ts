@@ -42,6 +42,11 @@ adminApi.post('/migrate/start', async (c) => {
   
   if (targetType === 'r2') {
     targetConfig.storage = 'r2';
+    targetConfig.r2_account_id = body['r2_account_id'] || currentConfig.r2_account_id;
+    targetConfig.r2_bucket = body['r2_bucket'] || currentConfig.r2_bucket;
+    targetConfig.r2_access_key_id = body['r2_access_key_id'] || currentConfig.r2_access_key_id;
+    targetConfig.r2_secret_access_key = body['r2_secret_access_key'] || currentConfig.r2_secret_access_key;
+    targetConfig.r2_endpoint = body['r2_endpoint'] || currentConfig.r2_endpoint;
   } else if (targetType === 's3') {
     targetConfig.s3_endpoint = body['s3_endpoint'] || currentConfig.s3_endpoint;
     targetConfig.s3_region = body['s3_region'] || currentConfig.s3_region;

@@ -19,11 +19,23 @@ export type StorageInitResult = {
 export function createStorage(config: AppConfig, env?: { FILE_R2?: R2Bucket }): IStorage | null {
   switch (config.storage) {
     case 'r2':
-      if (!env?.FILE_R2) {
-        console.error('R2 bucket binding not found');
-        return null;
+      // 优先使用 Worker 的 R2 绑定；没有绑定时用 S3 兼容 API（安装页填写的账号 ID + AK/SK）
+      if (env?.FILE_R2) return new R2Storage(env.FILE_R2);
+      {
+        const endpoint = (config.r2_endpoint || '').trim() ||
+          (config.r2_account_id ? `https://${config.r2_account_id}.r2.cloudflarestorage.com` : '');
+        if (!endpoint || !config.r2_bucket || !config.r2_access_key_id || !config.r2_secret_access_key) {
+          console.error('R2 config incomplete (need account_id/ak/sk/bucket)');
+          return null;
+        }
+        return new S3Storage({
+          endpoint,
+          region: 'auto',
+          bucket: config.r2_bucket,
+          accessKeyId: config.r2_access_key_id,
+          secretAccessKey: config.r2_secret_access_key,
+        });
       }
-      return new R2Storage(env.FILE_R2);
 
     case 's3':
       if (!config.s3_endpoint || !config.s3_bucket) {
@@ -108,7 +120,9 @@ export function isStorageConfigured(config: AppConfig, env?: { FILE_R2?: R2Bucke
   if (config.installed === 1) return true;
   switch (config.storage) {
     case 'r2':
-      return !!env?.FILE_R2;
+      return !!env?.FILE_R2 ||
+        !!(config.r2_account_id && config.r2_bucket && config.r2_access_key_id && config.r2_secret_access_key) ||
+        !!(config.r2_endpoint && config.r2_bucket && config.r2_access_key_id && config.r2_secret_access_key);
     case 's3':
       return !!(config.s3_endpoint && config.s3_bucket && config.s3_ak && config.s3_sk);
     case 'github':

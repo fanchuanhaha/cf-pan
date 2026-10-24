@@ -1487,7 +1487,7 @@ function renderStorageForms(prefix: string): string {
   const p = prefix.replace(/-$/, '_');
   return `
     <div class="storage-form active" id="${prefix}form-r2">
-      <div class="alert alert-info">Worker 运行时使用 <code>FILE_R2</code> 绑定。远程恢复文件时，还需填写 R2 S3 API 凭据供原站 rec.php 直接流式上传。</div>
+      <div class="alert alert-info">Worker 配置了 <code>FILE_R2</code> 绑定时优先使用绑定；没有绑定时，可用下方 Account ID + Access Key / Secret Key 通过 S3 API 访问 R2。</div>
       <div class="form-group"><label>Account ID</label>
         <input type="text" name="${p}r2_account_id" class="form-control"></div>
       <div class="form-group"><label>Bucket</label>
@@ -1830,7 +1830,8 @@ install.post('/save', async (c) => {
     const missing = (required[storageType] || []).filter(key => !normalized[key]);
     if (missing.length) return jsonError(c, '存储配置不完整，缺少: ' + missing.join(', '));
     if (storageType === 'r2' && !(c.env as any).FILE_R2) {
-      return jsonError(c, 'R2 绑定 FILE_R2 未找到，请先在 Cloudflare 配置 R2 绑定');
+      const missingR2 = ['r2_account_id', 'r2_bucket', 'r2_access_key_id', 'r2_secret_access_key'].filter(key => !normalized[key]);
+      if (missingR2.length) return jsonError(c, '未配置 R2 绑定 FILE_R2，请填写: ' + missingR2.join(', '));
     }
 
     // 写入所有字段
@@ -1873,7 +1874,13 @@ install.post('/test', async (c) => {
     if (!stor) {
       let extra = '';
       if (storageType === 'r2' && !(c.env as any).FILE_R2) {
-        extra = '（R2 绑定 FILE_R2 未找到，请检查 wrangler.toml 或 Cloudflare Dashboard 中的绑定配置）';
+        const missing: string[] = [];
+        for (const k of ['r2_account_id', 'r2_bucket', 'r2_access_key_id', 'r2_secret_access_key']) {
+          if (!String(cfg[k] || '').trim()) missing.push(k);
+        }
+        extra = missing.length
+          ? '（未配置 R2 绑定 FILE_R2，且缺少: ' + missing.join(', ') + '）'
+          : '（R2 绑定 FILE_R2 未找到，且账号信息不完整，请填写 Account ID、Bucket、Access Key、Secret Key）';
       } else {
         const missing: string[] = [];
         const req: Record<string, string[]> = {
@@ -2013,7 +2020,8 @@ install.post('/api/storage-set', async (c) => {
     const missing = (required[storageType] || []).filter(key => !fields[key]);
     if (missing.length) return jsonError(c, '存储配置不完整，缺少: ' + missing.join(', '));
     if (storageType === 'r2' && !(c.env as any).FILE_R2) {
-      return jsonError(c, 'R2 绑定 FILE_R2 未找到，请先在 Cloudflare 配置 R2 绑定');
+      const missingR2 = ['r2_account_id', 'r2_bucket', 'r2_access_key_id', 'r2_secret_access_key'].filter(key => !fields[key]);
+      if (missingR2.length) return jsonError(c, '未配置 R2 绑定 FILE_R2，请填写: ' + missingR2.join(', '));
     }
     const candidate = createStorage({ storage: storageType, ...fields } as any, c.env as any);
     if (!candidate) return jsonError(c, '无法创建存储实例，请检查存储配置');
@@ -2235,7 +2243,13 @@ install.post('/api/files-from-source', async (c) => {
       const type = freshConfig.storage;
       let extra = '';
       if (type === 'r2' && !(c.env as any).FILE_R2) {
-        extra = '（R2 绑定 FILE_R2 未找到，请检查 wrangler.toml 或 Cloudflare Dashboard 中的绑定配置）';
+        const missing: string[] = [];
+        for (const k of ['r2_account_id', 'r2_bucket', 'r2_access_key_id', 'r2_secret_access_key']) {
+          if (!String((freshConfig as any)[k] || '').trim()) missing.push(k);
+        }
+        extra = missing.length
+          ? '（未配置 R2 绑定 FILE_R2，D1 中缺少: ' + missing.join(', ') + '）'
+          : '（R2 绑定 FILE_R2 未找到，且 D1 中 R2 凭据不完整）';
       } else {
         const missing: string[] = [];
         const req: Record<string, string[]> = {
