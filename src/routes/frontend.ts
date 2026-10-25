@@ -75,16 +75,16 @@ function publicNavBar(active: 'index' | 'upload' | 'file' | 'mine', siteUrlStr: 
 </div>`;
 }
 
-function publicFooter(siteTitle: string): string {
+function publicFooter(siteTitle: string, tongji: string = ''): string {
   return `<footer class="footer text-center">
 <div class="container">
-<p class="text-muted">Copyright &copy; ${new Date().getFullYear()} <a href="/">${htmlspecialchars(siteTitle)}</a></p>
+<p class="text-muted">Copyright &copy; ${new Date().getFullYear()} <a href="/">${htmlspecialchars(siteTitle)}</a> ${tongji}</p>
 </div>
 </footer>`;
 }
 
 /** 前台页面通用 layout（与原 header.php/footer.php 完全一致） */
-function publicLayout(title: string, body: string, siteUrlStr: string, active: 'index' | 'upload' | 'file' | 'mine' = 'index', isFile: boolean = false, siteTitle: string = '彩虹外链网盘'): string {
+function publicLayout(title: string, body: string, siteUrlStr: string, active: 'index' | 'upload' | 'file' | 'mine' = 'index', isFile: boolean = false, siteTitle: string = '彩虹外链网盘', tongji: string = ''): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -113,7 +113,7 @@ ${isFile ? `<link rel="stylesheet" href="${CDN.aplayerCss}"><link href="assets/c
 <body>
 ${publicNavBar(active, siteUrlStr, siteTitle)}
 ${body}
-${publicFooter(siteTitle)}
+${publicFooter(siteTitle, tongji)}
 <script src="${CDN.bootstrapJs}"></script>
 <script src="${CDN.materialJs}"></script>
 <script src="${CDN.ripplesJs}"></script>
@@ -280,7 +280,8 @@ frontend.get('/', async (c) => {
       }
     } catch {}
   }
-  const kw = (c.req.query('kw') || '').trim();
+  const searchEnabled = config.filesearch === 1;
+  const kw = searchEnabled ? (c.req.query('kw') || '').trim() : '';
   const page = Math.max(1, parseInt(c.req.query('page') || '1'));
   const pageSize = 15;
   const offset = (page - 1) * pageSize;
@@ -386,13 +387,13 @@ frontend.get('/', async (c) => {
   const body = `<div class="container">
 <div class="well bs-component">
   <h2>${htext}
-    <span class="searchbox">
+    ${searchEnabled ? `<span class="searchbox">
       <form class="form-inline" action="./" method="GET">
         ${isMine ? '<input name="m" type="hidden" value="mine">' : ''}
         <input name="kw" class="form-control" type="search" placeholder="请输入搜索关键词" value="${htmlspecialchars(kw)}">
         <button class="btn btn-default btn-raised btn-sm" type="submit"><i class="fa fa-search" aria-hidden="true"></i> 搜索</button>
       </form>
-    </span>
+    </span>` : ''}
   </h2>
   ${gonggaoHtml}
   <div class="table-responsive">
@@ -414,7 +415,7 @@ frontend.get('/', async (c) => {
 </div>`;
 
   // 首页可被 Cloudflare 缓存（用户上传/删除后等待缓存过期即可刷新）
-  const res = c.html(publicLayout(title, body, siteUrlStr, isMine ? 'mine' : 'index', false, config.title));
+  const res = c.html(publicLayout(title, body, siteUrlStr, isMine ? 'mine' : 'index', false, config.title, config.tongji));
   res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300');
   res.headers.set('CDN-Cache-Control', 'public, max-age=300');
   res.headers.set('X-Cache', 'MISS');
@@ -505,7 +506,7 @@ ${config.videoreview == 1 ? `<div class="list-group-item">**当前网站已开�
 <script>var upload_max_filesize = '${config.upload_size}';</script>
 <script src="assets/js/uploadnew.js?v=20261024"></script>`;
 
-  return c.html(publicLayout('上传文件 - ' + config.title, body, siteUrlStr, 'upload', false, config.title));
+  return c.html(publicLayout('上传文件 - ' + config.title, body, siteUrlStr, 'upload', false, config.title, config.tongji));
 });
 
 // ===================== 文件查看</file.php?hash=xxx =====================
@@ -725,8 +726,7 @@ if (pwd!=null && pwd!="")
   <div class="panel panel-info">
     <div class="panel-heading"><h3 class="panel-title"><i class="fa fa-exclamation-circle"></i> 提示</h3></div>
     <div class="panel-body">
-      <p>直链可用</mg 标签、视频频播放等场景</p>
-      <p>下载链接点击即可直接下载文件</p>
+      ${config.gg_file}
     </div>
   </div>
   <div class="panel panel-default hidden-xs">
@@ -790,7 +790,7 @@ $(function(){
 });` : ''}
 </script>`;
 
-  return c.html(publicLayout('文件查看 - ' + config.title, body, siteUrlStr, 'file', filetype > 0, config.title));
+  return c.html(publicLayout('文件查看 - ' + config.title, body, siteUrlStr, 'file', filetype > 0, config.title, config.tongji));
 });
 
 // ===================== 管理后台登录 </h2> ====
@@ -1407,7 +1407,7 @@ function saveSetting(obj){
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">文件查看页公告</label>
-    <div class="col-sm-10"><textarea class="form-control" name="gg_file" rows="3" placeholder="不填写则不显示?>${config.gg_file}</textarea></div>
+    <div class="col-sm-10"><textarea class="form-control" name="gg_file" rows="3" placeholder="不填写则不显示">${htmlspecialchars(config.gg_file)}</textarea></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">统计代码</label>
@@ -1415,7 +1415,7 @@ function saveSetting(obj){
   </div><br/>
   <div class="form-group">
     <label class="col-sm-2 control-label">文件搜索功能</label>
-    <div class="col-sm-10"><select class="form-control" name="filesearch" default="${config.filesearch}"><option value="0">关闭</option><option value="1"></option></select></div>
+    <div class="col-sm-10"><select class="form-control" name="filesearch" default="${config.filesearch}"><option value="0">关闭</option><option value="1">开启</option></select></div>
   </div><br/>
   <div class="form-group">
     <div class="col-sm-offset-2 col-sm-10"><input type="submit" name="submit" value="提交" class="btn btn-primary form-control"/><br/>
@@ -1432,7 +1432,7 @@ function saveSetting(obj){
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
     <div class="form-group">
     <label class="col-sm-3 control-label">用户登录</label>
-    <div class="col-sm-9"><select class="form-control" name="userlogin" default="${config.userlogin}"><option value="0">关闭</option><option value="1"></option></select></div>
+    <div class="col-sm-9"><select class="form-control" name="userlogin" default="${config.userlogin}"><option value="0">关闭</option><option value="1">开启</option></select></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">聚合登录接口地址</label>
@@ -1908,7 +1908,7 @@ function pollMigrateProgress(taskId){
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">图片智能鉴黄</label>
-    <div class="col-sm-9"><select class="form-control" name="green_check_porn" default="${config.green_check_porn}"><option value="0">关闭</option><option value="1"></option></select></div>
+    <div class="col-sm-9"><select class="form-control" name="green_check_porn" default="${config.green_check_porn}"><option value="0">关闭</option><option value="1">开启</option></select></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">图片智能鉴黄屏蔽类型</label>
@@ -1919,7 +1919,7 @@ function pollMigrateProgress(taskId){
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">图片暴恐涉政识别</label>
-    <div class="col-sm-9"><select class="form-control" name="green_check_terrorism" default="${config.green_check_terrorism}"><option value="0">关闭</option><option value="1"></option></select></div>
+    <div class="col-sm-9"><select class="form-control" name="green_check_terrorism" default="${config.green_check_terrorism}"><option value="0">关闭</option><option value="1">开启</option></select></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">图片暴恐涉政识别屏蔽类型</label>
@@ -1944,7 +1944,7 @@ function pollMigrateProgress(taskId){
   <form onsubmit="return saveSetting(this)" method="post" class="form-horizontal" role="form">
   <div class="form-group">
     <label class="col-sm-3 control-label">上传API</label>
-    <div class="col-sm-9"><select class="form-control" name="api_open" default="${config.api_open}"><option value="0">关闭</option><option value="1"></option></select></div>
+    <div class="col-sm-9"><select class="form-control" name="api_open" default="${config.api_open}"><option value="0">关闭</option><option value="1">开启</option></select></div>
   </div><br/>
   <div class="form-group">
     <label class="col-sm-3 control-label">来源域名白名单</label>

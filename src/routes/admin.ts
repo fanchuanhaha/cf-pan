@@ -5,6 +5,7 @@ import type { AppEnv } from '../middleware';
 import { getDB, getConf } from '../middleware';
 import { getFileList, getFileById, deleteFile as dbDeleteFile, setFileBlock, getUserList, updateUser, deleteUser } from '../db';
 import { updateConfig, clearConfigCache } from '../config';
+import { purgeHomeCache } from '../utils/cache';
 import { verifyAdminToken } from '../auth/admin';
 import { typeToIcon, isView, getViewType, sizeFormat } from '../utils/mime';
 import { jsonResult, jsonError } from '../utils/response';
@@ -177,6 +178,7 @@ adminAjax.post('/saveSetting', async (c) => {
     }
     if (body.admin_user) await updateConfig(db, 'admin_user', body.admin_user);
     clearConfigCache();
+    purgeHomeCache(c);
     return jsonResult(c, { code: 0, msg: '管理员账号已更新，请重新登录' });
   }
   for (const [k, v] of Object.entries(body)) {
@@ -184,6 +186,7 @@ adminAjax.post('/saveSetting', async (c) => {
     await updateConfig(db, k, v);
   }
   clearConfigCache();
+  purgeHomeCache(c);
   return jsonResult(c, { code: 0, msg: '保存成功' });
 });
 
