@@ -227,12 +227,14 @@ async function handlePreUpload(c: any) {
       }
     }
     if (param) {
+      const directBackend = config.storage === 'r2' ? 'r2-s3' : String(config.storage || '');
       return jsonResult(c, {
         code: 0, third: true,
         method: param.method || 'POST',
         url: param.url,
         post: param.post || {},
         headers: param.headers || {},
+        backend: directBackend,
         hash, name, size, type: ext,
         chunksize: chunkSize, chunks,
         // 直传失败时前端会重新调用 prepare_multipart 走网站中转分片
@@ -563,11 +565,25 @@ async function handleCompleteUpload(c: any) {
   }
 
   // 直传完成后校验文件确实已在存储中。
-  // R2 可能同时配置了绑定和 S3 API，直传走 S3 API，因此要检查所有后端。
-  const backends = getStorageBackends(config, c.env);
-  const exists = await objectExistsInBackends(backends, hash);
-  if (!exists.exists) {
-    return jsonError(c, '文件未上传成功' + (exists.errors.length ? '：' + exists.errors.join('；') : ''));
+  // 分片上传的 complete 成功已经证明对象存在，不再额外 HEAD 所有后端，
+  // 否则 R2 绑定 + S3 API 双后端时会把“正在保存”拖长几秒。
+  if (!uploadId) {
+    if (backend) {
+      try {
+        const directStor = getMultipartStorage(c, config, backend);
+        if (!(await directStor.exists(hash))) {
+          return jsonError(c, '文件未上传成功');
+        }
+      } catch (e: any) {
+        return jsonError(c, '文件未上传成功：' + String(e?.message || e));
+      }
+    } else {
+      const backends = getStorageBackends(config, c.env);
+      const exists = await objectExistsInBackends(backends, hash);
+      if (!exists.exists) {
+        return jsonError(c, '文件未上传成功' + (exists.errors.length ? '：' + exists.errors.join('；') : ''));
+      }
+    }
   }
 
   const hide = String(body['show'] || '1') === '1' ? 0 : 1;

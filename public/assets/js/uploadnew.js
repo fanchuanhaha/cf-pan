@@ -215,7 +215,7 @@ new Vue({
                 }
 
                 if(directOk){
-                    await this.completeUpload().then(res =>{
+                    await this.completeUpload(null, null, result.backend).then(res =>{
                         result = res
                     }, res => {
                         that.show_msg(res, 'danger');
