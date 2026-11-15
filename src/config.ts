@@ -180,6 +180,11 @@ export const defaults: AppConfig = {
 };
 
 let cached: AppConfig | null = null;
+let cachedAt = 0;
+// 配置在单个 Worker isolate 内短时间缓存，避免每个请求都执行 D1 查询 + 建表语句。
+// 后台保存配置时会 updateConfig/clearConfigCache 立即刷新当前 isolate；
+// 其他 isolate 最多延迟 30 秒。
+const CONFIG_CACHE_MS = 30_000;
 
 /** 确保 pre_config 表存在（新建 D1 时自动建表） */
 async function ensureConfigTable(db: D1Database): Promise<void> {
@@ -193,9 +198,22 @@ async function ensureConfigTable(db: D1Database): Promise<void> {
 
 /** 从 D1 加载配置 */
 export async function loadConfig(db: D1Database): Promise<AppConfig> {
-  await ensureConfigTable(db);
-  // 不使用缓存，每次都从数据库加载最新配置（确保配置修改后立即生效）
-  const { results } = await db.prepare('SELECT k, v FROM pre_config').all<D1Result>();
+  const nowMs = Date.now();
+  if (cached && nowMs - cachedAt < CONFIG_CACHE_MS) {
+    return cached;
+  }
+
+  let results: D1Result[] = [];
+  try {
+    const query = await db.prepare('SELECT k, v FROM pre_config').all<D1Result>();
+    results = query.results || [];
+  } catch (e) {
+    // 只有表不存在（首次安装/本地空库）时才执行一次建表，正常请求不再跑 DDL
+    await ensureConfigTable(db);
+    const query = await db.prepare('SELECT k, v FROM pre_config').all<D1Result>();
+    results = query.results || [];
+  }
+
   const config = { ...defaults };
   for (const row of results) {
     const key = row.k as keyof AppConfig;
@@ -210,6 +228,7 @@ export async function loadConfig(db: D1Database): Promise<AppConfig> {
     }
   }
   cached = config;
+  cachedAt = Date.now();
   return config;
 }
 
@@ -225,12 +244,14 @@ export async function updateConfig(db: D1Database, k: string, v: string): Promis
     } else {
       (cached as unknown as Record<string, unknown>)[key] = v;
     }
+    cachedAt = Date.now();
   }
 }
 
 /** 清除缓存 */
 export function clearConfigCache(): void {
   cached = null;
+  cachedAt = 0;
 }
 
 /** 获取配置（必须已有缓存） */
