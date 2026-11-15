@@ -504,7 +504,7 @@ ${config.videoreview == 1 ? `<div class="list-group-item">**当前网站已开�
 <script src="/assets/vendor/spark-md5/spark-md5.min.js"></script>
 <script src="/assets/vendor/layer/layer.min.js"></script>
 <script>var upload_max_filesize = '${config.upload_size}';</script>
-<script src="assets/js/uploadnew.js?v=20261024"></script>`;
+<script src="assets/js/uploadnew.js?v=20261115"></script>`;
 
   return c.html(publicLayout('上传文件 - ' + config.title, body, siteUrlStr, 'upload', false, config.title, config.tongji));
 });
@@ -1104,7 +1104,7 @@ frontend.get('/admin/file', async (c) => {
 <script src="${CDN.layer}"></script>
 <script src="${CDN.bootstrapTableJs}"></script>
 <script src="${CDN.bootstrapTablePageJump}"></script>
-<script src="/assets/js/custom.js"></script>
+<script src="/assets/js/custom.js?v=20261115"></script>
 <script>
 $(document).ready(function(){
   updateToolbar();

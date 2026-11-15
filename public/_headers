@@ -1,0 +1,8 @@
+# Cloudflare Workers Static Assets 缓存策略
+# 静态资源由 Cloudflare 边缘缓存，浏览器缓存 1 天；
+# 过期后使用 stale-while-revalidate，避免每次打开页面都重新校验所有 CSS/JS。
+/assets/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/favicon.ico
+  Cache-Control: public, max-age=86400
