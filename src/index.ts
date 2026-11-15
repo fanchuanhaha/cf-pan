@@ -25,6 +25,26 @@ app.use('*', cors({
   exposeHeaders: ['Content-Length', 'Content-Range', 'Accept-Ranges', 'Content-Type'],
 }));
 
+// 首页缓存优先于配置加载：命中边缘缓存时不再查询 D1，直接返回 HTML。
+// 这样首页的 TTFB 接近静态资源，而不是每个请求都等一次 D1。
+app.use('*', async (c: any, next: any) => {
+  if (c.req.method !== 'GET') return next();
+  const url = new URL(c.req.url);
+  if (url.pathname !== '/' || url.searchParams.get('m') === 'mine') return next();
+  const cache = (globalThis as any).caches?.default;
+  if (!cache) return next();
+  try {
+    const key = new Request(url.toString(), { method: 'GET' });
+    const hit = await cache.match(key);
+    if (hit) {
+      const res = new Response(hit.body, hit);
+      res.headers.set('X-Cache', 'HIT');
+      return res;
+    }
+  } catch {}
+  return next();
+});
+
 // 注入 db + stor + config 到 context (统一使用 middleware)
 app.use('*', initApp());
 

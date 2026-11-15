@@ -185,6 +185,16 @@ let cachedAt = 0;
 // 后台保存配置时会 updateConfig/clearConfigCache 立即刷新当前 isolate；
 // 其他 isolate 最多延迟 30 秒。
 const CONFIG_CACHE_MS = 30_000;
+const CONFIG_CACHE_KEY = 'https://config-cache.internal/pre_config';
+const CONFIG_CACHE_SECONDS = 30;
+
+function edgeCache(): any {
+  try {
+    return (globalThis as any).caches?.default || null;
+  } catch {
+    return null;
+  }
+}
 
 /** 确保 pre_config 表存在（新建 D1 时自动建表） */
 async function ensureConfigTable(db: D1Database): Promise<void> {
@@ -201,6 +211,19 @@ export async function loadConfig(db: D1Database): Promise<AppConfig> {
   const nowMs = Date.now();
   if (cached && nowMs - cachedAt < CONFIG_CACHE_MS) {
     return cached;
+  }
+
+  const cache = edgeCache();
+  if (cache) {
+    try {
+      const hit = await cache.match(CONFIG_CACHE_KEY);
+      if (hit) {
+        const config = await hit.json() as AppConfig;
+        cached = config;
+        cachedAt = nowMs;
+        return config;
+      }
+    } catch {}
   }
 
   let results: D1Result[] = [];
@@ -229,6 +252,16 @@ export async function loadConfig(db: D1Database): Promise<AppConfig> {
   }
   cached = config;
   cachedAt = Date.now();
+  if (cache) {
+    try {
+      await cache.put(CONFIG_CACHE_KEY, new Response(JSON.stringify(config), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': `public, max-age=${CONFIG_CACHE_SECONDS}`,
+        },
+      }));
+    } catch {}
+  }
   return config;
 }
 
@@ -252,6 +285,10 @@ export async function updateConfig(db: D1Database, k: string, v: string): Promis
 export function clearConfigCache(): void {
   cached = null;
   cachedAt = 0;
+  const cache = edgeCache();
+  if (cache) {
+    try { cache.delete(CONFIG_CACHE_KEY); } catch {}
+  }
 }
 
 /** 获取配置（必须已有缓存） */
