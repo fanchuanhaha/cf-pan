@@ -21,25 +21,25 @@ const frontend = new Hono<AppEnv>();
 
 // CDN 资源（与原项的header.php/footer.php 完全一致）
 const CDN = {
-  jquery: 'https://s4.zstatic.net/ajax/libs/jquery/1.12.4/jquery.min.js',
-  bootstrapCss: 'https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css',
-  bootstrapJs: 'https://s4.zstatic.net/ajax/libs/twitter-bootstrap/3.4.1/js/bootstrap.min.js',
-  fontAwesome: 'https://s4.zstatic.net/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',
-materialCss: 'https://cdnjs.cloudflare.com/ajax/libs/bootstrap-material-design/0.5.10/css/bootstrap-material-design.min.css',
-  ripplesCss: 'https://cdnjs.cloudflare.com/ajax/libs/bootstrap-material-design/0.5.10/css/ripples.min.css',
-  materialJs: 'https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/material.min.js',
-  ripplesJs: 'https://s4.zstatic.net/ajax/libs/bootstrap-material-design/0.5.10/js/ripples.min.js',
-  aplayerCss: 'https://s4.zstatic.net/ajax/libs/aplayer/1.10.1/APlayer.min.css',
-  aplayerJs: 'https://s4.zstatic.net/ajax/libs/aplayer/1.10.1/APlayer.min.js',
-  clipboard: 'https://s4.zstatic.net/ajax/libs/clipboard.js/2.0.4/clipboard.min.js',
-  layer: 'https://s4.zstatic.net/ajax/libs/layer/3.1.1/layer.min.js',
-  vue: 'https://s4.zstatic.net/ajax/libs/vue/2.6.14/vue.min.js',
+  jquery: '/assets/vendor/jquery/jquery-1.12.4.min.js',
+  bootstrapCss: '/assets/vendor/bootstrap/css/bootstrap.min.css',
+  bootstrapJs: '/assets/vendor/bootstrap/js/bootstrap.min.js',
+  fontAwesome: '/assets/vendor/font-awesome/css/font-awesome.min.css',
+materialCss: '/assets/vendor/bootstrap-material-design/css/bootstrap-material-design.min.css',
+  ripplesCss: '/assets/vendor/bootstrap-material-design/css/ripples.min.css',
+  materialJs: '/assets/vendor/bootstrap-material-design/js/material.min.js',
+  ripplesJs: '/assets/vendor/bootstrap-material-design/js/ripples.min.js',
+  aplayerCss: '/assets/vendor/aplayer/APlayer.min.css',
+  aplayerJs: '/assets/vendor/aplayer/APlayer.min.js',
+  clipboard: '/assets/vendor/clipboard/clipboard.min.js',
+  layer: '/assets/vendor/layer/layer.min.js',
+  vue: '/assets/vendor/vue/vue.min.js',
   qrcode: 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=10&data=',
   // admin
-  jquery2: 'https://s4.zstatic.net/ajax/libs/jquery/2.1.4/jquery.min.js',
-  bootstrapTableCss: 'https://s4.zstatic.net/ajax/libs/bootstrap-table/1.21.4/bootstrap-table.min.css',
-  bootstrapTableJs: 'https://s4.zstatic.net/ajax/libs/bootstrap-table/1.21.4/bootstrap-table.min.js',
-  bootstrapTablePageJump: 'https://s4.zstatic.net/ajax/libs/bootstrap-table/1.21.4/extensions/page-jump-to/bootstrap-table-page-jump-to.min.js',
+  jquery2: '/assets/vendor/jquery/jquery-2.1.4.min.js',
+  bootstrapTableCss: '/assets/css/bootstrap-table.css',
+  bootstrapTableJs: '/assets/vendor/bootstrap-table/bootstrap-table.min.js',
+  bootstrapTablePageJump: '/assets/vendor/bootstrap-table/bootstrap-table-page-jump-to.min.js',
 };
 
 // ===================== 通用 layout（仿照原 header.php + footer.php） =====================
@@ -173,7 +173,7 @@ function adminLayout(title: string, body: string, siteUrlStr: string, active: 'i
 <link href="/assets/css/dark.css" rel="stylesheet"/>
 <script src="${CDN.jquery2}"></script>
 <script src="${CDN.bootstrapJs}"></script>
-<script src="https://s4.zstatic.net/ajax/libs/layer/2.3/layer.js"></script>
+<script src="${CDN.layer}"></script>
 <!--[if lt IE 9]>
 <script src="https://s4.zstatic.net/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
 <script src="https://s4.zstatic.net/ajax/libs/respond.js/1.4.2/respond.min.js"></script>
@@ -501,8 +501,8 @@ ${config.videoreview == 1 ? `<div class="list-group-item">**当前网站已开�
   <div class="colorful_loading"><i class="rect1"></i><i class="rect2"></i><i class="rect3"></i><i class="rect4"></i><i class="rect5"></i></div>
 </div>
 <script src="${CDN.vue}"></script>
-<script src="https://s4.zstatic.net/ajax/libs/spark-md5/3.0.2/spark-md5.min.js"></script>
-<script src="https://s4.zstatic.net/ajax/libs/layer/3.1.1/layer.js"></script>
+<script src="/assets/vendor/spark-md5/spark-md5.min.js"></script>
+<script src="/assets/vendor/layer/layer.min.js"></script>
 <script>var upload_max_filesize = '${config.upload_size}';</script>
 <script src="assets/js/uploadnew.js?v=20261024"></script>`;
 
@@ -742,8 +742,8 @@ if (pwd!=null && pwd!="")
 <script src="${CDN.layer}"></script>
 ${filetype === 2 ? `<script src="${CDN.aplayerJs}"></script>` : ''}
 ${filetype === 3 && row.block === 0 ? `<script src="assets/js/ckplayer.min.js"></script>` : ''}
-${filetype === 3 && row.block === 0 && videoPlug === 'hls.js' ? `<script src="https://s4.zstatic.net/ajax/libs/hls.js/1.2.4/hls.min.js"></script>` : ''}
-${filetype === 3 && row.block === 0 && videoPlug === 'flv.js' ? `<script src="https://s4.zstatic.net/ajax/libs/flv.js/1.6.2/flv.min.js"></script>` : ''}
+${filetype === 3 && row.block === 0 && videoPlug === 'hls.js' ? `<script src="/assets/vendor/hls/hls.min.js"></script>` : ''}
+${filetype === 3 && row.block === 0 && videoPlug === 'flv.js' ? `<script src="/assets/vendor/flv/flv.min.js"></script>` : ''}
 <script>
 function delete_confirm(){
   var hash = $("#hash").val();

@@ -12,13 +12,13 @@ import { htmlspecialchars } from '../utils/response';
 const view = new Hono<AppEnv>();
 
 const PLAYER_CDN = {
-  jquery: 'https://s4.zstatic.net/ajax/libs/jquery/2.1.4/jquery.min.js',
-  aplayerCss: 'https://s4.zstatic.net/ajax/libs/aplayer/1.10.1/APlayer.min.css',
-  aplayerJs: 'https://s4.zstatic.net/ajax/libs/aplayer/1.10.1/APlayer.min.js',
+  jquery: '/assets/vendor/jquery/jquery-2.1.4.min.js',
+  aplayerCss: '/assets/vendor/aplayer/APlayer.min.css',
+  aplayerJs: '/assets/vendor/aplayer/APlayer.min.js',
   ckplayerCss: '/assets/css/ckplayer.css',
   ckplayerJs: '/assets/js/ckplayer.min.js',
-  hlsJs: 'https://s4.zstatic.net/ajax/libs/hls.js/1.2.4/hls.min.js',
-  flvJs: 'https://s4.zstatic.net/ajax/libs/flv.js/1.6.2/flv.min.js',
+  hlsJs: '/assets/vendor/hls/hls.min.js',
+  flvJs: '/assets/vendor/flv/flv.min.js',
   musicCover: '/assets/img/music.png',
 };
 
